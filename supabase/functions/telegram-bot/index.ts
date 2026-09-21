@@ -1,4 +1,4 @@
-// telegram-bot V36 (V35 + inclinação da faixa na confiança: cruzamento contra a inclinação perde pontos, a favor ganha; radar de COMPRESSÃO em rodízio de todos os pares avisa "PREPARE: rompimento iminente" com a distância até as duas linhas; 1º cruzamento em faixa comprimida sem volume perde 1 ponto; /compressao no /placar; REPIQUE nos dois lados com prioridade: SHORT = despencou, repicou até a faixa e foi rejeitada (radar de topo); LONG = disparou, recuou até a faixa e está segurando (radar de fundo); /oportunidade e /reversao alinhados com os alertas: a lista sai pelo LADO da virada (reversão mostra LONG → SHORT e SHORT → LONG), não só pela variação do dia) (V35 = V34 + radar de TOPO e repique SHORT, espelho do fundo: alta medida desde a mínima recente, rejeição na faixa pontua, /topo) (V34 = V33 + radar de fundo que enxerga o REPIQUE NA FAIXA depois de pump: queda medida desde a máxima recente, não só 24h; toque na faixa pontua; PREPARE/LIGUE no texto) (V33 = V32 + /analise em blocos "de fora / já dentro" com "ligar o robô?", textos dos avisos alinhados ao robô que vira sozinho, /help por grupos e botão "⬆️ Ir ao topo" junto da mensagem) (historico das versoes: CHANGELOG.md)
+// telegram-bot V39 (V38 + alerta dos minutos finais agora EDITA a mesma mensagem em vez de mandar uma nova a cada rodada do cron; detecta pavio de rejeição (tocou a linha e recuou 1x+ dentro da mesma vela) e avisa antes do LIGUE AGORA; botão "🔔 Já liguei" registra a hora real que a pessoa ligou o robô (tabela ligacoes_robo); sinal de velocidade 🚀 acelerando / 🐢 devagar comparando a aproximação da rodada atual com a anterior; comando /agora MOEDA com retrato compacto — fechamento, distância às duas linhas, confiança e toque/recuo) (V38 = modo Novato x Experiente, alertas e comandos compactados sem o texto explicando) (V37 = marca discreta 🔔 nos alertas proativos, autoapagamento, proteção do webhook e do cron) (V36 (V35 + inclinação da faixa na confiança: cruzamento contra a inclinação perde pontos, a favor ganha; radar de COMPRESSÃO em rodízio de todos os pares avisa "PREPARE: rompimento iminente" com a distância até as duas linhas; 1º cruzamento em faixa comprimida sem volume perde 1 ponto; /compressao no /placar; REPIQUE nos dois lados com prioridade: SHORT = despencou, repicou até a faixa e foi rejeitada (radar de topo); LONG = disparou, recuou até a faixa e está segurando (radar de fundo); /oportunidade e /reversao alinhados com os alertas: a lista sai pelo LADO da virada (reversão mostra LONG → SHORT e SHORT → LONG), não só pela variação do dia) (V35 = V34 + radar de TOPO e repique SHORT, espelho do fundo: alta medida desde a mínima recente, rejeição na faixa pontua, /topo) (V34 = V33 + radar de fundo que enxerga o REPIQUE NA FAIXA depois de pump: queda medida desde a máxima recente, não só 24h; toque na faixa pontua; PREPARE/LIGUE no texto) (V33 = V32 + /analise em blocos "de fora / já dentro" com "ligar o robô?", textos dos avisos alinhados ao robô que vira sozinho, /help por grupos e botão "⬆️ Ir ao topo" junto da mensagem) (historico das versoes: CHANGELOG.md)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const TELEGRAM_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
@@ -185,6 +185,7 @@ async function configurarMenuBotao() {
     { command: "start", description: "Como o robô e os alertas funcionam" },
     ...TECLADO_ITENS.map(([label, cmd]) => ({ command: cmd.replace("/", ""), description: label.replace(/^\S+\s*/, "") || label })),
     { command: "analise", description: "Analisar uma moeda específica" },
+    { command: "agora", description: "Retrato rápido: fechamento, distância e confiança" },
     { command: "status", description: "Testar as conexões" },
     { command: "modo", description: "Trocar entre Novato e Experiente" },
   ];
@@ -269,6 +270,9 @@ function compactarExperiente(texto: string): string {
   let t = texto
     .replace(/\n?<i>[\s\S]*?<\/i>/g, "")
     .replace(/(🧭 Sinal de [^\n]+)(\n {3}[✅⚠️][^\n]*)+/g, "$1")
+    // "Ligar o robô?": mantém a confirmação (PREPARE/LIGUE AGORA/Ainda não/Já cruzou) + a 1ª frase
+    // (que já traz a distância/preço), corta a explicação de regra que vem depois na mesma linha.
+    .replace(/(<b>(?:Já cruzou|LIGUE AGORA|PREPARE|Ainda não)<\/b>[^\n]*?\.)(?=\s[A-ZÀ-Ú])[^\n]*/g, "$1")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -302,6 +306,27 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
   } catch (e) { console.log("Erro sendTelegram", e); }
   if (id && typeof chatId === "number") await uiRegistrar(chatId, id).catch(() => {});
   return id;
+}
+// V39: edita uma mensagem já mandada (usado nos minutos finais da vela, pra atualizar a MESMA mensagem —
+// distância/tempo restando — em vez de mandar uma nova a cada rodada do cron). Se a edição falhar (mensagem
+// muito antiga, apagada pelo usuário etc.) devolve false pra quem chamou mandar uma mensagem nova.
+async function editarTelegram(chatId: number | string, messageId: number, text: string, botoes?: Botoes): Promise<boolean> {
+  let t = text;
+  if (await getModo(chatId) === "experiente") t = compactarExperiente(t);
+  const markup = botoes ? { reply_markup: { inline_keyboard: botoes } } : {};
+  try {
+    const r = await fetch(`${TG_API}/editMessageText`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: t, parse_mode: "HTML", disable_web_page_preview: true, ...markup }),
+    });
+    const j: any = await J(r);
+    if (j.ok === false) {
+      if (String(j.description || "").includes("message is not modified")) return true;
+      console.log(`⚠️ editarTelegram falhou (${JSON.stringify(j).slice(0, 150)}), mandando mensagem nova`);
+      return false;
+    }
+    return true;
+  } catch (e) { console.log("Erro editarTelegram", e); return false; }
 }
 const TOPO_MIN_CHARS = Number(Deno.env.get("TOPO_MIN_CHARS") || "700");
 const BOTAO_TOPO: Botao = { text: "⬆️ Ir ao topo", callback_data: "topo" };
@@ -1400,7 +1425,14 @@ function classificar(info: IndicadorInfo, pct: number): Setup | null {
   return null;
 }
 const _watchEnviado = new Set<string>();
-type FinalPend = { inst: string; lado: "long" | "short"; ck: number; linha: number; atrPct: number; chats: string[]; estado: "ativo" | "cancelado"; tipo: "aviso" | "prepare" };
+// V39: msgIds (chat -> message_id) permite EDITAR a mesma mensagem em vez de mandar uma nova a cada rodada;
+// distPrev/distPrevT guardam a última distância medida (e quando) pra calcular a velocidade de aproximação
+// (🐢/🚀); cruzouAntes marca se já esteve além da linha nesta vela, pra pegar pavio de rejeição (toques).
+type FinalPend = {
+  inst: string; lado: "long" | "short"; ck: number; linha: number; atrPct: number;
+  chats: string[]; estado: "ativo" | "cancelado"; tipo: "aviso" | "prepare";
+  msgIds?: Record<string, number>; distPrev?: number; distPrevT?: number; cruzouAntes?: boolean; toques?: number;
+};
 const _finalPend = new Map<string, FinalPend>();
 const finalKey = (inst: string, lado: string, ck: number) => `${inst}|${lado}|${ck}`;
 async function carregarEstado(SB: any) {
@@ -1417,9 +1449,15 @@ async function carregarEstado(SB: any) {
       const lado = p?.lado === "long" || p?.lado === "short" ? p.lado : null;
       const pck = Number(p?.ck);
       if (!lado || typeof p?.inst !== "string" || !isFinite(pck) || pck < ck - 2) continue;
+      const msgIds: Record<string, number> = {};
+      if (p.msgIds && typeof p.msgIds === "object") for (const [ch, id] of Object.entries(p.msgIds)) if (isFinite(Number(id))) msgIds[ch] = Number(id);
       _finalPend.set(finalKey(p.inst, lado, pck), {
         inst: p.inst, lado, ck: pck, linha: Number(p.linha) || 0, atrPct: Number(p.atrPct) || 0,
         chats: Array.isArray(p.chats) ? p.chats.map(String) : [], estado: p.estado === "cancelado" ? "cancelado" : "ativo", tipo: p.tipo === "prepare" ? "prepare" : "aviso",
+        msgIds: Object.keys(msgIds).length ? msgIds : undefined,
+        distPrev: isFinite(Number(p.distPrev)) ? Number(p.distPrev) : undefined,
+        distPrevT: isFinite(Number(p.distPrevT)) ? Number(p.distPrevT) : undefined,
+        cruzouAntes: !!p.cruzouAntes, toques: isFinite(Number(p.toques)) ? Number(p.toques) : 0,
       });
     }
   } catch (e) { console.log("⚠️ carregarEstado falhou (segue sem estado salvo)", e); }
@@ -1506,8 +1544,35 @@ const finalRestMin = () => Math.max(1, Math.ceil(finalRestMs() / 60000));
 const finalAlem = (lado: "long" | "short", vivo: number, linha: number) => (lado === "long" ? ((vivo - linha) / linha) * 100 : ((linha - vivo) / linha) * 100);
 // distância até a linha do lado, em % (positivo = ainda não chegou; negativo = já passou)
 const distLinha = (lado: "long" | "short", preco: number, topo: number, fundo: number) => (lado === "long" ? ((topo - preco) / preco) * 100 : ((preco - fundo) / preco) * 100);
-const enviarFinal = (SB: any, chats: string[], inst: string, msg: string) =>
-  Promise.all(chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map((ch) => enviarAlertaMoeda(SB, ch, inst, cortar(msg), botaoAnalisar(inst))));
+// V39: mesma ideia do enviarFinal, mas tenta EDITAR a mensagem já mandada pra este chat nesta vela (msgIds em
+// pend) em vez de mandar uma nova — dá uma "tela ao vivo" nos minutos finais sem poluir o chat. Sem pend (ou
+// sem msgId pra aquele chat), manda nova, do mesmo jeito de sempre. Devolve os msgIds atualizados.
+// V39: compara a distância medida agora com a da rodada anterior do cron (guardada em pend) pra dizer se o
+// preço está acelerando em direção à linha ou andando devagar — ajuda a decidir "ligo agora ou espero".
+// distAgora: negativo = já passou da linha (não mostra velocidade, não faz sentido nesse caso).
+function velocidadeTxt(pend: FinalPend | undefined, distAgora: number): string {
+  if (distAgora <= 0 || !pend || pend.distPrev === undefined || !pend.distPrevT) return "";
+  const elapsedMin = (Date.now() - pend.distPrevT) / 60000;
+  if (elapsedMin < 0.3) return ""; // rodadas muito próximas: medida instável, melhor não mostrar
+  const velAtual = (pend.distPrev - distAgora) / elapsedMin; // % de distância fechada por minuto
+  const minutosRestantes = Math.max(1, finalRestMin());
+  const velNecessaria = distAgora / minutosRestantes;
+  if (velAtual >= velNecessaria * 1.3) return `🚀 acelerando em direção à linha (a favor de fechar cruzado)\n`;
+  if (velAtual <= velNecessaria * 0.5) return `🐢 se aproximando devagar — no ritmo atual pode não chegar a tempo\n`;
+  return "";
+}
+async function enviarOuEditarFinal(SB: any, pend: FinalPend | undefined, chats: string[], inst: string, msgPorChat: (ch: string) => Promise<string> | string, botoesExtra?: Botoes): Promise<Record<string, number>> {
+  const botoes: Botoes = [...(botoesExtra ?? []), ...botaoAnalisar(inst)];
+  const ids: Record<string, number> = { ...(pend?.msgIds ?? {}) };
+  await Promise.all(chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
+    const msg = cortar(await msgPorChat(ch));
+    const existente = pend?.msgIds?.[ch];
+    if (existente && (await editarTelegram(ch, existente, msg, botoes))) return;
+    const novo = await enviarAlertaMoeda(SB, ch, inst, msg, botoes);
+    if (novo) ids[ch] = novo; else delete ids[ch];
+  }));
+  return ids;
+}
 function simularFechamento(instId: string, d: XVelas, vivo: number, base: InfoFiltravel): InfoFiltravel | null {
   const closes = [...d.c, vivo];
   const hip = calcIndicadorDeCloses(instId, closes);
@@ -1603,7 +1668,12 @@ async function resolverFinais(SB: any, ck: number) {
         : `❌ <b>${p.inst}</b> — NÃO fechou cruzado\n${DIVISOR}\n\nO aviso era de <b>${nome}</b>, mas o preço recuou e a vela fechou sem cruzar.${prox ? seguePerto : " <b>O robô não deve entrar</b> — pode desligar se ligou por causa do aviso."}\n${indicadorTxt(fech)}\n${linhaPreco}`;
     }
     console.log(`⏱ final ${p.inst} ${p.lado} (${p.tipo}): ${cruzou ? "confirmou" : "não confirmou"} no fechamento`);
-    await enviarFinal(SB, p.chats, p.inst, msg);
+    // V39: fecha editando a mesma mensagem (se ainda tiver o id); sem id (estado antigo, ou chat novo), manda nova.
+    await Promise.all(p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
+      const id = p.msgIds?.[ch];
+      if (id && (await editarTelegram(ch, id, cortar(msg), botaoAnalisar(p.inst)))) return;
+      await enviarAlertaMoeda(SB, ch, p.inst, cortar(msg), botaoAnalisar(p.inst));
+    }));
   }
 }
 async function acompanharFinais(SB: any, ck: number, lastMap: Map<string, number>) {
@@ -1618,8 +1688,12 @@ async function acompanharFinais(SB: any, ck: number, lastMap: Map<string, number
     p.estado = "cancelado";
     const nome = p.lado === "long" ? "LONG" : "SHORT";
     console.log(`⏱ final ${p.inst} ${p.lado}: cancelado (preço ${fmtPrice(vivo)}, ${alem.toFixed(3)}% da linha, margem ${margem.toFixed(3)}%)`);
-    await enviarFinal(SB, p.chats, p.inst,
-      `🛑 <b>${p.inst}</b> — RECUOU antes do fechamento\n${DIVISOR}\n\nO aviso "vai fechar cruzado (${nome})" não vale mais: o preço voltou pra dentro da linha (${Math.abs(alem).toFixed(2)}% do lado de dentro). <b>Pode desligar o robô</b> se ligou por causa dele.\nFaltam ~${finalRestMin()} min pra vela fechar; se ela fechar cruzada mesmo assim, o alerta normal de cruzamento sai em seguida.\npreço agora ${fmtPrice(vivo)} | linha ${fmtPrice(p.linha)}`);
+    const msgCancel = `🛑 <b>${p.inst}</b> — RECUOU antes do fechamento\n${DIVISOR}\n\nO aviso "vai fechar cruzado (${nome})" não vale mais: o preço voltou pra dentro da linha (${Math.abs(alem).toFixed(2)}% do lado de dentro). <b>Pode desligar o robô</b> se ligou por causa dele.\nFaltam ~${finalRestMin()} min pra vela fechar; se ela fechar cruzada mesmo assim, o alerta normal de cruzamento sai em seguida.\npreço agora ${fmtPrice(vivo)} | linha ${fmtPrice(p.linha)}`;
+    await Promise.all(p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
+      const id = p.msgIds?.[ch];
+      if (id && (await editarTelegram(ch, id, cortar(msgCancel), botaoAnalisar(p.inst)))) return;
+      await enviarAlertaMoeda(SB, ch, p.inst, cortar(msgCancel), botaoAnalisar(p.inst));
+    }));
   }
 }
 async function checarAlertaFinal(
@@ -1742,21 +1816,34 @@ async function checarAlertaFinal(
     const linhaConf = "\n" + janelaTxt(perfil) + (confRes ? confLinha(confRes) : "");
     const nomeCurto = lado === "long" ? "LONG" : "SHORT";
     const stopAlvoFin = hip.atr > 0 ? stopAlvoTxt(lado, vivo, hip.topo, hip.fundo, hip.atr, true).replace(/^🎯 /, "") : "";
+    // V39: distância "com sinal" nesta rodada (negativa = já além da linha) pra comparar com a rodada anterior
+    // (velocidade de aproximação) e pra detectar pavio de rejeição (tocou a linha e recuou pra dentro).
+    const pendAntes = _finalPend.get(finalKey(inst, lado, ck));
+    const distAgora = modo === "aviso" ? -hip.distAbs : x.dist;
+    const cruzouAgora = distAgora <= 0;
+    const toques = (pendAntes?.toques ?? 0) + (pendAntes?.cruzouAntes && !cruzouAgora ? 1 : 0);
+    const velTxt = velocidadeTxt(pendAntes, distAgora);
+    const toqueTxt = toques > 0 ? `⚠️ já tocou a linha e recuou ${toques}x nesta vela — cruzamento pode falhar\n` : "";
     const msg = modo === "aviso"
       ? `🚨 <b>${inst}</b> — VAI FECHAR CRUZADO\n${DIVISOR}\n\n${tipoTxt} · ${pctTxt}Robô abriria: <b>${ladoTxt}</b>\n` +
         subTitulo("🔌 Ligar o robô?") +
         `⏱ <b>LIGUE O ROBÔ AGORA</b> — faltam ~${finalRestMin()} min pra vela de ${TIMEFRAME} fechar e o preço já está ${lado === "long" ? "acima" : "abaixo"} da linha (${hip.distAbs.toFixed(3)}% além). O robô entra no fechamento.\n` +
         `🔁 Se o preço recuar pra dentro antes do fechamento, eu aviso pra desligar.\n` +
+        toqueTxt + velTxt +
         subTitulo("📍 Onde está") + `${linhas}\n` +
         (stopAlvoFin ? subTitulo("🎯 Se for entrar") + stopAlvoFin : "")
       : `🕒 <b>${inst}</b> — PREPARE (fecha em ~${finalRestMin()} min)\n${DIVISOR}\n\n${tipoTxt} · ${pctTxt}Robô abriria: <b>${ladoTxt}</b>\n` +
         subTitulo("🔌 Ligar o robô?") +
         `🕒 <b>PREPARE</b> — ainda NÃO ligue: o preço está a ${x.dist.toFixed(3)}% da linha de ${nomeCurto} e chegando. Se cruzar antes do fechamento, eu mando o 🚨 (LIGUE AGORA).\n` +
+        toqueTxt + velTxt +
         subTitulo("📍 Onde está") + `${linhas}\n`;
-    await Promise.all(destinos.map(async (ch) => enviarAlertaMoeda(SB, ch, inst, cortar(msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, lado) + (modo === "aviso" ? await blocoPosicao(posDe(ch, inst), hip, lado) : "")), botaoAnalisar(inst))));
+    const botaoLiguei: Botoes = modo === "aviso" ? [[{ text: "🔔 Já liguei", callback_data: `liguei:${inst}:${lado}:${ck}` }]] : [];
+    const msgIds = await enviarOuEditarFinal(SB, pendAntes, destinos, inst, async (ch) =>
+      msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, lado) + (modo === "aviso" ? await blocoPosicao(posDe(ch, inst), hip, lado) : ""), botaoLiguei);
     _finalPend.set(finalKey(inst, lado, ck), {
       inst, lado, ck, linha: lado === "long" ? hip.topo : hip.fundo,
       atrPct: hip.preco > 0 ? (hip.atr / hip.preco) * 100 : 0, chats: destinos, estado: "ativo", tipo: modo,
+      msgIds: Object.keys(msgIds).length ? msgIds : undefined, distPrev: distAgora, distPrevT: Date.now(), cruzouAntes: cruzouAgora, toques,
     });
     if (modo === "aviso") await registrarAlertaFinal(SB, s, confRes?.conf ?? null);
     enviados++;
@@ -2571,6 +2658,71 @@ async function enviarPartes(chatId: number | string, partes: string[]) {
   if (atual) await sendTelegram(chatId, cortar(atual));
 }
 
+// V39: "já tocou e recuou" — varre as velas de 1m desde a ABERTURA da vela de 15m atual; se o preço já
+// encostou numa das linhas e o preço de agora está de volta pra dentro, é sinal clássico de fakeout.
+async function tocouRecuouTxt(instId: string, topo: number, fundo: number, precoAtual: number): Promise<string> {
+  try {
+    const d1 = await xCandles(instId, "1m", 20);
+    if (!d1 || !d1.t.length) return "";
+    const abertura = Math.floor(Date.now() / FINAL_PERIODO_MS) * FINAL_PERIODO_MS;
+    let tocouTopo = false, tocouFundo = false;
+    for (let i = 0; i < d1.t.length; i++) {
+      if (d1.t[i] < abertura) continue;
+      if (d1.h[i] >= topo) tocouTopo = true;
+      if (d1.l[i] <= fundo) tocouFundo = true;
+    }
+    if (tocouTopo && precoAtual < topo) return `⚠️ já tocou a linha de LONG e recuou pra dentro nesta vela — cruzamento pode falhar\n`;
+    if (tocouFundo && precoAtual > fundo) return `⚠️ já tocou a linha de SHORT e recuou pra dentro nesta vela — cruzamento pode falhar\n`;
+    return "";
+  } catch (e) { console.log("⚠️ tocouRecuouTxt falhou", e); return ""; }
+}
+// V39: /agora MOEDA — retrato rápido e compacto (bom pro modo Experiente): tempo até o fechamento, distância
+// às duas linhas, confiança e se já tocou e recuou. Sem precisar interpretar um alerta específico, só
+// consultar quando bater a dúvida "ligo agora ou não?".
+async function runAgora(chatId: number | string, entrada: string) {
+  const instId = await resolverPar(entrada);
+  if (!instId) { await sendTelegram(chatId, `⚠️ Não achei a moeda "${entrada.replace(/[<>&]/g, "").slice(0, 20)}" na lista de futuros. Exemplo: /agora ONE`); return; }
+  const [d15, vivo] = await Promise.all([xCandles(instId, TIMEFRAME, CANDLES_LIMIT_PRECISO), precoAoVivo(instId)]);
+  if (!d15 || d15.c.length < 100 || vivo === null) { await sendTelegram(chatId, `⚠️ Sem dados de velas para ${instId} agora.`); return; }
+  const info = calcIndicadorDeCloses(instId, d15.c);
+  if (!info) { await sendTelegram(chatId, `⚠️ Não consegui calcular o indicador de ${instId}.`); return; }
+  const atual = ladoAtual(info);
+  const dTopo = distLinha("long", vivo, info.topo, info.fundo);
+  const dFundo = distLinha("short", vivo, info.topo, info.fundo);
+  const lado: "long" | "short" = atual ?? (dTopo <= dFundo ? "long" : "short");
+  const [tocouTxt, d1h, vars, btc, fo, btcV] = await Promise.all([
+    tocouRecuouTxt(instId, info.topo, info.fundo, vivo),
+    xCandles(instId, "1H", 500),
+    getVariacoes24h().catch(() => [] as VarInfo[]),
+    xRegime("BTC-USDT").catch(() => null),
+    getFundingOI(instId),
+    btcVar1h().catch(() => null),
+  ]);
+  const adxS = xAdxSerie(d15.h, d15.l, d15.c, 14);
+  const adx = adxS.length ? adxS[adxS.length - 1] : 0;
+  const adxAntes = adxS.length > 5 ? adxS[adxS.length - 5] : adx;
+  const rsi = calcRSI(d15.c, 14);
+  const v = (vars as VarInfo[]).find((x) => x.instId === instId);
+  const pct = v ? v.pct : 0;
+  const h1 = d1h ? calcIndicadorDeCloses(instId, d1h.c) : null;
+  const trocas = contarTrocas(d15.c);
+  const volRatio = volAcel(d15.v);
+  const apChega = chegandoNaLinha(info);
+  const { conf } = pontuar({
+    info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1,
+    btcAdx: btc ? btc.adx : null, perfil: null, fo, volRatio, chegadaForte: false, apChega,
+    tipo: tipoDoLado(lado, pct), pct24: pct, bottom: null, top: null, btcVar: btcV,
+  });
+  const nome = (l: "long" | "short") => (l === "long" ? "LONG" : "SHORT");
+  let t = `📸 <b>${instId}</b> — agora\n${DIVISOR}\n\n`;
+  t += `⏱ vela fecha em ~${finalRestMin()} min\n`;
+  t += atual ? `✅ já cruzou pra <b>${nome(atual)}</b>\n` : `↔️ dentro da faixa\n`;
+  t += `📏 distância: LONG ${dTopo <= 0 ? "já passou" : dTopo.toFixed(2) + "%"} · SHORT ${dFundo <= 0 ? "já passou" : dFundo.toFixed(2) + "%"}\n`;
+  t += tocouTxt;
+  t += `🧭 Confiança (${nome(lado)}): ${confEmoji(conf)} <b>${conf}/10</b>\n`;
+  t += `preço ${fmtPrice(vivo)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
+  await sendTelegram(chatId, cortar(t), botaoAnalisar(instId));
+}
 async function runAnalise(chatId: number | string, entrada: string) {
   const instId = await resolverPar(entrada);
   if (!instId) { await sendTelegram(chatId, `⚠️ Não achei a moeda "${entrada.replace(/[<>&]/g, "").slice(0, 20)}" na lista de futuros. Exemplo: /analise ONE`); return; }
@@ -3783,6 +3935,7 @@ async function runRobo(chatId: number | string) {
     await sendTelegram(chatId, `🤖 <b>/robo</b> não está configurado para este chat.\nSeu chat_id: <b>${chatId}</b>\nPeça ao administrador para cadastrar sua chave BloFin (só leitura) no Secret BLOFIN_USERS com esse chat_id.`);
     return;
   }
+  const modoRobo = await getModo(chatId);
   const tzMs = X_TZ_OFFSET_H * 3600000;
   const inicioDia = Math.floor((Date.now() + tzMs) / 86400000) * 86400000 - tzMs;
   let posicoes: any[] | null = null, erroPos = "";
@@ -3824,7 +3977,7 @@ async function runRobo(chatId: number | string) {
       if (pp && inf) {
         const sug = sugestaoPosicao(pp, inf);
         msg += `   ${sug.emoji} <b>${sug.titulo}</b>\n`;
-        if (mostrar.length <= 5) msg += `   ${sug.dica}\n`;
+        if (modoRobo !== "experiente" && mostrar.length <= 5) msg += `   ${sug.dica}\n`;
         const trl = trailingTxt(pp, typeof inf.atr === "number" ? inf.atr : 0);
         if (trl) msg += `   ${trl}`;
       }
@@ -3921,12 +4074,35 @@ Deno.serve(async (req) => {
       }
       return new Response("ok");
     }
+    // V39: botão "🔔 Já liguei" nos alertas dos minutos finais — registra a hora real que a pessoa ligou o
+    // robô (nem todo PREPARE/LIGUE AGORA vira ação da pessoa), pra depois cruzar com o resultado real da vela.
+    const ligueiMatch = cq && /^liguei:/.test(textoBruto) ? textoBruto.match(/^liguei:(.+):(long|short):(\d+)$/) : null;
+    let respostaCq = "";
+    if (ligueiMatch) {
+      const [, instLig, ladoLig, ckLig] = ligueiMatch;
+      const agoraIso = new Date().toISOString();
+      try {
+        await getSupabase()?.from("ligacoes_robo").insert({ instid: instLig.toUpperCase(), lado: ladoLig, ck: Number(ckLig), chat_id: String(chatId), clicado_em: agoraIso });
+      } catch (e) { console.log("⚠️ registrar 'já liguei' falhou", e); }
+      const hhmm = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+      respostaCq = `🔔 Registrado às ${hhmm}`;
+      const msgId = cq?.message?.message_id;
+      // só troca o teclado (não mexe no texto, pra não perder a formatação HTML original ao reeditar)
+      if (msgId) {
+        const markup = { inline_keyboard: [[{ text: `✅ Ligado às ${hhmm}`, callback_data: "noop" }], ...botaoAnalisar(instLig.toUpperCase())] };
+        await fetch(`${TG_API}/editMessageReplyMarkup`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, message_id: msgId, reply_markup: markup }),
+        }).catch(() => {});
+      }
+    }
     if (cq?.id) {
       await fetch(`${TG_API}/answerCallbackQuery`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ callback_query_id: cq.id }),
+        body: JSON.stringify({ callback_query_id: cq.id, ...(respostaCq ? { text: respostaCq } : {}) }),
       }).catch(() => {});
     }
+    if (ligueiMatch) return new Response("ok");
     if (cq && textoBruto === "topo") {
       // Responde à mensagem grande: tocar na citação da resposta rola o chat até o início dela.
       const origId = message?.message_id;
@@ -3975,6 +4151,7 @@ Deno.serve(async (req) => {
         "🤖 <b>Comandos</b>\n" + DIVISOR + "\n\n" +
         "<b>🔎 Consultar</b>\n" +
         "🔎 /analise ONE — veredito, \"ligar o robô?\" (PREPARE / LIGUE AGORA) e guia pra quem está de fora e pra quem já está dentro\n" +
+        "📸 /agora ONE — retrato rápido: tempo até o fechamento, distância às duas linhas, confiança e se já tocou e recuou (pra decidir \"ligo agora ou não?\" sem ler o /analise inteiro)\n" +
         "🚀 /oportunidade — a favor do dia (LONG em moeda que subiu, SHORT em moeda que caiu), com liquidez e tendência, perto do Indicador\n" +
         "🔄 /reversao — vira contra o dia: SHORT em moeda que subiu (LONG → SHORT) e LONG em moeda que caiu (SHORT → LONG, só com sinais de fundo), perto do Indicador\n" +
         (FUNDO_ON ? "🟢 /fundo — despencaram no dia e já mostram sinais de fundo (possível virada SHORT → LONG); ⭐ repique segurando na faixa vem primeiro\n" : "") +
@@ -4045,6 +4222,12 @@ Deno.serve(async (req) => {
       const arg = text.split(/\s+/)[1];
       if (!arg) { await sendTelegram(chatId, "🔎 Use: /analise ONE (com ou sem -USDT)"); return new Response("ok"); }
       await comAguarde("🔎 Analisando, aguarde uns segundos...", () => runAnalise(chatId, arg));
+      return new Response("ok");
+    }
+    if (text.startsWith("/agora")) {
+      const arg = text.split(/\s+/)[1];
+      if (!arg) { await sendTelegram(chatId, "📸 Use: /agora ONE (com ou sem -USDT)"); return new Response("ok"); }
+      await comAguarde("📸 Vendo o retrato de agora, aguarde...", () => runAgora(chatId, arg));
       return new Response("ok");
     }
     if (text.startsWith("/pausar") || text.startsWith("/retomar")) {
