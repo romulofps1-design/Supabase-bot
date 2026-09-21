@@ -1,4 +1,4 @@
-// telegram-bot V30b (V30 + botao Analisar e janela de horario em /seguidas + aviso de enfraquecimento de posicao + botao ir ao topo) (historico das versoes: CHANGELOG.md)
+// telegram-bot V32 (V31 + PREPARE aos ~10 min, aviso "fechou dentro, segue perto", ⚡ janela forte e placar proprio do alerta dos minutos finais) (historico das versoes: CHANGELOG.md)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const TELEGRAM_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
@@ -21,6 +21,9 @@ const ALERT_FRESCO_CANDLES = Number(Deno.env.get("ALERT_FRESCO_CANDLES") || "2")
 const ALERT_IDADE_MAX_CANDLES = Number(Deno.env.get("ALERT_IDADE_MAX_CANDLES") || "0");
 let ANTEC_ETA_MAX_CANDLES = Number(Deno.env.get("ANTEC_ETA_MAX_CANDLES") || "6");
 let ANTEC_DIST_MAX_PCT = Number(Deno.env.get("ANTEC_DIST_MAX_PCT") || "1");
+const TRAVA_PRECO_ON = (Deno.env.get("TRAVA_PRECO_ON") || "1") !== "0";
+const ANTEC_DIST_MAX_ATR = Number(Deno.env.get("ANTEC_DIST_MAX_ATR") || "1.5");
+const ANTEC_LIGUE_ETA_CANDLES = Number(Deno.env.get("ANTEC_LIGUE_ETA_CANDLES") || "2");
 const ALERT_MAX_POR_RODADA = Number(Deno.env.get("ALERT_MAX_POR_RODADA") || "5");
 const ALERT_POOL = 40;
 const TIMEFRAME = "15m";
@@ -35,7 +38,7 @@ let FILTRO_RSI_MAX = Number(Deno.env.get("FILTRO_RSI_MAX") || "85");
 let FILTRO_RSI_MIN = Number(Deno.env.get("FILTRO_RSI_MIN") || "15");
 let FILTRO_DIST_MAX_PCT = Number(Deno.env.get("FILTRO_DIST_MAX_PCT") || "2");
 const ADX_REF = 25;
-const CANDLES_LIMIT_PADRAO = 220;
+const CANDLES_LIMIT_PADRAO = 500;
 const CANDLES_LIMIT_PRECISO = 500;
 let ALERT_FILTROS_ON = (Deno.env.get("ALERT_FILTROS") || "1") !== "0";
 const VOL_ACEL_RATIO = Number(Deno.env.get("VOL_ACEL_RATIO") || "1.5");
@@ -70,6 +73,21 @@ const BTC_DIR_ON = (Deno.env.get("BTC_DIR") || "1") !== "0";
 const BTC_DIR_PCT = Number(Deno.env.get("BTC_DIR_PCT") || "1.5");
 const BTC_BLOQ_REV_PCT = Number(Deno.env.get("BTC_BLOQ_REV_PCT") || "2.5");
 const ESTADO_ROW = "_ESTADO_";
+const FINAL_ON = (Deno.env.get("ALERTA_FINAL") || "1") !== "0";
+const FINAL_JANELA_MAX_MIN = Number(Deno.env.get("FINAL_JANELA_MAX_MIN") || "5");
+const FINAL_JANELA_MIN_MIN = Number(Deno.env.get("FINAL_JANELA_MIN_MIN") || "1");
+const FINAL_ENTRADA_PCT = Number(Deno.env.get("FINAL_ENTRADA_PCT") || "0.03");
+const FINAL_CANCELA_PCT = Number(Deno.env.get("FINAL_CANCELA_PCT") || "0.1");
+const FINAL_CANCELA_ATR = Number(Deno.env.get("FINAL_CANCELA_ATR") || "0.15");
+const FINAL_PREFILTRO_PCT = Number(Deno.env.get("FINAL_PREFILTRO_PCT") || "0.4");
+const FINAL_MAX_POR_RODADA = Number(Deno.env.get("FINAL_MAX_POR_RODADA") || "3");
+const FINAL_MAX_CAND = Number(Deno.env.get("FINAL_MAX_CAND") || "8");
+const FINAL_PREPARE_MAX_MIN = Number(Deno.env.get("FINAL_PREPARE_MAX_MIN") || "10");
+const FINAL_PREPARE_DIST_PCT = Number(Deno.env.get("FINAL_PREPARE_DIST_PCT") || "0.15");
+const FINAL_PREPARE_MAX = Number(Deno.env.get("FINAL_PREPARE_MAX") || "3");
+const FINAL_PREPARE_FOLGA_CONF = Number(Deno.env.get("FINAL_PREPARE_FOLGA_CONF") || "1");
+const FINAL_PROXIMA_DIST_PCT = Number(Deno.env.get("FINAL_PROXIMA_DIST_PCT") || "0.3");
+const FINAL_PLACAR_ON = (Deno.env.get("FINAL_PLACAR") || "1") !== "0";
 function igualSeguro(a: string, b: string): boolean {
   const ea = new TextEncoder().encode(a), eb = new TextEncoder().encode(b);
   let d = ea.length ^ eb.length;
@@ -176,8 +194,7 @@ const TOPO_MIN_CHARS = Number(Deno.env.get("TOPO_MIN_CHARS") || "700");
 const BOT_ID = TELEGRAM_TOKEN.split(":")[0];
 let _topoAvisou = false;
 async function addBotaoTopo(chatId: number | string, id: number, botoes?: Botoes) {
-  if (!BOT_ID) return;
-  const linha: Botao[] = [{ text: "⬆️ Ir ao topo", url: `tg://openmessage?user_id=${BOT_ID}&message_id=${id}` }];
+  const linha: Botao[] = [{ text: "⬆️ Ir ao topo", callback_data: "topo" }];
   const r = await fetch(`${TG_API}/editMessageReplyMarkup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, message_id: id, reply_markup: { inline_keyboard: [...(botoes ?? []), linha] } }),
@@ -544,7 +561,7 @@ function msgFundo(info: InfoFiltravel, pct: number, fin: FundoFinal, vivo: numbe
   const foTxt = fundingOiTxt(fin.fo ?? { funding: null, oiChg: null });
   return `🟢 <b>RADAR DE FUNDO — ${info.instId}</b>\n${DIVISOR}\n\n` +
     `📉 caiu ${pct.toFixed(2)}% em 24h · ${vivo !== null ? `preço agora ${fmtPrice(vivo)}` : `preço ${fmtPrice(info.preco)}`}\n` +
-    `Possível virada de queda pra alta (SHORT → LONG). <b>Ainda não é entrada</b>: o robô só abre LONG quando fechar 15m acima das duas junções.\n\n` +
+    `Possível virada de queda pra alta (SHORT → LONG). <b>Ainda não é entrada</b>: o robô só abre LONG quando fechar 15m acima do indicador.\n\n` +
     `${fundoTxt(fin)}\n` +
     (foTxt ? `💸 ${foTxt}\n` : "") +
     `\n📍 faixa: fundo ${fmtPrice(info.fundo)} | topo ${fmtPrice(info.topo)} (preço ${info.distAbs.toFixed(2)}% abaixo)\n` +
@@ -636,7 +653,7 @@ async function runFundo(chatId: number | string) {
     if (neg.length) msg += `⚠️ ${neg.join(" · ")}\n`;
     msg += `preço ${fmtPrice(c.info.preco)} (${c.info.distAbs.toFixed(1)}% abaixo da faixa) | topo ${fmtPrice(c.info.topo)}\n\n`;
   });
-  msg += `<i>Aviso antecipado, não é entrada: o robô só abre LONG quando fechar 15m acima das duas junções. O alerta automático sai com confiança ≥ ${FUNDO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
+  msg += `<i>Aviso antecipado, não é entrada: o robô só abre LONG quando fechar 15m acima do indicador. O alerta automático sai com confiança ≥ ${FUNDO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
   await sendTelegram(chatId, cortar(msg));
 }
 const ALVO_RR = Number(Deno.env.get("ALVO_RR") || "2");
@@ -726,12 +743,16 @@ function getSupabase() {
   if (!SUPABASE_URL || !SUPABASE_KEY) return null;
   return createClient(SUPABASE_URL, SUPABASE_KEY);
 }
-type Setup = { aprox?: Aprox | null; info: IndicadorInfo; pct: number; lado: "long" | "short"; tipo: "oportunidade" | "reversao"; status: string; fresco: boolean };
-const rankStatus = (s: string | null | undefined) => (s || "").includes("MUITO PERTO") ? 2 : ((s || "").includes("PERTO") || (s || "").includes("CHEGANDO")) ? 1 : 0;
+type Setup = { ligue?: { alem: boolean; restMin: number } | null; aprox?: Aprox | null; info: IndicadorInfo; pct: number; lado: "long" | "short"; tipo: "oportunidade" | "reversao"; status: string; fresco: boolean };
+const rankStatus = (s: string | null | undefined) => (s || "").includes("LIGUE AGORA") ? 3 : (s || "").includes("MUITO PERTO") ? 2 : ((s || "").includes("PERTO") || (s || "").includes("CHEGANDO")) ? 1 : 0;
 function chegandoNaLinha(info: IndicadorInfo): Aprox | null {
   const ap = info.aprox ?? null;
   if (!ap || info.idadeCandles !== null || ANTEC_ETA_MAX_CANDLES <= 0) return null;
-  return ap.etaCandles <= ANTEC_ETA_MAX_CANDLES && ap.dist <= ANTEC_DIST_MAX_PCT && ap.consist >= 0.6 ? ap : null;
+  const atr = (info as { atr?: number }).atr;
+  const distOk = typeof atr === "number" && atr > 0 && info.preco > 0 && ANTEC_DIST_MAX_ATR > 0
+    ? (ap.dist / ((atr / info.preco) * 100) <= ANTEC_DIST_MAX_ATR && ap.dist <= ANTEC_DIST_MAX_PCT * 2)
+    : ap.dist <= ANTEC_DIST_MAX_PCT;
+  return ap.etaCandles <= ANTEC_ETA_MAX_CANDLES && distOk && ap.consist >= 0.6 ? ap : null;
 }
 function idadeTxt(idade: number | null): string {
   if (idade === null) return "⏳ ainda NÃO cruzou (vai cruzar)";
@@ -769,6 +790,9 @@ function classificar(info: IndicadorInfo, pct: number): Setup | null {
   return null;
 }
 const _watchEnviado = new Set<string>();
+type FinalPend = { inst: string; lado: "long" | "short"; ck: number; linha: number; atrPct: number; chats: string[]; estado: "ativo" | "cancelado"; tipo: "aviso" | "prepare" };
+const _finalPend = new Map<string, FinalPend>();
+const finalKey = (inst: string, lado: string, ck: number) => `${inst}|${lado}|${ck}`;
 async function carregarEstado(SB: any) {
   try {
     const { data } = await SB.from("alertas_indicador").select("last_status").eq("instid", ESTADO_ROW).maybeSingle();
@@ -778,6 +802,15 @@ async function carregarEstado(SB: any) {
     for (const [k, v] of Object.entries(j.conf || {})) if (Number(v) === ck) _confBarrada.set(k, ck);
     for (const [k, v] of Object.entries(j.fundo || {})) if (Number(v) === ck) _fundoAvaliado.set(k, ck);
     for (const k of (Array.isArray(j.watch) ? j.watch : [])) _watchEnviado.add(String(k));
+    for (const p of (Array.isArray(j.final) ? j.final : [])) {
+      const lado = p?.lado === "long" || p?.lado === "short" ? p.lado : null;
+      const pck = Number(p?.ck);
+      if (!lado || typeof p?.inst !== "string" || !isFinite(pck) || pck < ck - 2) continue;
+      _finalPend.set(finalKey(p.inst, lado, pck), {
+        inst: p.inst, lado, ck: pck, linha: Number(p.linha) || 0, atrPct: Number(p.atrPct) || 0,
+        chats: Array.isArray(p.chats) ? p.chats.map(String) : [], estado: p.estado === "cancelado" ? "cancelado" : "ativo", tipo: p.tipo === "prepare" ? "prepare" : "aviso",
+      });
+    }
   } catch (e) { console.log("⚠️ carregarEstado falhou (segue sem estado salvo)", e); }
 }
 async function salvarEstado(SB: any) {
@@ -785,7 +818,8 @@ async function salvarEstado(SB: any) {
     const ck = Math.floor(Date.now() / (TF_MIN * 60000));
     for (const [k, v] of _confBarrada) if (v !== ck) _confBarrada.delete(k);
     for (const [k, v] of _fundoAvaliado) if (v !== ck) _fundoAvaliado.delete(k);
-    const estado = { conf: Object.fromEntries(_confBarrada), fundo: Object.fromEntries(_fundoAvaliado), watch: [..._watchEnviado] };
+    for (const [k, p] of _finalPend) if (p.ck < ck - 2) _finalPend.delete(k);
+    const estado = { conf: Object.fromEntries(_confBarrada), fundo: Object.fromEntries(_fundoAvaliado), watch: [..._watchEnviado], final: [..._finalPend.values()] };
     const { data: row } = await SB.from("alertas_indicador").select("instid").eq("instid", ESTADO_ROW).maybeSingle();
     const campos = { last_status: JSON.stringify(estado) };
     if (row) await SB.from("alertas_indicador").update(campos).eq("instid", ESTADO_ROW);
@@ -829,6 +863,289 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
 function cooldownEfetivoMin(row: any, lado: string, status: string): number {
   const repeticao = row?.watch_side === lado && rankStatus(status) === rankStatus(row?.last_status);
   return repeticao ? Math.max(ALERT_COOLDOWN_MIN, ALERT_COOLDOWN_REPETIDO_MIN) : ALERT_COOLDOWN_MIN;
+}
+function refinarAoVivo(c: Setup, vivo: number): "recuou" | "ok" {
+  const ap = c.aprox;
+  if (!ap) return "ok";
+  const dViva = ap.alvo === "long" ? ((c.info.topo - vivo) / vivo) * 100 : ((vivo - c.info.fundo) / vivo) * 100;
+  const alem = dViva <= 0;
+  const eta = alem ? 0.1 : (ap.vel > 0 ? dViva / ap.vel : ap.etaCandles);
+  if (!alem && ANTEC_ETA_MAX_CANDLES > 0 && eta > ANTEC_ETA_MAX_CANDLES) return "recuou";
+  c.aprox = { ...ap, dist: Math.max(dViva, 0), etaCandles: eta };
+  const restMin = Math.max(1, Math.ceil(TF_MIN - (Date.now() % (TF_MIN * 60000)) / 60000));
+  if (alem || eta <= ANTEC_LIGUE_ETA_CANDLES) {
+    c.ligue = { alem, restMin };
+    c.status = "🚨 LIGUE AGORA";
+  }
+  return "ok";
+}
+// ===== V31/V32: alerta dos minutos finais da vela ("vai fechar cruzado, ligue o robô") =====
+// Nos últimos minutos da vela de 15m, projeta o fechamento usando o preço de agora (como se a vela fechasse já).
+// Se isso for um cruzamento NOVO da linha (e passar nos mesmos filtros/confiança do alerta normal), avisa (🚨).
+// Um pouco antes (~10 min), avisa 🕒 PREPARE pra moeda colada na linha e chegando.
+// A pendência fica salva no _ESTADO_ (o cron não guarda memória entre rodadas) pra:
+//  • cancelar com histerese se o preço recuar de verdade antes do fechamento (🛑);
+//  • confirmar (✅) ou desmentir (❌) quando a vela fechar, e avisar (🔜) se ela fechou sem cruzar mas segue chegando;
+//  • entrar no placar (status "VAI FECHAR"), medido só contra a vela que estava fechando.
+const FINAL_PERIODO_MS = TF_MIN * 60000;
+const FINAL_STATUS = "⏱ VAI FECHAR CRUZADO";
+const finalRestMs = () => FINAL_PERIODO_MS - (Date.now() % FINAL_PERIODO_MS);
+const finalRestMin = () => Math.max(1, Math.ceil(finalRestMs() / 60000));
+// quanto o preço está além da linha, em % (negativo = ainda do lado de dentro)
+const finalAlem = (lado: "long" | "short", vivo: number, linha: number) => (lado === "long" ? ((vivo - linha) / linha) * 100 : ((linha - vivo) / linha) * 100);
+// distância até a linha do lado, em % (positivo = ainda não chegou; negativo = já passou)
+const distLinha = (lado: "long" | "short", preco: number, topo: number, fundo: number) => (lado === "long" ? ((topo - preco) / preco) * 100 : ((preco - fundo) / preco) * 100);
+const enviarFinal = (SB: any, chats: string[], inst: string, msg: string) =>
+  Promise.all(chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map((ch) => enviarAlertaMoeda(SB, ch, inst, cortar(msg), botaoAnalisar(inst))));
+function simularFechamento(instId: string, d: XVelas, vivo: number, base: InfoFiltravel): InfoFiltravel | null {
+  const closes = [...d.c, vivo];
+  const hip = calcIndicadorDeCloses(instId, closes);
+  if (!hip) return null;
+  return { ...hip, adx: base.adx, adxAntes: base.adxAntes, atr: base.atr, rsi: calcRSI(closes, 14), volRatio: base.volRatio ?? null, trocas: contarTrocas(closes), bottom: base.bottom ?? null };
+}
+// o horário em que a vela FECHA (não o de agora) é o que conta: às vezes o fechamento cai na virada da hora
+function janelaNoFechamento(perfil: XPerfil | null): { forte: boolean; fraca: boolean; idx: number } | null {
+  if (!perfil) return null;
+  const h = new Date(Date.now() + finalRestMs() + X_TZ_OFFSET_H * 3600000).getUTCHours();
+  const idx = perfil.idx[h];
+  return typeof idx === "number" && isFinite(idx) ? { forte: idx >= X_JANELA_FORTE, fraca: idx <= X_JANELA_FRACA, idx } : null;
+}
+function janelaTxt(perfil: XPerfil | null): string {
+  const j = janelaNoFechamento(perfil);
+  if (!j) return "";
+  if (j.forte) return `⚡ <b>PRIORIDADE</b> — o fechamento cai numa janela forte de movimento (${j.idx.toFixed(2)}× o médio)\n`;
+  if (j.fraca) return `🐢 janela fraca no fechamento (${j.idx.toFixed(2)}× o médio): o cruzamento tende a ter menos força\n`;
+  return "";
+}
+// a vela de ck fechou sem cruzar: a distância até a linha ainda está caindo e é curta? então a chance passa pra próxima vela
+function proximaVela(instId: string, closes: number[], i: number, lado: "long" | "short"): { dNow: number; dPrev: number } | null {
+  const now = calcIndicadorDeCloses(instId, closes.slice(0, i + 1));
+  const prev = calcIndicadorDeCloses(instId, closes.slice(0, i));
+  if (!now || !prev) return null;
+  const dNow = distLinha(lado, now.preco, now.topo, now.fundo);
+  const dPrev = distLinha(lado, prev.preco, prev.topo, prev.fundo);
+  return dNow > 0 && dNow <= FINAL_PROXIMA_DIST_PCT && dNow < dPrev ? { dNow, dPrev } : null;
+}
+async function registrarAlertaFinal(SB: any, s: Setup, conf: number | null) {
+  if (!FINAL_PLACAR_ON) return;
+  try {
+    const f = s.info as Partial<InfoFiltravel>;
+    // idade_candles null: o placar procura o fechamento da vela seguinte (só ela, ver achaEntrada) pra dizer se o robô entrou
+    await inserirLogAlerta(SB, {
+      instid: s.info.instId, lado: s.lado, tipo: s.tipo, status: FINAL_STATUS, fresco: false,
+      idade_candles: null, pct24: s.pct, preco: s.info.preco, adx: f.adx ?? null, rsi: f.rsi ?? null,
+    }, conf);
+  } catch (e) { console.log("⚠️ registrarAlertaFinal erro", e); }
+}
+function montarPlacarFinal(finais: any[]): string {
+  const res = finais.filter((r) => r.ent_status != null);
+  const ok = res.filter((r) => r.ent_status === "entrou");
+  const nao = res.filter((r) => r.ent_status === "nao_entrou").length;
+  const contra = res.filter((r) => r.ent_status === "contra").length;
+  const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}% (${a}/${b})` : "—");
+  let m = `⏱ <b>Alerta dos minutos finais</b> (n=${finais.length}, ${res.length} já conferidos)\n`;
+  if (res.length) {
+    m += `✅ fechou cruzado: <b>${pct(ok.length, res.length)}</b> · ❌ não fechou: ${nao} · ↔️ fechou do lado oposto: ${contra}\n`;
+    const bucket = (nome: string, fn: (r: any) => boolean) => {
+      const g = res.filter((r) => r.conf != null && fn(r));
+      return g.length ? `${nome} ${pct(g.filter((r) => r.ent_status === "entrou").length, g.length)}` : "";
+    };
+    const porConf = [bucket("conf 8–10:", (r) => Number(r.conf) >= 8), bucket("6–7:", (r) => Number(r.conf) >= 6 && Number(r.conf) <= 7), bucket("≤ 5:", (r) => Number(r.conf) <= 5)].filter(Boolean);
+    if (porConf.length) m += `🧭 acerto do aviso por confiança — ${porConf.join(" · ")}\n`;
+    const tipo = (nome: string, t: string) => {
+      const g = res.filter((r) => r.tipo === t);
+      return g.length ? `${nome} ${pct(g.filter((r) => r.ent_status === "entrou").length, g.length)}` : "";
+    };
+    const porTipo = [tipo("🚀 oportunidade", "oportunidade"), tipo("🔄 reversão", "reversao")].filter(Boolean);
+    if (porTipo.length) m += `${porTipo.join(" · ")}\n`;
+  }
+  if (ok.length) m += `💰 Dos que fecharam cruzado (entrada = fechamento da vela): ${linhaStats(ok)}\n`;
+  m += `<i>acerto do aviso = a vela que estava fechando realmente fechou cruzada; fica de fora das estatísticas acima pra não contar o mesmo cruzamento duas vezes</i>\n\n`;
+  return m;
+}
+async function resolverFinais(SB: any, ck: number) {
+  for (const [k, p] of [..._finalPend]) {
+    if (p.ck >= ck) continue;
+    if (p.ck < ck - 2 || p.estado === "cancelado") { _finalPend.delete(k); continue; }
+    const d = await xCandles(p.inst, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
+    const i = d ? d.t.indexOf(p.ck * FINAL_PERIODO_MS) : -1;
+    if (!d || i < 100) continue;
+    const fech = calcIndicadorDeCloses(p.inst, d.c.slice(0, i + 1));
+    if (!fech) continue;
+    _finalPend.delete(k);
+    const nome = p.lado === "long" ? "LONG" : "SHORT";
+    const cruzou = ladoAtual(fech) === p.lado;
+    const linhaPreco = `preço fech. ${fmtPrice(fech.preco)} | topo ${fmtPrice(fech.topo)} | fundo ${fmtPrice(fech.fundo)}`;
+    let msg: string;
+    if (cruzou) {
+      // quem recebeu só o PREPARE: o alerta normal de cruzamento sai em seguida, não repete aqui
+      if (p.tipo === "prepare") { console.log(`⏱ prepare ${p.inst} ${p.lado}: cruzou no fechamento (alerta normal cobre)`); continue; }
+      msg = `✅ <b>${p.inst}</b> — FECHOU CRUZADO pra <b>${nome}</b>\n${DIVISOR}\n\nO aviso dos minutos finais se confirmou: a vela de ${TIMEFRAME} fechou ${p.lado === "long" ? "acima" : "abaixo"} da linha (${fech.distAbs.toFixed(3)}% além). O robô entra no fechamento.\n${linhaPreco}`;
+    } else {
+      const prox = proximaVela(p.inst, d.c, i, p.lado);
+      if (p.tipo === "prepare" && !prox) { console.log(`⏱ prepare ${p.inst} ${p.lado}: fechou sem cruzar e sem seguir perto (sem aviso)`); continue; }
+      const seguePerto = prox
+        ? `\n🔜 <b>Mas segue perto</b>: fechou a ${prox.dNow.toFixed(2)}% da linha de ${nome} (na vela anterior era ${prox.dPrev.toFixed(2)}%) e ainda está chegando. A chance passa pra próxima vela: se quiser, pode deixar o robô ligado; eu aviso de novo nos minutos finais.`
+        : "";
+      msg = p.tipo === "prepare"
+        ? `🔜 <b>${p.inst}</b> — fechou sem cruzar, mas segue perto\n${DIVISOR}\n\nO aviso era de <b>${nome}</b> e a vela fechou sem cruzar.${seguePerto}\n${indicadorTxt(fech)}\n${linhaPreco}`
+        : `❌ <b>${p.inst}</b> — NÃO fechou cruzado\n${DIVISOR}\n\nO aviso era de <b>${nome}</b>, mas o preço recuou e a vela fechou sem cruzar.${prox ? seguePerto : " <b>O robô não deve entrar</b> — pode desligar se ligou por causa do aviso."}\n${indicadorTxt(fech)}\n${linhaPreco}`;
+    }
+    console.log(`⏱ final ${p.inst} ${p.lado} (${p.tipo}): ${cruzou ? "confirmou" : "não confirmou"} no fechamento`);
+    await enviarFinal(SB, p.chats, p.inst, msg);
+  }
+}
+async function acompanharFinais(SB: any, ck: number, lastMap: Map<string, number>) {
+  for (const p of _finalPend.values()) {
+    if (p.tipo !== "aviso" || p.ck !== ck || p.estado !== "ativo" || !(p.linha > 0)) continue;
+    const vivo = (await precoAoVivo(p.inst)) ?? lastMap.get(p.inst) ?? null;
+    if (vivo === null) continue;
+    const alem = finalAlem(p.lado, vivo, p.linha);
+    // histerese: entrou com o preço além da linha; só cancela se recuar de verdade pra dentro (margem em % ou em ATR)
+    const margem = Math.max(FINAL_CANCELA_PCT, FINAL_CANCELA_ATR * p.atrPct);
+    if (alem > -margem) continue;
+    p.estado = "cancelado";
+    const nome = p.lado === "long" ? "LONG" : "SHORT";
+    console.log(`⏱ final ${p.inst} ${p.lado}: cancelado (preço ${fmtPrice(vivo)}, ${alem.toFixed(3)}% da linha, margem ${margem.toFixed(3)}%)`);
+    await enviarFinal(SB, p.chats, p.inst,
+      `🛑 <b>${p.inst}</b> — RECUOU antes do fechamento\n${DIVISOR}\n\nO aviso "vai fechar cruzado (${nome})" não vale mais: o preço voltou pra dentro da linha (${Math.abs(alem).toFixed(2)}% do lado de dentro). <b>Pode desligar o robô</b> se ligou por causa dele.\nFaltam ~${finalRestMin()} min pra vela fechar; se ela fechar cruzada mesmo assim, o alerta normal de cruzamento sai em seguida.\npreço agora ${fmtPrice(vivo)} | linha ${fmtPrice(p.linha)}`);
+  }
+}
+async function checarAlertaFinal(
+  SB: any,
+  pool: { instId: string; pct: number; volUsdt: number }[],
+  indicadores: (InfoFiltravel | null)[],
+  lastMap: Map<string, number>,
+  posMap: Map<string, Pos[] | null>,
+  perfil: XPerfil | null,
+) {
+  if (!FINAL_ON) return;
+  const ck = Math.floor(Date.now() / FINAL_PERIODO_MS);
+  await resolverFinais(SB, ck);
+  await acompanharFinais(SB, ck, lastMap);
+  const rest = finalRestMs();
+  const modo: "aviso" | "prepare" | null =
+    rest <= FINAL_JANELA_MAX_MIN * 60000 && rest >= FINAL_JANELA_MIN_MIN * 60000 ? "aviso"
+    : (FINAL_PREPARE_MAX_MIN > FINAL_JANELA_MAX_MIN && rest > FINAL_JANELA_MAX_MIN * 60000 && rest <= FINAL_PREPARE_MAX_MIN * 60000) ? "prepare"
+    : null;
+  if (!modo) return;
+  // 1) pré-filtro barato: preço de agora perto/além da linha da última vela FECHADA, e ainda não cruzada desse lado
+  //    (no PREPARE: além disso, mais perto da linha do que o fechamento anterior estava = "chegando")
+  type Cand = { inst: string; lado: "long" | "short"; base: InfoFiltravel; pct: number; vol: number; d: number };
+  const cands: Cand[] = [];
+  const pctMin = Math.min(ALERT_OPORT_PCT_MIN, ALERT_REV_PCT_MIN);
+  const limite = modo === "aviso" ? FINAL_PREFILTRO_PCT : FINAL_PREPARE_DIST_PCT * 1.5;
+  indicadores.forEach((base, i) => {
+    if (!base) return;
+    const inst = pool[i].instId;
+    const last = lastMap.get(inst);
+    if (!last || Math.abs(pool[i].pct) < pctMin) return;
+    const atual = ladoAtual(base);
+    const opcoes: { lado: "long" | "short"; d: number }[] = [];
+    for (const l of ["long", "short"] as const) {
+      const d = distLinha(l, last, base.topo, base.fundo);
+      if (d > limite || atual === l) continue;
+      if (modo === "prepare" && !(d < distLinha(l, base.preco, base.topo, base.fundo))) continue;
+      opcoes.push({ lado: l, d });
+    }
+    if (!opcoes.length) return;
+    const o = opcoes.sort((a, b) => a.d - b.d)[0];
+    const ex = _finalPend.get(finalKey(inst, o.lado, ck));
+    if (ex && (modo === "prepare" || ex.tipo === "aviso")) return;
+    if (_confBarrada.get(inst + o.lado) === ck) return;
+    if (ALERT_FILTROS_ON && motivoDescarte(base, pool[i].volUsdt, false, o.lado)) return;
+    cands.push({ inst, lado: o.lado, base, pct: pool[i].pct, vol: pool[i].volUsdt, d: o.d });
+  });
+  if (!cands.length) { console.log(`⏱ final (${modo}): faltam ${(rest / 60000).toFixed(1)} min, nenhum candidato perto da linha`); return; }
+  cands.sort((a, b) => a.d - b.d);
+  const top = cands.slice(0, FINAL_MAX_CAND);
+  // 2) simulação exata: fecha a vela "de mentira" no preço de agora
+  //    aviso: tem que ser cruzamento NOVO; prepare: ainda não cruzou, mas está colada na linha
+  const sims = (await emLotes(top, 4, async (c) => {
+    const [d, vivo] = await Promise.all([xCandles(c.inst, TIMEFRAME, CANDLES_LIMIT_PRECISO), precoAoVivo(c.inst)]);
+    if (!d || d.c.length < 100 || vivo === null) return null;
+    const hip = simularFechamento(c.inst, d, vivo, c.base);
+    if (!hip) return null;
+    if (modo === "aviso") {
+      if (hip.idadeCandles !== 0 || ladoAtual(hip) !== c.lado || hip.distAbs < FINAL_ENTRADA_PCT) return null;
+    } else {
+      const dHip = distLinha(c.lado, vivo, hip.topo, hip.fundo);
+      if (ladoAtual(hip) !== null || !(dHip > 0 && dHip <= FINAL_PREPARE_DIST_PCT)) return null;
+    }
+    const s = classificar(hip, c.pct);
+    if (!s || s.lado !== c.lado) return null;
+    if (ALERT_FILTROS_ON && motivoDescarte(hip, c.vol, false, s.lado)) return null;
+    return { s, hip, vivo, vol: c.vol, dist: distLinha(c.lado, vivo, hip.topo, hip.fundo) };
+  })).filter((x): x is NonNullable<typeof x> => x !== null);
+  console.log(`⏱ final (${modo}): faltam ${(rest / 60000).toFixed(1)} min | ${cands.length} perto da linha, ${sims.length} passaram na simulação`);
+  if (!sims.length) return;
+  // não duplica o que o loop principal já mandou nesta vela pra mesma moeda e lado
+  const rows = new Map<string, any>();
+  try {
+    const { data } = await SB.from("alertas_indicador").select("instid,last_status,last_alert_at,watch_side").in("instid", sims.map((x) => x.hip.instId));
+    ((data || []) as any[]).forEach((r) => rows.set(r.instid, r));
+  } catch (e) { console.log("⚠️ leitura das linhas (alerta final) falhou", e); }
+  const abertura = ck * FINAL_PERIODO_MS;
+  const loopJaAvisou = (inst: string, lado: string, soLigue: boolean) => {
+    const r = rows.get(inst);
+    if (!r || r.watch_side !== lado || !r.last_alert_at || new Date(r.last_alert_at).getTime() < abertura) return false;
+    return soLigue ? String(r.last_status || "").includes("LIGUE AGORA") : true;
+  };
+  const posDe = (ch: string, inst: string) => posDaMoeda(posMap.get(ch) ?? null, inst);
+  let enviados = 0;
+  for (const x of sims.sort((a, b) => a.dist - b.dist)) {
+    if (enviados >= (modo === "aviso" ? FINAL_MAX_POR_RODADA : FINAL_PREPARE_MAX)) break;
+    const { s, hip, vivo } = x;
+    const inst = hip.instId, lado = s.lado;
+    if (loopJaAvisou(inst, lado, modo === "aviso")) {
+      console.log(`⏱ final ${inst} ${lado} (${modo}): loop principal já avisou nesta vela (sem duplicar)`);
+      continue;
+    }
+    const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
+    // 🚨 em silêncio ainda protege quem tem posição do lado oposto; PREPARE é só antecipação e respeita o silêncio
+    const protegidos = modo === "aviso" && SILENCIO_PROTECAO ? ALERT_CHAT_IDS.filter((ch) => silChat(ch) && posDe(ch, inst).some((p) => p.lado !== lado)) : [];
+    // quem já está posicionado no lado do sinal não precisa do "ligue o robô"
+    const destinos = [...new Set([...ativos, ...protegidos])].filter((ch) => !posDe(ch, inst).some((p) => p.lado === lado));
+    if (!destinos.length) continue;
+    const confRes = await calcConfiancaAlerta(s, x.vol, perfil);
+    const minBase = s.tipo === "reversao" ? (lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
+    // moeda que ainda não cruzou pontua ~1–2 pts a menos que a que cruzou: o PREPARE tem essa folga, o 🚨 não
+    const minConf = modo === "aviso" ? minBase : Math.max(0, minBase - FINAL_PREPARE_FOLGA_CONF);
+    if (minConf > 0 && confRes && confRes.conf < minConf) {
+      // só o 🚨 trava a moeda pra vela toda; o PREPARE barrado não pode impedir o 🚨 de sair depois
+      if (modo === "aviso") _confBarrada.set(inst + lado, ck);
+      console.log(`🧭 final ${inst} ${lado} (${s.tipo}, ${modo}) barrado: confiança ${confRes.conf}/10 < ${minConf}`);
+      continue;
+    }
+    if (BTC_BLOQ_REV_PCT > 0 && s.tipo === "reversao" && lado === "short" && confRes?.btcVar != null && confRes.btcVar >= BTC_BLOQ_REV_PCT) {
+      if (modo === "aviso") _confBarrada.set(inst + lado, ck);
+      console.log(`₿ final ${inst} SHORT de reversão barrado: BTC +${confRes.btcVar.toFixed(1)}%/h (limite ${BTC_BLOQ_REV_PCT}%)`);
+      continue;
+    }
+    const tipoTxt = s.tipo === "oportunidade" ? "🚀 <b>OPORTUNIDADE</b> (continuação)" : "🔄 <b>REVERSÃO</b> (moeda esticada)";
+    const ladoTxt = lado === "long" ? "LONG (compra)" : "SHORT (venda)";
+    const pctTxt = `${s.pct >= 0 ? "📈 subiu +" : "📉 caiu "}${s.pct.toFixed(2)}% em 24h\n`;
+    const linhas = `preço agora ${fmtPrice(vivo)} | topo ${fmtPrice(hip.topo)} | fundo ${fmtPrice(hip.fundo)} (linhas projetadas pro fechamento)`;
+    const foTxt = confRes?.fo ? fundingOiTxt(confRes.fo) : "";
+    const linhaFo = confRes ? (foTxt ? `\n💸 ${foTxt}` : "") : await linhaFundingOI(inst);
+    const linhaConf = "\n" + janelaTxt(perfil) + (confRes ? confLinha(confRes) : "");
+    const nomeCurto = lado === "long" ? "LONG" : "SHORT";
+    const msg = modo === "aviso"
+      ? `🚨 <b>${inst}</b> — VAI FECHAR CRUZADO\n${DIVISOR}\n\n${tipoTxt}\n${pctTxt}Robô abriria: <b>${ladoTxt}</b>\n` +
+        (hip.atr > 0 ? stopAlvoTxt(lado, vivo, hip.topo, hip.fundo, hip.atr, true) : "") +
+        `⏱ <b>LIGUE O ROBÔ AGORA</b> — faltam ~${finalRestMin()} min pra vela de ${TIMEFRAME} fechar e o preço já está ${lado === "long" ? "acima" : "abaixo"} da linha (${hip.distAbs.toFixed(3)}% além). O robô entra no fechamento.\n` +
+        `🔁 Se o preço recuar pra dentro antes do fechamento, eu aviso pra desligar.\n${linhas}`
+      : `🕒 <b>${inst}</b> — PREPARE (fecha em ~${finalRestMin()} min)\n${DIVISOR}\n\n${tipoTxt}\n${pctTxt}Robô abriria: <b>${ladoTxt}</b>\n` +
+        `🕒 <b>PREPARE</b> — ainda NÃO ligue: o preço está a ${x.dist.toFixed(3)}% da linha de ${nomeCurto} e chegando. Se cruzar antes do fechamento, eu mando o 🚨 (LIGUE AGORA).\n${linhas}`;
+    await Promise.all(destinos.map(async (ch) => enviarAlertaMoeda(SB, ch, inst, cortar(msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, lado) + (modo === "aviso" ? await blocoPosicao(posDe(ch, inst), hip, lado) : "")), botaoAnalisar(inst))));
+    _finalPend.set(finalKey(inst, lado, ck), {
+      inst, lado, ck, linha: lado === "long" ? hip.topo : hip.fundo,
+      atrPct: hip.preco > 0 ? (hip.atr / hip.preco) * 100 : 0, chats: destinos, estado: "ativo", tipo: modo,
+    });
+    if (modo === "aviso") await registrarAlertaFinal(SB, s, confRes?.conf ?? null);
+    enviados++;
+    console.log(`⏱ final ${inst} ${lado} (${modo}): avisado (${modo === "aviso" ? `${hip.distAbs.toFixed(3)}% além` : `${x.dist.toFixed(3)}% da linha`}, faltam ~${finalRestMin()} min, ${destinos.length} chat(s))`);
+  }
 }
 async function runAlertaProativo() {
   if (!ALERT_CHAT_IDS.length) { console.log("⚠️ nenhum chat recebe alerta (ALLOWED_CHAT_IDS vazio ou todos em ALERT_EXCLUIR_IDS)"); return; }
@@ -893,9 +1210,18 @@ async function runAlertaProativo() {
   const agora = Date.now();
   let enviados = 0;
   let confBarrados = 0;
+  const vivoMemo = new Map<string, Promise<number | null>>();
+  const getVivo = (i: string) => { if (!vivoMemo.has(i)) vivoMemo.set(i, precoAoVivo(i)); return vivoMemo.get(i)!; };
   for (const c of setups) {
     if (enviados >= ALERT_MAX_POR_RODADA) break;
     const inst = c.info.instId;
+    if (c.info.idadeCandles === null && c.aprox) {
+      const v0 = await getVivo(inst);
+      if (v0 !== null && refinarAoVivo(c, v0) === "recuou") {
+        console.log(`↩️ ${inst} ${c.lado}: preço ao vivo recuou, aproximação já não vale (sem alerta)`);
+        continue;
+      }
+    }
     const cruzou = ladoAtual(c.info) === c.lado;
     const chatsContra = ALERT_CHAT_IDS.filter((ch) => cruzou && posDe(ch, inst).some((p) => p.lado !== c.lado));
     const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
@@ -908,14 +1234,28 @@ async function runAlertaProativo() {
     || (c.fresco && !(row?.last_status || "").includes("🆕"));
     const escalouContra = contraPos && !(row?.last_status || "").includes("🛡️");
     if (!cooldownOk && !escalouBase && !escalouContra) continue;
-    const destinos = (cooldownOk || escalouBase) ? [...new Set([...ativos, ...protegidos])] : chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO);
+    const destinosBase = (cooldownOk || escalouBase) ? [...new Set([...ativos, ...protegidos])] : chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO);
+    // Posição já no lado do sinal: "chegando na linha" não acrescenta nada pra quem já está posicionado (só ruído).
+    const destinos = c.info.idadeCandles === null ? destinosBase.filter((ch) => !posDe(ch, inst).some((p) => p.lado === c.lado)) : destinosBase;
     if (!destinos.length) continue;
     const tipoTxt = c.tipo === "oportunidade" ? "🚀 <b>OPORTUNIDADE</b> (continuação)" : "🔄 <b>REVERSÃO</b> (moeda esticada)";
     const ladoTxt = c.lado === "long" ? "LONG (compra)" : "SHORT (venda)";
     const infoAtr = (c.info as InfoFiltravel).atr;
     const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
     if (_confBarrada.get(inst + c.lado) === ckVela) continue;
-    const [vivo, confRes] = await Promise.all([precoAoVivo(inst), calcConfiancaAlerta(c, poolMap.get(inst)?.volUsdt ?? null, perfilAlerta)]);
+    if (_finalPend.has(finalKey(inst, c.lado, ckVela))) { console.log(`⏱ ${inst} ${c.lado}: já coberto pelo alerta dos minutos finais desta vela`); continue; }
+    const vivo = await getVivo(inst);
+    if (TRAVA_PRECO_ON && vivo !== null) {
+      // Trava de preço ao vivo: o sinal foi calculado no fechamento da vela; se o preço de agora já contradiz, não alerta.
+      // Não marca nada como "enviado" nem trava a vela: se o preço voltar ao lado certo, o alerta sai normalmente (sem spam, sem perder).
+      const ladoOposto = c.lado === "short" ? vivo > c.info.topo : vivo < c.info.fundo;
+      const voltouPraDentro = c.info.idadeCandles !== null && (c.lado === "long" ? vivo <= c.info.topo : vivo >= c.info.fundo);
+      if (ladoOposto || voltouPraDentro) {
+        console.log(`🔒 ${inst} ${c.lado} barrado pela trava: preço agora ${fmtPrice(vivo)} ${ladoOposto ? "já está do lado oposto" : "voltou pra dentro do canal"} (topo ${fmtPrice(c.info.topo)} | fundo ${fmtPrice(c.info.fundo)})`);
+        continue;
+      }
+    }
+    const confRes = await calcConfiancaAlerta(c, poolMap.get(inst)?.volUsdt ?? null, perfilAlerta);
     const minConf = c.tipo === "reversao" ? (c.lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
     if (minConf > 0 && confRes && confRes.conf < minConf) {
       _confBarrada.set(inst + c.lado, ckVela);
@@ -935,6 +1275,9 @@ async function runAlertaProativo() {
     `Robô abriria: <b>${ladoTxt}</b>\n` +
     (typeof infoAtr === "number" ? stopAlvoTxt(c.lado, vivo ?? c.info.preco, c.info.topo, c.info.fundo, infoAtr, vivo !== null) : "") +
     `${idadeTxt(c.info.idadeCandles)}\n` +
+    (c.aprox ? (c.ligue
+      ? `🚨 <b>LIGUE O ROBÔ AGORA</b> — ${c.ligue.alem ? `o preço já está ${c.lado === "long" ? "acima" : "abaixo"} da linha; a vela fecha em ~${c.ligue.restMin} min (o robô entra no fechamento)` : `chega na linha em ~${Math.max(1, Math.round(c.aprox.etaCandles * TF_MIN))} min, dá tempo de ligar`}\n`
+      : `🕒 <b>PREPARE</b> — ainda não ligue: aviso antecipado, vou avisar de novo (🚨 LIGUE AGORA) quando estiver perto\n`) : "") +
     (c.aprox ? `🎯 Aproximando: deve chegar na linha em ~${Math.max(1, Math.round(c.aprox.etaCandles * TF_MIN))} min (estimativa, ${c.aprox.vel.toFixed(2)}% por vela) — dá tempo de preparar o robô (se recuar sem cruzar, eu aviso pra desligar)\n` : "") +
     `${indicadorTxt(c.info)}\n` +
     (vivo !== null ? `preço agora ${fmtPrice(vivo)} (fech. 15m ${fmtPrice(c.info.preco)})` : `preço ${fmtPrice(c.info.preco)}`) + ` | topo ${fmtPrice(c.info.topo)} | fundo ${fmtPrice(c.info.fundo)}`;
@@ -964,6 +1307,8 @@ async function runAlertaProativo() {
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   await checarListaAcompanhamento(SB, poolInfoMap, posMap);
   await checarAntecipacoes(SB, poolInfoMap).catch((e) => console.log("❌ erro antecipações", e));
+  const lastMap = new Map(variacoes.map((v) => [v.instId, v.last] as [string, number]));
+  await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta).catch((e) => console.log("❌ erro alerta final", e));
   await salvarEstado(SB);
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
   await extrasV13(SB, poolInfoMap, posMap);
@@ -1231,6 +1576,7 @@ function retornoLog(r: any, h: number): number | null {
   return (r.lado === "long" ? bruto : -bruto) - TAXA_IDA_VOLTA_PCT;
 }
 const PLACAR_ENTRADA_ON = (Deno.env.get("PLACAR_ENTRADA") || "1") !== "0";
+const ehFinalLog = (r: any) => String(r?.status || "").includes("VAI FECHAR");
 const ENTRADA_MAX_CANDLES = Number(Deno.env.get("ENTRADA_MAX_CANDLES") || "8");
 let _placarTemEntrada = true;
 type EntradaRes = { st: "pendente" } | { st: "nao_entrou" | "contra" } | { st: "entrou"; preco: number; emMs: number };
@@ -1249,12 +1595,14 @@ function achaEntrada(d: XVelas, jd: { suprema: number; j6: number }[], r: any): 
     return { st: "entrou", preco: d.c[kA], emMs: d.t[kA] + TFMS };
   }
   const kUlt = d.t.length - 1;
-  const kFim = Math.min(kUlt, kA + ENTRADA_MAX_CANDLES);
+  // alerta dos minutos finais vale só pra vela seguinte (a que estava fechando); os demais valem até ENTRADA_MAX_CANDLES
+  const maxC = ehFinalLog(r) ? 1 : ENTRADA_MAX_CANDLES;
+  const kFim = Math.min(kUlt, kA + maxC);
   for (let k = kA + 1; k <= kFim; k++) {
     if (alem(k, lado)) return { st: "entrou", preco: d.c[k], emMs: d.t[k] + TFMS };
     if (alem(k, lado === "long" ? "short" : "long")) return { st: "contra" };
   }
-  return kUlt >= kA + ENTRADA_MAX_CANDLES ? { st: "nao_entrou" } : { st: "pendente" };
+  return kUlt >= kA + maxC ? { st: "nao_entrou" } : { st: "pendente" };
 }
 async function conferirPlacar(SB: any) {
   const agora = Date.now();
@@ -1348,8 +1696,10 @@ async function runPlacar(chatId: number | string, dias: number) {
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
   const { data, error } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).limit(2000);
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar (a tabela ${PLACAR_TABELA} existe?): ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
-  const rows = (data || []) as any[];
-  if (rows.length === 0) { await sendTelegram(chatId, `📊 <b>PLACAR</b>\n\nNenhum alerta registrado nos últimos ${dias} dia(s). Os alertas passam a ser registrados a partir de agora.`); return; }
+  const todas = (data || []) as any[];
+  const rows = todas.filter((r) => !ehFinalLog(r));
+  const finais = todas.filter(ehFinalLog);
+  if (todas.length === 0) { await sendTelegram(chatId, `📊 <b>PLACAR</b>\n\nNenhum alerta registrado nos últimos ${dias} dia(s). Os alertas passam a ser registrados a partir de agora.`); return; }
   const comResultado = rows.filter((r) => r.preco_1h != null).length;
   const grupos: [string, (r: any) => boolean][] = [
     ["🚀 Oportunidade", (r) => r.tipo === "oportunidade"],
@@ -1387,6 +1737,7 @@ async function runPlacar(chatId: number | string, dias: number) {
     const mae = mf.reduce((s, r) => s + Number(r.mae_pct), 0) / mf.length;
     msg += `↕️ Andou a favor no máximo <b>${mfe.toFixed(2)}%</b> e contra no máximo <b>${mae.toFixed(2)}%</b> (média, n=${mf.length})\n\n`;
   }
+  if (finais.length) msg += montarPlacarFinal(finais);
   msg += await montarCalibracao(SB, dias).catch(() => "");
   if (comResultado < 30) msg += `⚠️ <i>Amostra pequena (${comResultado} conferidos): ainda não tire conclusões.</i>\n`;
   msg += `<i>Já desconta a taxa da BloFin; não considera funding, stop nem o tamanho da posição. Uso: /placar 30 (30 dias)</i>`;
@@ -1452,7 +1803,7 @@ async function runAnalise(chatId: number | string, entrada: string) {
       : `ainda não confirmou: precisa fechar abaixo de ${nFundo}; se subir acima de ${nTopo}, o lado inverte pra LONG.`;
   }
   let msg = `🔎 <b>ANÁLISE — ${instId}</b>\n${DIVISOR}\n\n`;
-  msg += `${veredito} (${total >= 0 ? "+" : ""}${total} pts) · confiança <b>${conf}/10</b> ${confEmoji(conf)}\nRobô abriria: <b>${lado === "long" ? "LONG (compra)" : "SHORT (venda)"}</b>\n\n`;
+  msg += `${veredito} (${total >= 0 ? "+" : ""}${total} pts) · confiança <b>${conf}/10</b> ${confEmoji(conf)}\nRobô abriria: <b>${lado === "long" ? "LONG (compra)" : "SHORT (venda)"}</b>\n${placarFiltros(motivos)}\n\n`;
   for (const m of motivos) msg += `${m.pts > 0 ? "✅" : m.pts < 0 ? "⚠️" : "➖"} ${m.txt}${m.pts !== 0 ? ` (${m.pts > 0 ? "+" : ""}${m.pts})` : ""}\n`;
   if (bottomA && pct !== null && pct <= -FUNDO_QUEDA_MIN && ladoAtual(info) !== "long") {
     const finA = await fundoFinal(bottomA, instId, fo);
@@ -1577,10 +1928,15 @@ function pontuar(x: CtxPontos) {
   const veredito = total >= ANALISE_VERDE ? "🟢 <b>FAVORÁVEL</b>" : total >= ANALISE_AMARELO ? "🟡 <b>COM ATENÇÃO</b>" : "🔴 <b>EVITAR / ESPERAR</b>";
   return { motivos, total, veredito, conf: confiancaDe(total) };
 }
+function placarFiltros(motivos: Motivo[]): string {
+  const f = motivos.filter((m) => m.pts > 0).length, c = motivos.filter((m) => m.pts < 0).length, n = motivos.length - f - c;
+  const em = f > 0 && f >= 2 * c ? "🟢" : f > c ? "🟡" : "🔴";
+  return `📊 Filtros: <b>${f} a favor · ${c} contra</b>${n ? ` · ${n} neutro${n > 1 ? "s" : ""}` : ""} ${em}`;
+}
 function confLinha(r: { motivos: Motivo[]; conf: number }): string {
   const pos = r.motivos.filter((m) => m.pts > 0).sort((a, b) => b.pts - a.pts).slice(0, 2).map((m) => m.txt);
   const neg = r.motivos.filter((m) => m.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 2).map((m) => m.txt);
-  let t = `🧭 Confiança: <b>${r.conf}/10</b> ${confEmoji(r.conf)}`;
+  let t = `🧭 Confiança: <b>${r.conf}/10</b> ${confEmoji(r.conf)}\n   ${placarFiltros(r.motivos)}`;
   if (pos.length) t += `\n   ✅ ${pos.join(" · ")}`;
   if (neg.length) t += `\n   ⚠️ ${neg.join(" · ")}`;
   return t;
@@ -1881,7 +2237,7 @@ async function montarResumoNoite(SB: any, chat?: string | number): Promise<strin
   const inicioDia = Math.floor((Date.now() + tzMs) / 86400000) * 86400000 - tzMs;
   const { data, error } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(inicioDia).toISOString()).order("criado_em", { ascending: true }).limit(500);
   let msg = `🌙 <b>BOA NOITE — alertas do dia</b>\n${DIVISOR}\n\n`;
-  const rows = (error ? [] : (data || [])) as any[];
+  const rows = ((error ? [] : (data || [])) as any[]).filter((r) => !ehFinalLog(r));
   if (!rows.length) msg += error ? `⚠️ Não consegui ler o placar (tabela ${PLACAR_TABELA} existe?).\n` : `Nenhum alerta hoje.\n`;
   else {
     msg += `${rows.length} alerta(s) hoje:\n`;
@@ -1895,7 +2251,7 @@ async function montarResumoNoite(SB: any, chat?: string | number): Promise<strin
   }
   try {
     const { data: d14 } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(Date.now() - 14 * 86400000).toISOString()).order("criado_em", { ascending: false }).limit(2000);
-    const r14 = (d14 || []) as any[];
+    const r14 = ((d14 || []) as any[]).filter((r) => !ehFinalLog(r));
     const ontem = r14.filter((r) => { const t = new Date(r.criado_em).getTime(); return t >= inicioDia - 86400000 && t < inicioDia; });
     if (ontem.length) msg += `\n📆 <b>Ontem</b> (${ontem.length} alerta(s), já conferido)\n${linhaStats(ontem)}\n`;
   } catch (e) { console.log("⚠️ resumo noite (14d)", e); }
@@ -2363,7 +2719,7 @@ async function runMeuPlacar(chatId: number | string, dias: number) {
   catch (e) { await sendTelegram(chatId, `⚠️ Não consegui ler seus trades: ${String((e as Error).message || e).replace(/[<>&]/g, "").slice(0, 160)}`); return; }
   const { data, error } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(desdeMs).toISOString()).order("criado_em", { ascending: true }).limit(2000);
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas: ${String(error.message || error).replace(/[<>&]/g, "").slice(0, 160)}`); return; }
-  const alertas = (data || []) as any[];
+  const alertas = ((data || []) as any[]).filter((r) => !ehFinalLog(r));
   const aberturas = fills.filter((f) => numOr0(f.fillPnl) === 0).map((f) => ({
     inst: String(f.instId), ts: numOr0(f.ts),
     dir: (f.positionSide === "long" || f.positionSide === "short") ? f.positionSide as string : (f.side === "buy" ? "long" : "short"),
@@ -2575,6 +2931,7 @@ function montarConfig(): string {
   m += `🔔 <b>Alertas</b>\n• oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% (24h)\n• cooldown ${ALERT_COOLDOWN_MIN} min · repetição idêntica ${ALERT_COOLDOWN_REPETIDO_MIN} min\n• fresco ≤ ${ALERT_FRESCO_CANDLES} velas · idade máx ${ALERT_IDADE_MAX_CANDLES || "sem limite"}\n• máx ${ALERT_MAX_POR_RODADA} por rodada · pool ${ALERT_POOL} · acompanhamento ${WATCH_HORAS}h\n• antecipação: ${ANTEC_ETA_MAX_CANDLES} velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min), distância ≤ ${ANTEC_DIST_MAX_PCT}%\n\n`;
   m += `💸 <b>Taxa no placar</b>: ${TAXA_IDA_VOLTA_PCT.toFixed(3)}% ida e volta (taker ${TAXA_TAKER_PCT}% × 2; ajuste com TAXA_TAKER_PCT ou TAXA_IDA_VOLTA_PCT)\n`;
   m += `📏 <b>Placar</b>: entrada pelo fechamento da vela do cruzamento ${on(PLACAR_ENTRADA_ON && _placarTemEntrada)}${PLACAR_ENTRADA_ON && !_placarTemEntrada ? " (faltam as colunas: rode o ALTER TABLE V30)" : ""} · cruzamento vale até ${ENTRADA_MAX_CANDLES} velas (${ENTRADA_MAX_CANDLES * TF_MIN} min) depois do aviso\n\n`;
+  m += `⏱ <b>V32 · alerta dos minutos finais</b> (${on(FINAL_ON)})\n• 🚨 janela: de ${FINAL_JANELA_MAX_MIN} a ${FINAL_JANELA_MIN_MIN} min antes do fechamento da vela ${TIMEFRAME} (cron a cada 1–2 min)\n• avisa se o preço já está ${FINAL_ENTRADA_PCT}%+ além da linha projetada · cancela só se recuar ${FINAL_CANCELA_PCT}% (ou ${FINAL_CANCELA_ATR}×ATR) pra dentro (histerese)\n• 🕒 PREPARE: de ${FINAL_PREPARE_MAX_MIN} a ${FINAL_JANELA_MAX_MIN} min antes, moeda a ≤ ${FINAL_PREPARE_DIST_PCT}% da linha e chegando (máx ${FINAL_PREPARE_MAX} por rodada, confiança mín. −${FINAL_PREPARE_FOLGA_CONF})\n• 🔜 se a vela fechar sem cruzar mas seguir a ≤ ${FINAL_PROXIMA_DIST_PCT}% da linha e chegando, avisa que a chance passa pra próxima vela\n• ⚡ janela forte de horário no fechamento · placar próprio no /placar (${on(FINAL_PLACAR_ON)})\n• pré-filtro ${FINAL_PREFILTRO_PCT}% da linha · máx ${FINAL_MAX_POR_RODADA} por rodada · confirma ✅/❌ no fechamento\n\n`;
   m += `🛡️ <b>V29</b>\n• filtro BTC: ${on(BTC_DIR_ON)} (±${BTC_DIR_PCT}%/h pontua) · SHORT de reversão barrado com BTC ≥ +${BTC_BLOQ_REV_PCT}%/h${BTC_BLOQ_REV_PCT > 0 ? "" : " (desligado)"}\n• webhook: ${WEBHOOK_SECRET ? "com secret_token ✅" : "SEM secret_token ⚠️"} · cron: ${CRON_SO_HEADER ? "só por header ✅" : "aceita segredo na URL ⚠️"}\n• anti-repetição salva no Supabase\n\n`;
   m += `🟢 <b>V28 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% em 24h · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n\n`;
   m += `🧭 <b>V26</b>\n• squeeze: faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica · volume das velas ≥ ${VOL_ACEL_RATIO}× (seco ≤ ${VOL_SECO_RATIO}×)\n• alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou passar de 2× o prazo\n• confiança: verde ≥ ${CONF_VERDE}/10 · amarelo ≥ ${CONF_AMARELO}/10\n• modo pump (${on(ESTRAT_PUMP)}): mín. confiança oportunidade ${CONF_MIN_OPORT} · reversão ${CONF_MIN_REVERSAO} · serrote ≥ ${SERROTE_MAX} trocas/4h barra · RSI máx LONG ${FILTRO_RSI_MAX_LONG} · limite ${LIMITE_LADO} por lado\n\n`;
@@ -2640,6 +2997,25 @@ Deno.serve(async (req) => {
         body: JSON.stringify({ callback_query_id: cq.id }),
       }).catch(() => {});
     }
+    if (cq && textoBruto === "topo") {
+      // Responde à mensagem grande: tocar na citação da resposta rola o chat até o início dela.
+      const origId = message?.message_id;
+      if (origId) {
+        const r = await fetch(`${TG_API}/sendMessage`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: "⬆️ Toque na citação acima para ir ao topo",
+            reply_parameters: { message_id: origId, allow_sending_without_reply: true },
+            disable_notification: true,
+          }),
+        }).catch(() => null);
+        const j: any = r ? await J(r) : null;
+        const novoId = j?.result?.message_id;
+        if (novoId) await uiRegistrar(chatId, novoId).catch(() => {});
+      }
+      return new Response("ok");
+    }
     if (text.startsWith("/")) {
       await uiLimpar(chatId, cq ? [] : [message?.message_id]).catch((e) => console.log("⚠️ uiLimpar", e));
     }
@@ -2675,8 +3051,9 @@ Deno.serve(async (req) => {
         (RISCO_ON ? `🚨 Aviso de risco nas suas posições: liquidação a menos de ${RISCO_LIQ_PCT}% ou prejuízo acima de ${RISCO_PERDA_PCT}% da margem.\n\n` : "") +
         (SILENCIO_ON ? `🌙 Silêncio das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local)${SILENCIO_PROTECAO ? ": só passa alerta de proteção de posição aberta" : ""}.\n\n` : "") +
         "🧭 Todo alerta traz a confiança X/10 (mesmos pontos do /analise). Se um aviso \"chegando\" não se confirmar (preço recuou), eu aviso pra você desligar o robô.\n\n" +
+        (FINAL_ON ? `⏱ Minutos finais da vela: aos ~${FINAL_PREPARE_MAX_MIN} min do fechamento aviso 🕒 PREPARE (moeda colada na linha); nos últimos ${FINAL_JANELA_MAX_MIN} min, se o preço já está além da linha, mando 🚨 "vai fechar cruzado, ligue o robô" (⚡ quando o fechamento cai em janela forte). Depois confirmo (✅), aviso se recuar (🛑) ou se não cruzou (❌); se a vela fechar sem cruzar mas seguir perto, mando 🔜 (a chance passa pra próxima).\n\n` : "") +
         (ESTRAT_PUMP ? `🎯 Modo pump: LONG de continuação e SHORT de reversão em moeda que subiu; em moeda que caiu só SHORT. Confiança mínima ${CONF_MIN_OPORT}/10 (continuação) e ${CONF_MIN_REVERSAO}/10 (reversão).\n\n` : "") +
-        (FUNDO_ON ? `🟢 Radar de fundo: aviso antecipado quando moeda que caiu ≥${FUNDO_QUEDA_MIN}% em 24h mostra sinais de exaustão (confiança ≥${FUNDO_CONF_MIN}/10). Não é entrada: o robô só abre LONG ao cruzar acima das junções.\n\n` : "") +
+        (FUNDO_ON ? `🟢 Radar de fundo: aviso antecipado quando moeda que caiu ≥${FUNDO_QUEDA_MIN}% em 24h mostra sinais de exaustão (confiança ≥${FUNDO_CONF_MIN}/10). Não é entrada: o robô só abre LONG ao cruzar acima do indicador.\n\n` : "") +
         `🆔 Seu chat_id: <b>${chatId}</b>\n\n` +
         (ALERT_CHAT_IDS.length
           ? `🔔 Alerta proativo ATIVO — aviso sozinho quando OPORTUNIDADE (≥${ALERT_OPORT_PCT_MIN}%) ou REVERSÃO (≥${ALERT_REV_PCT_MIN}%) estiver CHEGANDO, PERTO ou MUITO PERTO da linha` +
