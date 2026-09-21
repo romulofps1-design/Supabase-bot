@@ -1,4 +1,4 @@
-// telegram-bot V30b (V30 + botao Analisar e janela de horario em /seguidas + aviso de enfraquecimento de posicao + botao ir ao topo) (historico das versoes: CHANGELOG.md)
+// telegram-bot V30b (V30 + botao Analisar e janela de horario em /seguidas + aviso de enfraquecimento de posicao) (historico das versoes: CHANGELOG.md)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const TELEGRAM_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
@@ -104,7 +104,7 @@ async function getFuturesPairs(): Promise<string[]> {
   } catch (e) { console.log(`⚠️ erro instrumentos (${e}), usando FALLBACK_PAIRS`); }
   return FALLBACK_PAIRS;
 }
-type Botao = { text: string; callback_data?: string; url?: string };
+type Botao = { text: string; callback_data: string };
 type Botoes = Botao[][];
 const TECLADO_ITENS: [string, string][] = [
   ["🚀 Oportunidade", "/oportunidade"], ["🔄 Reversão", "/reversao"], ["🟢 Fundo", "/fundo"], ["📋 Lista", "/lista"],
@@ -169,21 +169,7 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
     } else id = j?.result?.message_id ?? null;
   } catch (e) { console.log("Erro sendTelegram", e); }
   if (id && typeof chatId === "number") await uiRegistrar(chatId, id).catch(() => {});
-  if (id && TOPO_MIN_CHARS > 0 && text.length >= TOPO_MIN_CHARS) await addBotaoTopo(chatId, id, botoes).catch(() => {});
   return id;
-}
-const TOPO_MIN_CHARS = Number(Deno.env.get("TOPO_MIN_CHARS") || "700");
-const BOT_ID = TELEGRAM_TOKEN.split(":")[0];
-let _topoAvisou = false;
-async function addBotaoTopo(chatId: number | string, id: number, botoes?: Botoes) {
-  if (!BOT_ID) return;
-  const linha: Botao[] = [{ text: "⬆️ Ir ao topo", url: `tg://openmessage?user_id=${BOT_ID}&message_id=${id}` }];
-  const r = await fetch(`${TG_API}/editMessageReplyMarkup`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, message_id: id, reply_markup: { inline_keyboard: [...(botoes ?? []), linha] } }),
-  });
-  const j: any = await J(r);
-  if (j?.ok === false && !_topoAvisou) { _topoAvisou = true; console.log(`⚠️ botão "ir ao topo" recusado pelo Telegram: ${JSON.stringify(j).slice(0, 200)}`); }
 }
 const DIVISOR = "➖➖➖➖➖➖➖➖➖➖";
 function ma(d: number[], p: number) {
