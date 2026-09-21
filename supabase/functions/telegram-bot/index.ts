@@ -13,6 +13,11 @@ const ALERT_EXCLUIR = (Deno.env.get("ALERT_EXCLUIR_IDS") || "").split(",").map((
 const ALERT_CHAT_IDS = [...new Set(ALLOWED_CHAT_IDS)].filter((x) => !ALERT_EXCLUIR.includes(x));
 let ALERT_OPORT_PCT_MIN = Number(Deno.env.get("ALERT_OPORT_PCT_MIN") || "8");
 let ALERT_REV_PCT_MIN = Number(Deno.env.get("ALERT_REV_PCT_MIN") || "12");
+// V37: alertas proativos (os que o robô manda sozinho, sem comando) levam uma marca discreta
+// (🔔 na frente do título, não mais uma linha inteira separada) e se autoapagam ALERTA_AUTOAPAGAR_MIN
+// minutos depois de enviados.
+const ALERTA_MARCA = "🔔 ";
+const ALERTA_AUTOAPAGAR_MIN = Number(Deno.env.get("ALERTA_AUTOAPAGAR_MIN") || "15");
 const ALERT_COOLDOWN_MIN = Number(Deno.env.get("ALERT_COOLDOWN_MIN") || "60");
 const ALERT_COOLDOWN_REPETIDO_MIN = Number(Deno.env.get("ALERT_COOLDOWN_REPETIDO_MIN") || "180");
 const WATCH_HORAS = Number(Deno.env.get("WATCH_HORAS") || "48");
@@ -172,10 +177,35 @@ const TECLADO_FIXO = (() => {
   for (let i = 0; i < TECLADO_ITENS.length; i += 3) rows.push(TECLADO_ITENS.slice(i, i + 3).map(([l]) => ({ text: l })));
   return rows;
 })();
-async function apagarMsg(chatId: number | string, id: number) {
+// Botão "Menu" fixo ao lado da caixa de digitar (setChatMenuButton), separado do teclado de atalhos.
+// Roda uma vez por cold start; é idempotente, então repetir não tem custo.
+async function configurarMenuBotao() {
+  if (!TELEGRAM_TOKEN) return;
+  const comandos = [
+    { command: "start", description: "Como o robô e os alertas funcionam" },
+    ...TECLADO_ITENS.map(([label, cmd]) => ({ command: cmd.replace("/", ""), description: label.replace(/^\S+\s*/, "") || label })),
+    { command: "analise", description: "Analisar uma moeda específica" },
+    { command: "status", description: "Testar as conexões" },
+    { command: "modo", description: "Trocar entre Novato e Experiente" },
+  ];
   try {
-    await fetch(`${TG_API}/deleteMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, message_id: id }) });
-  } catch { }
+    await fetch(`${TG_API}/setMyCommands`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands: comandos }),
+    });
+    await fetch(`${TG_API}/setChatMenuButton`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ menu_button: { type: "commands" } }),
+    });
+  } catch (e) { console.log("⚠️ não configurei o botão de menu", e); }
+}
+configurarMenuBotao();
+async function apagarMsg(chatId: number | string, id: number): Promise<boolean> {
+  try {
+    const r = await fetch(`${TG_API}/deleteMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, message_id: id }) });
+    const j: any = await J(r);
+    return j?.ok !== false;
+  } catch { return false; }
 }
 const UI_PREFIXO = "_UI_";
 async function uiRegistrar(chatId: number, msgId: number) {
@@ -201,7 +231,51 @@ async function uiLimpar(chatId: number, extras: number[] = []) {
   }
   await Promise.all(ids.map((m) => apagarMsg(chatId, m)));
 }
+// V38: modo Novato (padrão, mensagens explicadas) x Experiente (só confirmações e números).
+// Guardado por chat no Supabase (mesma tabela dos outros flags); cache em memória evita 1 SELECT por mensagem.
+type Modo = "novato" | "experiente";
+const MODO_PREFIXO = "_MODO_";
+const _modoCache = new Map<string, Modo>();
+async function getModo(chatId: number | string): Promise<Modo> {
+  const chave = String(chatId);
+  if (_modoCache.has(chave)) return _modoCache.get(chave)!;
+  let modo: Modo = "novato";
+  try {
+    const SB = getSupabase();
+    if (SB) {
+      const { data } = await SB.from(TAB).select("last_status").eq("instid", `${MODO_PREFIXO}${chatId}`).maybeSingle();
+      if (data?.last_status === "experiente") modo = "experiente";
+    }
+  } catch { }
+  _modoCache.set(chave, modo);
+  return modo;
+}
+async function setModo(chatId: number | string, modo: Modo) {
+  _modoCache.set(String(chatId), modo);
+  try { const SB = getSupabase(); if (SB) await upsertLinha(SB, `${MODO_PREFIXO}${chatId}`, { last_status: modo }); } catch { }
+}
+async function modoJaEscolhido(chatId: number | string): Promise<boolean> {
+  try {
+    const SB = getSupabase();
+    if (!SB) return true; // sem Supabase não dá pra lembrar a escolha, então não pergunta de novo a cada /start
+    const { data } = await SB.from(TAB).select("instid").eq("instid", `${MODO_PREFIXO}${chatId}`).maybeSingle();
+    return !!data;
+  } catch { return true; }
+}
+// Reduz o texto pro modo Experiente: tira os blocos <i>explicativo/rodapé</i> e encurta a lista de
+// motivos (✅/⚠️) do "🧭 Sinal de ...: X/10" pra só a nota. Roda em cima do texto já pronto, então
+// vale pra toda mensagem do bot (alertas automáticos e comandos manuais) sem duplicar cada função.
+function compactarExperiente(texto: string): string {
+  let t = texto
+    .replace(/\n?<i>[\s\S]*?<\/i>/g, "")
+    .replace(/(🧭 Sinal de [^\n]+)(\n {3}[✅⚠️][^\n]*)+/g, "$1")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return t;
+}
 async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes): Promise<number | null> {
+  if (await getModo(chatId) === "experiente") text = compactarExperiente(text);
   // texto grande: o botão "⬆️ Ir ao topo" já vai na própria mensagem (teclado inline, 1 chamada só).
   // O teclado fixo do rodapé continua valendo: o Telegram não o remove quando chega uma mensagem com botões inline.
   const grande = TOPO_MIN_CHARS > 0 && text.length >= TOPO_MIN_CHARS;
@@ -232,6 +306,7 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
 const TOPO_MIN_CHARS = Number(Deno.env.get("TOPO_MIN_CHARS") || "700");
 const BOTAO_TOPO: Botao = { text: "⬆️ Ir ao topo", callback_data: "topo" };
 const DIVISOR = "➖➖➖➖➖➖➖➖➖➖";
+const MINI_DIVISOR = "┄┄┄┄┄┄┄┄┄┄"; // separador leve entre itens de uma lista (mais fino que o DIVISOR, que separa seções)
 function ma(d: number[], p: number) {
   const k = 2 / (p + 1); let e = d[0]; const o = [e];
   for (let i = 1; i < d.length; i++) { e = d[i] * k + e * (1 - k); o.push(e); }
@@ -774,6 +849,7 @@ async function runFundo(chatId: number | string) {
   itens.forEach(({ c, fin }, i) => {
     const pos = fin.motivos.filter((m) => m.pts > 0).sort((a, b) => b.pts - a.pts).slice(0, 3).map((m) => m.txt);
     const neg = fin.motivos.filter((m) => m.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 2).map((m) => m.txt);
+    if (i > 0) msg += `${MINI_DIVISOR}\n`;
     msg += `<b>${i + 1}. ${c.info.instId}</b>${fin.repique ? " ⭐ repique" : ""} 📉 ${quedaTxt(c.pct, c.queda)} · ${confEmoji(fin.conf)} <b>${fin.conf}/10</b>\n`;
     if (pos.length) msg += `✅ ${pos.join(" · ")}\n`;
     if (neg.length) msg += `⚠️ ${neg.join(" · ")}\n`;
@@ -970,6 +1046,7 @@ async function runTopo(chatId: number | string) {
   itens.forEach(({ c, fin }, i) => {
     const pos = fin.motivos.filter((m) => m.pts > 0).sort((a, b) => b.pts - a.pts).slice(0, 3).map((m) => m.txt);
     const neg = fin.motivos.filter((m) => m.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 2).map((m) => m.txt);
+    if (i > 0) msg += `${MINI_DIVISOR}\n`;
     msg += `<b>${i + 1}. ${c.info.instId}</b>${fin.repique ? " ⭐ repique" : ""} 📈 ${altaTxt(c.pct, c.alta)} · ${confEmoji(fin.conf)} <b>${fin.conf}/10</b>\n`;
     if (pos.length) msg += `✅ ${pos.join(" · ")}\n`;
     if (neg.length) msg += `⚠️ ${neg.join(" · ")}\n`;
@@ -1121,6 +1198,7 @@ async function runCompressao(chatId: number | string) {
   top.forEach(({ info, res }, i) => {
     const pos = res.motivos.filter((m) => m.pts > 0).sort((a, b) => b.pts - a.pts).slice(0, 3).map((m) => m.txt);
     const neg = res.motivos.filter((m) => m.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 2).map((m) => m.txt);
+    if (i > 0) msg += `${MINI_DIVISOR}\n`;
     msg += `<b>${i + 1}. ${info.instId}</b> ${confEmoji(res.conf)} <b>${res.conf}/10</b> · ${res.volOk ? "volume subindo ✅" : "volume ainda seco ⏳"}\n`;
     if (pos.length) msg += `✅ ${pos.join(" · ")}\n`;
     if (neg.length) msg += `⚠️ ${neg.join(" · ")}\n`;
@@ -1855,6 +1933,7 @@ async function runAlertaProativo() {
   const lastMap = new Map(variacoes.map((v) => [v.instId, v.last] as [string, number]));
   await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta).catch((e) => console.log("❌ erro alerta final", e));
   await salvarEstado(SB);
+  await processarAutoApagar(SB).catch((e) => console.log("❌ erro autoapagar", e));
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
   await extrasV13(SB, poolInfoMap, posMap);
 }
@@ -2067,7 +2146,8 @@ async function runLista(chatId: number | string) {
     const faltamH = (new Date(r.watch_until).getTime() - agora) / 3600000;
     const falta = faltamH >= 1 ? `${Math.round(faltamH)}h` : `${Math.max(0, Math.round(faltamH * 60))}min`;
     const pct = pctMap.get(r.instid);
-    let b = `<b>${i + 1}. ${r.instid}</b> — alerta ${r.watch_side === "long" ? "LONG" : "SHORT"} há ${horasDesde}h (faltam ${falta})\n`;
+    let b = i > 0 ? `${MINI_DIVISOR}\n` : "";
+    b += `🪙 <b>${r.instid}</b> — alerta ${r.watch_side === "long" ? "LONG" : "SHORT"} há ${horasDesde}h (faltam ${falta})\n`;
     if (pct !== undefined) b += `${pct >= 0 ? "📈 +" : "📉 "}${pct.toFixed(2)}% (24h)\n`;
     if (!info) return b + `Indicador: sem dado agora\n\n`;
     if (contra) b += `🔁 JÁ CRUZOU CONTRA o alerta — o aviso 🔁 sai na próxima varredura\n`;
@@ -2949,12 +3029,13 @@ async function runSeguir(chatId: number | string, entrada: string, seguir: boole
 async function runSeguidas(chatId: number | string) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
-  const rows = (await listarSeguidas(SB, chatId)).map((x) => x.inst);
+  const rows = (await listarSeguidas(SB, chatId)).map((x) => x.inst).sort();
   if (!rows.length) { await sendTelegram(chatId, "⭐ <b>SEGUIDAS</b>\n\nNenhuma moeda seguida. Use /seguir ONE."); return; }
   const [infos, perfilSeg] = await Promise.all([emLotes(rows, 10, calcIndicador500), xPerfilHoras().catch(() => null)]);
   let msg = `⭐ <b>MOEDAS SEGUIDAS</b> — ${rows.length}/${SEG_MAX}\n⏰ Agora: ${xTxtJanela(perfilSeg)}\n${DIVISOR}\n\n`;
   rows.forEach((inst, i) => {
     const info = infos[i];
+    if (i > 0) msg += `${MINI_DIVISOR}\n`;
     msg += `<b>${i + 1}. ${inst}</b>\n${info ? `📍 ${indicadorTxt(info)}\n${idadeTxt(info.idadeCandles)}\npreço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}` : "sem dado agora"}\n\n`;
   });
   const botoesSeg: Botoes = rows.map((inst) => {
@@ -3161,12 +3242,42 @@ async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: str
     const n = Number(data?.last_status);
     if (isFinite(n) && n > 0) antigo = n;
   } catch { }
-  const novo = await sendTelegram(chat, msg, botoes);
+  const novo = await sendTelegram(chat, ALERTA_MARCA + msg, botoes);
   if (novo) {
     if (antigo) await apagarMsg(chat, antigo);
     try { await upsertLinha(SB, chave, { last_status: String(novo) }); } catch (e) { console.log("⚠️ não salvei id da mensagem", e); }
+    if (ALERTA_AUTOAPAGAR_MIN > 0) await agendarAutoApagar(SB, chat, novo, ALERTA_AUTOAPAGAR_MIN * 60000).catch(() => {});
   }
   return novo;
+}
+// Autoapagar dos alertas proativos: fica registrado no Supabase com a hora de expirar, e o cron
+// (que já roda a cada 1-2 min) apaga quem já passou da hora. Não dá pra confiar num timer guardado
+// na memória por 15 min — a function serverless não fica viva tanto tempo — então o apagão sempre
+// passa pela próxima rodada do cron; o atraso real fica perto do intervalo do cron, não cravado.
+const AUTOAPAGAR_PREFIXO = "_DEL_";
+async function agendarAutoApagar(SB: any, chat: string, msgId: number, ms: number) {
+  try { await upsertLinha(SB, `${AUTOAPAGAR_PREFIXO}${chat}_${msgId}`, { last_status: String(Date.now() + ms) }); } catch { }
+}
+async function processarAutoApagar(SB: any) {
+  try {
+    const { data } = await SB.from(TAB).select("instid,last_status").like("instid", `${AUTOAPAGAR_PREFIXO}%`);
+    if (!data?.length) return;
+    const agora = Date.now();
+    let apagadas = 0, falhas = 0, pendentes = 0;
+    for (const r of data as { instid: string; last_status: string }[]) {
+      const quando = Number(r.last_status);
+      if (!isFinite(quando)) { await SB.from(TAB).delete().eq("instid", r.instid); continue; }
+      if (quando > agora) { pendentes++; continue; }
+      const resto = r.instid.slice(AUTOAPAGAR_PREFIXO.length);
+      const pos = resto.lastIndexOf("_");
+      if (pos > 0) {
+        const ok = await apagarMsg(resto.slice(0, pos), Number(resto.slice(pos + 1)));
+        if (ok) apagadas++; else falhas++;
+      }
+      await SB.from(TAB).delete().eq("instid", r.instid);
+    }
+    if (apagadas || falhas) console.log(`🗑️ autoapagar: ${apagadas} apagada(s), ${falhas} falha(s) (provavelmente já tinham sido apagadas antes, ex. substituídas por um alerta mais novo)${pendentes ? `, ${pendentes} ainda dentro do prazo` : ""}`);
+  } catch (e) { console.log("⚠️ processarAutoApagar", e); }
 }
 type Pos = { instId: string; lado: "long" | "short"; entrada: number; mark: number; pnl: number; pnlPct: number; lev: number; liq: number };
 const numOr0 = (x: unknown) => { const n = Number(x); return isFinite(n) ? n : 0; };
@@ -3633,6 +3744,7 @@ async function runStatus(chatId: number | string) {
   let pausa = "";
   let fonte = "";
   let nSeg = 0;
+  let nDel = 0;
   if (SB) {
     const { data: r } = await SB.from(TAB).select("last_status, last_alert_at").eq("instid", "_CRON_").maybeSingle();
     if (r?.last_alert_at) {
@@ -3643,6 +3755,8 @@ async function runStatus(chatId: number | string) {
     const ate = Number(p?.last_status);
     if (ate > Date.now()) pausa = `⏸ Alertas pausados até ${horaLocal(ate)}\n`;
     nSeg = (await listarSeguidas(SB, chatId)).length;
+    const { count: nDelCount } = await SB.from(TAB).select("instid", { count: "exact", head: true }).like("instid", `${AUTOAPAGAR_PREFIXO}%`);
+    nDel = nDelCount ?? 0;
     try {
       const { data: f } = await SB.from(TAB).select("last_status").eq("instid", "_FONTE_").maybeSingle();
       const fj = JSON.parse(f?.last_status || "{}");
@@ -3653,9 +3767,11 @@ async function runStatus(chatId: number | string) {
   const msg = `🩺 <b>STATUS</b>\n${DIVISOR}\n\n${testes.join("\n")}\n${cron}\n${fonte}\n` +
     pausa + (emSilencio() ? `🌙 Silêncio automático agora (${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h)\n` : "") +
     `⭐ Seguidas: ${nSeg}/${SEG_MAX}\n` +
+    (ALERTA_AUTOAPAGAR_MIN > 0 ? `🗑️ Auto-apagar: ${nDel} alerta(s) na fila (some${nDel ? "m" : ""} em até ${ALERTA_AUTOAPAGAR_MIN} min)\n` : "") +
     `🔔 Este chat ${ALERT_CHAT_IDS.includes(String(chatId)) ? "recebe" : "NÃO recebe"} os alertas automáticos\n` +
     `🔑 Chave BloFin: ${cred ? "vinculada" : "não vinculada"}`;
-  await sendTelegram(chatId, cortar(msg));
+  const falhou = testes.some((t) => t.startsWith("❌"));
+  await sendTelegram(chatId, cortar(msg), falhou ? [[{ text: "🔄 Tentar de novo", callback_data: "/status" }]] : undefined);
 }
 async function runRobo(chatId: number | string) {
   if (ALLOWED_CHAT_IDS.length === 0) {
@@ -3694,24 +3810,27 @@ async function runRobo(chatId: number | string) {
     instsPos = ps.slice(0, 15).map((p) => String(p.instId));
     msg += `📌 <b>${ps.length} posição(ões) aberta(s)</b> — PnL aberto ${sgn(total)} USDT\n\n`;
     const infosRobo = await emLotes(ps.slice(0, 15).map((p) => String(p.instId)), 5, (i) => calcIndicadorFiltro(i).catch(() => null));
-    for (const [idx, p] of ps.slice(0, 15).entries()) {
+    const mostrar = ps.slice(0, 15);
+    for (const [idx, p] of mostrar.entries()) {
       const q = numOr0(p.positions);
       const lado = p.positionSide === "long" ? "LONG" : p.positionSide === "short" ? "SHORT" : (q > 0 ? "LONG" : "SHORT");
       const pnl = numOr0(p.unrealizedPnl);
-      msg += `${pnl >= 0 ? "🟢" : "🔴"} <b>${String(p.instId).replace("-USDT", "")}</b> ${lado} ${numOr0(p.leverage) || ""}x ${p.marginMode === "cross" ? "cross" : "isolada"}\n` +
+      if (idx > 0) msg += `${MINI_DIVISOR}\n`;
+      msg += `${pnl >= 0 ? "🟢" : "🔴"} <b>${String(p.instId).replace("-USDT", "")}</b> — ${lado} ${numOr0(p.leverage) || ""}x ${p.marginMode === "cross" ? "cross" : "isolada"}\n` +
         `   entrada ${fmtPrice(numOr0(p.averagePrice))} → agora ${fmtPrice(numOr0(p.markPrice))}\n` +
         `   PnL ${sgn(pnl)} USDT (${sgn(numOr0(p.unrealizedPnlRatio) * 100, 1)}% da margem)` +
         (numOr0(p.liquidationPrice) > 0 ? ` | liq ${fmtPrice(numOr0(p.liquidationPrice))}` : "") + `\n`;
       const pp = paraPos(p), inf = infosRobo[idx];
       if (pp && inf) {
         const sug = sugestaoPosicao(pp, inf);
-        msg += `   ${sug.emoji} <b>${sug.titulo}</b>${ps.length <= 5 ? `\n   ${sug.dica}` : ""}\n`;
+        msg += `   ${sug.emoji} <b>${sug.titulo}</b>\n`;
+        if (mostrar.length <= 5) msg += `   ${sug.dica}\n`;
         const trl = trailingTxt(pp, typeof inf.atr === "number" ? inf.atr : 0);
         if (trl) msg += `   ${trl}`;
       }
     }
-    if (ps.length > 15) msg += `<i>(mostrando 15 de ${ps.length})</i>\n`;
-    msg += `\n`;
+    if (ps.length > 15) msg += `${MINI_DIVISOR}\n<i>(mostrando 15 de ${ps.length})</i>\n`;
+    msg += `\n${DIVISOR}\n\n`;
   }
   if (fills === null) msg += `⚠️ Não consegui ler o resultado do dia: ${esc(erroFills)}\n`;
   else {
@@ -3725,7 +3844,9 @@ async function runRobo(chatId: number | string) {
     if (fills.length >= 500) msg += `<i>(limite de 500 execuções lidas)</i>\n`;
   }
   msg += `\n<i>Só leitura. O resultado usa o fillPnl informado pela BloFin e pode não incluir taxas e funding. As sugestões usam Indicador + ADX + RSI e não são ordem de compra ou venda.</i>`;
-  await sendTelegram(chatId, cortar(msg), instsPos.length ? botoesAnalisarLista(instsPos) : undefined);
+  const falhouRobo = posicoes === null || fills === null;
+  const botoesRobo = instsPos.length ? botoesAnalisarLista(instsPos) : [];
+  await sendTelegram(chatId, cortar(msg), falhouRobo ? [...botoesRobo, [{ text: "🔄 Tentar de novo", callback_data: "/robo" }]] : (botoesRobo.length ? botoesRobo : undefined));
 }
 const ADMIN_CHAT_ID = String(Deno.env.get("ADMIN_CHAT_ID") || DONO_CHAT || "");
 const ehAdmin = (chatId: number | string, remetente?: number | string | null) =>
@@ -3735,7 +3856,7 @@ function montarConfig(): string {
   const tz = `UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}`;
   const adminFixo = !!Deno.env.get("ADMIN_CHAT_ID") || !!Deno.env.get("BLOFIN_OWNER_CHAT_ID");
   let m = `⚙️ <b>CONFIG</b> (valores em uso agora)\n${DIVISOR}\n\n`;
-  m += `🔔 <b>Alertas</b>\n• oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% (24h)\n• cooldown ${ALERT_COOLDOWN_MIN} min · repetição idêntica ${ALERT_COOLDOWN_REPETIDO_MIN} min\n• fresco ≤ ${ALERT_FRESCO_CANDLES} velas · idade máx ${ALERT_IDADE_MAX_CANDLES || "sem limite"}\n• máx ${ALERT_MAX_POR_RODADA} por rodada · pool ${ALERT_POOL} · acompanhamento ${WATCH_HORAS}h\n• antecipação: ${ANTEC_ETA_MAX_CANDLES} velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min), distância ≤ ${ANTEC_DIST_MAX_PCT}%\n\n`;
+  m += `🔔 <b>Alertas</b>\n• oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% (24h)\n• cooldown ${ALERT_COOLDOWN_MIN} min · repetição idêntica ${ALERT_COOLDOWN_REPETIDO_MIN} min\n• fresco ≤ ${ALERT_FRESCO_CANDLES} velas · idade máx ${ALERT_IDADE_MAX_CANDLES || "sem limite"}\n• máx ${ALERT_MAX_POR_RODADA} por rodada · pool ${ALERT_POOL} · acompanhamento ${WATCH_HORAS}h\n• antecipação: ${ANTEC_ETA_MAX_CANDLES} velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min), distância ≤ ${ANTEC_DIST_MAX_PCT}%\n• auto-apagar: ${ALERTA_AUTOAPAGAR_MIN > 0 ? `${ALERTA_AUTOAPAGAR_MIN} min` : "desligado"}\n\n`;
   m += `💸 <b>Taxa no placar</b>: ${TAXA_IDA_VOLTA_PCT.toFixed(3)}% ida e volta (taker ${TAXA_TAKER_PCT}% × 2; ajuste com TAXA_TAKER_PCT ou TAXA_IDA_VOLTA_PCT)\n`;
   m += `📏 <b>Placar</b>: entrada pelo fechamento da vela do cruzamento ${on(PLACAR_ENTRADA_ON && _placarTemEntrada)}${PLACAR_ENTRADA_ON && !_placarTemEntrada ? " (faltam as colunas: rode o ALTER TABLE V30)" : ""} · cruzamento vale até ${ENTRADA_MAX_CANDLES} velas (${ENTRADA_MAX_CANDLES * TF_MIN} min) depois do aviso\n\n`;
   m += `⏱ <b>V32 · alerta dos minutos finais</b> (${on(FINAL_ON)})\n• 🚨 janela: de ${FINAL_JANELA_MAX_MIN} a ${FINAL_JANELA_MIN_MIN} min antes do fechamento da vela ${TIMEFRAME} (cron a cada 1–2 min)\n• avisa se o preço já está ${FINAL_ENTRADA_PCT}%+ além da linha projetada · cancela só se recuar ${FINAL_CANCELA_PCT}% (ou ${FINAL_CANCELA_ATR}×ATR) pra dentro (histerese)\n• 🕒 PREPARE: de ${FINAL_PREPARE_MAX_MIN} a ${FINAL_JANELA_MAX_MIN} min antes, moeda a ≤ ${FINAL_PREPARE_DIST_PCT}% da linha e chegando (máx ${FINAL_PREPARE_MAX} por rodada, confiança mín. −${FINAL_PREPARE_FOLGA_CONF})\n• 🔜 se a vela fechar sem cruzar mas seguir a ≤ ${FINAL_PROXIMA_DIST_PCT}% da linha e chegando, avisa que a chance passa pra próxima vela\n• ⚡ janela forte de horário no fechamento · placar próprio no /placar (${on(FINAL_PLACAR_ON)})\n• pré-filtro ${FINAL_PREFILTRO_PCT}% da linha · máx ${FINAL_MAX_POR_RODADA} por rodada · confirma ✅/❌ no fechamento\n\n`;
@@ -3840,6 +3961,16 @@ Deno.serve(async (req) => {
       await rodarEmBackground(fn().catch((e) => console.log("❌ erro no comando", e)).finally(() => (id ? apagarMsg(chatId, id) : undefined)));
     };
     if (text === "/start" || text === "/help") {
+      const modoAtual = await getModo(chatId);
+      if (text === "/start" && !(await modoJaEscolhido(chatId))) {
+        await sendTelegram(chatId,
+          "🎛️ <b>Antes de começar, escolha seu modo:</b>\n\n" +
+          "🎓 <b>Novato</b> — alertas e comandos vêm com a explicação completa (o quê, por quê, o que fazer)\n" +
+          "⚡ <b>Experiente</b> — só as confirmações e os números, sem o texto explicando\n\n" +
+          "Dá pra trocar a qualquer hora com /modo.",
+          [[{ text: "🎓 Novato", callback_data: "/modo novato" }, { text: "⚡ Experiente", callback_data: "/modo experiente" }]]
+        );
+      }
       await sendTelegram(chatId,
         "🤖 <b>Comandos</b>\n" + DIVISOR + "\n\n" +
         "<b>🔎 Consultar</b>\n" +
@@ -3862,6 +3993,7 @@ Deno.serve(async (req) => {
         "<b>⚙️ Ajustes</b>\n" +
         "⏸ /pausar — pausa os alertas por 1h, 2h ou 3h · /retomar volta antes\n" +
         "⌨️ /menu — ativa o teclado fixo embaixo\n" +
+        `🎛️ /modo — <b>${modoAtual === "experiente" ? "⚡ Experiente" : "🎓 Novato"}</b> agora (troque quando quiser)\n` +
         "🩺 /status — testa Supabase, corretora, sua conta BloFin e o cron\n" +
         (ehAdmin(chatId, remetente) ? "⚙️ /config — parâmetros em uso (só você, admin)\n" : "") +
         "\n" + DIVISOR + "\n<b>ℹ️ Como o robô e os alertas funcionam</b>\n\n" +
@@ -3878,7 +4010,7 @@ Deno.serve(async (req) => {
           ? `🔔 Alerta proativo ATIVO — aviso sozinho quando OPORTUNIDADE (≥${ALERT_OPORT_PCT_MIN}%) ou REVERSÃO (≥${ALERT_REV_PCT_MIN}%) estiver CHEGANDO, PERTO ou MUITO PERTO da linha` +
             (ANTEC_ETA_MAX_CANDLES > 0 ? ` (aviso antecipado até ${ANTEC_ETA_MAX_CANDLES * TF_MIN} min antes)` : "") +
             (ALERT_FILTROS_ON ? ", só com liquidez e tendência" : "") +
-            "."
+            `. Toda mensagem assim vem marcada com 🔔 na frente do título e some sozinha em até ${ALERTA_AUTOAPAGAR_MIN} min depois de enviada.`
           : "🔔 Alerta proativo desativado (adicione seu ID em ALLOWED_CHAT_IDS + cron).")
       );
       // o texto de ajuda é grande e sai com o botão "⬆️ Ir ao topo" (teclado inline); esta mensagem curta garante o teclado fixo no /start
@@ -3962,6 +4094,20 @@ Deno.serve(async (req) => {
     }
     if (text.startsWith("/menu")) {
       await sendTelegram(chatId, "⌨️ <b>Teclado ativado</b> — os botões ficam fixos embaixo. Cada toque apaga a resposta anterior (os alertas do robô só são substituídos por um novo da mesma moeda).");
+      return new Response("ok");
+    }
+    if (text.startsWith("/modo")) {
+      const arg = text.split(/\s+/)[1];
+      if (arg === "novato" || arg === "experiente") {
+        await setModo(chatId, arg);
+        await sendTelegram(chatId, arg === "experiente"
+          ? "⚡ <b>Modo Experiente ativado</b> — alertas e comandos vêm só com a confirmação e os números, sem o texto explicando o porquê. Troque de volta a qualquer hora com /modo."
+          : "🎓 <b>Modo Novato ativado</b> — alertas e comandos voltam a vir com a explicação completa. Troque a qualquer hora com /modo.");
+      } else {
+        const atual = await getModo(chatId);
+        await sendTelegram(chatId, `🎛️ Modo atual: <b>${atual === "experiente" ? "⚡ Experiente" : "🎓 Novato"}</b>\nEscolha abaixo pra trocar:`,
+          [[{ text: "🎓 Novato", callback_data: "/modo novato" }, { text: "⚡ Experiente", callback_data: "/modo experiente" }]]);
+      }
       return new Response("ok");
     }
     return new Response("ok");
