@@ -1,4 +1,4 @@
-// telegram-bot V30 (historico das versoes: CHANGELOG.md)
+// telegram-bot V30b (V30 + botao Analisar e janela de horario em /seguidas + aviso de enfraquecimento de posicao + botao ir ao topo) (historico das versoes: CHANGELOG.md)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const TELEGRAM_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
@@ -104,7 +104,7 @@ async function getFuturesPairs(): Promise<string[]> {
   } catch (e) { console.log(`⚠️ erro instrumentos (${e}), usando FALLBACK_PAIRS`); }
   return FALLBACK_PAIRS;
 }
-type Botao = { text: string; callback_data: string };
+type Botao = { text: string; callback_data?: string; url?: string };
 type Botoes = Botao[][];
 const TECLADO_ITENS: [string, string][] = [
   ["🚀 Oportunidade", "/oportunidade"], ["🔄 Reversão", "/reversao"], ["🟢 Fundo", "/fundo"], ["📋 Lista", "/lista"],
@@ -169,7 +169,21 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
     } else id = j?.result?.message_id ?? null;
   } catch (e) { console.log("Erro sendTelegram", e); }
   if (id && typeof chatId === "number") await uiRegistrar(chatId, id).catch(() => {});
+  if (id && TOPO_MIN_CHARS > 0 && text.length >= TOPO_MIN_CHARS) await addBotaoTopo(chatId, id, botoes).catch(() => {});
   return id;
+}
+const TOPO_MIN_CHARS = Number(Deno.env.get("TOPO_MIN_CHARS") || "700");
+const BOT_ID = TELEGRAM_TOKEN.split(":")[0];
+let _topoAvisou = false;
+async function addBotaoTopo(chatId: number | string, id: number, botoes?: Botoes) {
+  if (!BOT_ID) return;
+  const linha: Botao[] = [{ text: "⬆️ Ir ao topo", url: `tg://openmessage?user_id=${BOT_ID}&message_id=${id}` }];
+  const r = await fetch(`${TG_API}/editMessageReplyMarkup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, message_id: id, reply_markup: { inline_keyboard: [...(botoes ?? []), linha] } }),
+  });
+  const j: any = await J(r);
+  if (j?.ok === false && !_topoAvisou) { _topoAvisou = true; console.log(`⚠️ botão "ir ao topo" recusado pelo Telegram: ${JSON.stringify(j).slice(0, 200)}`); }
 }
 const DIVISOR = "➖➖➖➖➖➖➖➖➖➖";
 function ma(d: number[], p: number) {
@@ -834,6 +848,7 @@ async function runAlertaProativo() {
   await Promise.all([
     checarRisco(SB, posMap).catch((e) => console.log("❌ erro risco", e)),
     checarProtecaoLucro(SB, posMap).catch((e) => console.log("❌ erro proteção de lucro", e)),
+    checarEnfraquecimento(SB, posMap).catch((e) => console.log("❌ erro enfraquecimento", e)),
   ]);
   if (todosSil && (!SILENCIO_PROTECAO || nPos === 0)) {
     console.log(`🌙 todos em silêncio/pausa (${silencio ? `horário ${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h` : "pausa manual"}): nada a proteger, só conferindo o placar`);
@@ -1775,16 +1790,18 @@ async function runSeguidas(chatId: number | string) {
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const rows = (await listarSeguidas(SB, chatId)).map((x) => x.inst);
   if (!rows.length) { await sendTelegram(chatId, "⭐ <b>SEGUIDAS</b>\n\nNenhuma moeda seguida. Use /seguir ONE."); return; }
-  const infos = await emLotes(rows, 10, calcIndicador500);
-  let msg = `⭐ <b>MOEDAS SEGUIDAS</b> — ${rows.length}/${SEG_MAX}\n${DIVISOR}\n\n`;
+  const [infos, perfilSeg] = await Promise.all([emLotes(rows, 10, calcIndicador500), xPerfilHoras().catch(() => null)]);
+  let msg = `⭐ <b>MOEDAS SEGUIDAS</b> — ${rows.length}/${SEG_MAX}\n⏰ Agora: ${xTxtJanela(perfilSeg)}\n${DIVISOR}\n\n`;
   rows.forEach((inst, i) => {
     const info = infos[i];
     msg += `<b>${i + 1}. ${inst}</b>\n${info ? `${idadeTxt(info.idadeCandles)}\n${indicadorTxt(info)}\npreço ${fmtPrice(info.preco)}` : "sem dado agora"}\n\n`;
   });
-  const botoesSeg: Botoes = [];
-  for (let i = 0; i < rows.length; i += 2) botoesSeg.push(rows.slice(i, i + 2).map((inst) => ({ text: `❌ Parar ${inst.replace("-USDT", "")}`, callback_data: `/parar ${inst.replace("-USDT", "").toLowerCase()}` })));
+  const botoesSeg: Botoes = rows.map((inst) => {
+    const s = inst.replace("-USDT", "").toLowerCase();
+    return [{ text: `🔎 Analisar ${s.toUpperCase()}`, callback_data: `/analise ${s}` }, { text: `❌ Parar ${s.toUpperCase()}`, callback_data: `/parar ${s}` }];
+  });
   botoesSeg.push([{ text: "🧹 Parar todas", callback_data: "/parar todas" }]);
-  await sendTelegram(chatId, cortar(msg + "<i>Toque em ❌ para deixar de seguir uma moeda.</i>"), botoesSeg);
+  await sendTelegram(chatId, cortar(msg + "<i>Toque em 🔎 para analisar ou em ❌ para deixar de seguir uma moeda.</i>"), botoesSeg);
 }
 async function pararTodas(chatId: number | string) {
   const SB = getSupabase();
@@ -2189,6 +2206,51 @@ async function checarProtecaoLucro(SB: any, posMap: Map<string, Pos[] | null>) {
       await upsertLinha(SB, linhaT, { last_status: JSON.stringify(novoT) });
       await upsertLinha(SB, linhaE, { last_status: JSON.stringify(novoE) });
     } catch (e) { console.log(`❌ erro proteção de lucro chat ${chat}`, e); }
+  }));
+}
+const FRACO_POS_ON = (Deno.env.get("FRACO_POS") || "1") !== "0";
+const FRACO_COOLDOWN_MIN = Number(Deno.env.get("FRACO_COOLDOWN_MIN") || "45");
+function nivelEnfraquece(s: Sugestao): 0 | 1 | 2 {
+  if (s.titulo.startsWith("Linha virou CONTRA")) return 2;
+  if (s.contra || /sem força|perdendo força|OPOSTA/.test(s.titulo)) return 1;
+  return 0;
+}
+async function checarEnfraquecimento(SB: any, posMap: Map<string, Pos[] | null>) {
+  if (!FRACO_POS_ON) return;
+  await Promise.all([...posMap].map(async ([chat, lista]) => {
+    if (!lista || !lista.length) return;
+    if (silChat(chat) && !SILENCIO_PROTECAO) return;
+    try {
+      const linha = `_FRACO_${chat}`;
+      const prev = (await lerJsonLinha(SB, linha)) as Record<string, any>;
+      const novo: Record<string, { n: number; t: number }> = {};
+      const agora = Date.now();
+      for (const p of lista) {
+        const k = `${p.instId}|${p.lado}`;
+        const ant = prev[k] && typeof prev[k] === "object" ? (prev[k] as { n: number; t: number }) : null;
+        const info = await infoPosCache(p.instId);
+        if (!info) { if (ant) novo[k] = ant; continue; }
+        const sug = sugestaoPosicao(p, info);
+        const n = nivelEnfraquece(sug);
+        const prevN = ant?.n ?? 0, prevT = ant?.t ?? 0;
+        let salvo = ant ?? { n: 0, t: 0 };
+        if (n === 0) {
+          if (prevN !== 0) salvo = { n: 0, t: agora };
+        } else if (n > prevN || (prevN === 0 && agora - prevT >= FRACO_COOLDOWN_MIN * 60000)) {
+          const ladoTxt = p.lado === "long" ? "LONG" : "SHORT";
+          const cab = `entrada ${fmtPrice(p.entrada)} | agora ${fmtPrice(p.mark)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)`;
+          const msg = `${sug.emoji} <b>${p.instId}</b> ${ladoTxt} — ${sug.titulo}\n${DIVISOR}\n\n${cab}\n\n${sug.dica}\n` +
+            (p.pnl > 0 ? trailingTxt(p, info.atr) : "") +
+            `\n<i>Aviso automático: o sinal desta moeda enfraqueceu com a posição aberta. Sugestão, não é ordem.</i>`;
+          const id = await enviarAlertaMoeda(SB, chat, `FRACO_${p.instId}`, cortar(msg), botaoAnalisar(p.instId));
+          if (id) salvo = { n, t: agora };
+        } else if (n < prevN) {
+          salvo = { n, t: prevT };
+        }
+        novo[k] = salvo;
+      }
+      await upsertLinha(SB, linha, { last_status: JSON.stringify(novo) });
+    } catch (e) { console.log(`❌ erro enfraquecimento chat ${chat}`, e); }
   }));
 }
 const FONTE_FALLBACK_PCT = Number(Deno.env.get("FONTE_FALLBACK_PCT") || "30");
