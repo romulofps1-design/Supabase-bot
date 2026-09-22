@@ -1,4 +1,13 @@
-// telegram-bot V39 (V38 + alerta dos minutos finais agora EDITA a mesma mensagem em vez de mandar uma nova a cada rodada do cron; detecta pavio de rejeição (tocou a linha e recuou 1x+ dentro da mesma vela) e avisa antes do LIGUE AGORA; botão "🔔 Já liguei" registra a hora real que a pessoa ligou o robô (tabela ligacoes_robo); sinal de velocidade 🚀 acelerando / 🐢 devagar comparando a aproximação da rodada atual com a anterior; comando /agora MOEDA com retrato compacto — fechamento, distância às duas linhas, confiança e toque/recuo) (V38 = modo Novato x Experiente, alertas e comandos compactados sem o texto explicando) (V37 = marca discreta 🔔 nos alertas proativos, autoapagamento, proteção do webhook e do cron) (V36 (V35 + inclinação da faixa na confiança: cruzamento contra a inclinação perde pontos, a favor ganha; radar de COMPRESSÃO em rodízio de todos os pares avisa "PREPARE: rompimento iminente" com a distância até as duas linhas; 1º cruzamento em faixa comprimida sem volume perde 1 ponto; /compressao no /placar; REPIQUE nos dois lados com prioridade: SHORT = despencou, repicou até a faixa e foi rejeitada (radar de topo); LONG = disparou, recuou até a faixa e está segurando (radar de fundo); /oportunidade e /reversao alinhados com os alertas: a lista sai pelo LADO da virada (reversão mostra LONG → SHORT e SHORT → LONG), não só pela variação do dia) (V35 = V34 + radar de TOPO e repique SHORT, espelho do fundo: alta medida desde a mínima recente, rejeição na faixa pontua, /topo) (V34 = V33 + radar de fundo que enxerga o REPIQUE NA FAIXA depois de pump: queda medida desde a máxima recente, não só 24h; toque na faixa pontua; PREPARE/LIGUE no texto) (V33 = V32 + /analise em blocos "de fora / já dentro" com "ligar o robô?", textos dos avisos alinhados ao robô que vira sozinho, /help por grupos e botão "⬆️ Ir ao topo" junto da mensagem) (historico das versoes: CHANGELOG.md)
+// telegram-bot V41 (V40 + velocidade 🚀🚀/🐢🐢 agora pontua de verdade no pontuar() (antes só era texto); funding
+// pontua por TENDÊNCIA — esticando rápido rumo ao extremo pesa mais que já estar parado lá há horas; confiabilidade
+// por moeda — pontuação ajustada com o histórico de acerto de cada instId no antecipacoes_log (amostra mínima 6);
+// calibração automática — antes /calibracao só mostrava o erro, agora roda sozinha 1x/dia dentro do cron e ajusta
+// ANTEC_ETA_MAX_CANDLES/ANTEC_DIST_MAX_PCT/ANTEC_DIST_MAX_ATR, avisando o dono quando muda algo (o ATR precisa da
+// coluna atr_pct em antecipacoes_log — ver nota no /calibracao); ETH como segunda referência de
+// mercado além do BTC (ethVar1h/xRegimeCacheEth, peso menor); CVD/desequilíbrio do book via profundidade
+// (getBookImbalance) — único dado que antecipa antes do fechamento da vela; cluster/rotação — avisa quando várias
+// moedas do pool estão chegando na linha juntas na mesma rodada, sinal de que pode ser o mercado todo (BTC) se
+// movendo, não edge de uma moeda isolada) (V40 = V39 + OI (open interest) agora entra na pontuação de confiança — antes era buscado mas só aparecia como texto: OI subindo junto com o preço soma ponto, OI caindo (squeeze fechando) tira ponto; velocidade de aproximação (🚀/🐢) agora compara 2 rodadas seguidas em vez de 1, pra distinguir aceleração de verdade de um pico de ruído (🚀🚀/🐢🐢 quando confirma 2x); modo Experiente corrigido — o compactador só cortava os motivos ✅/⚠️ do bloco "🧭 Sinal de fundo/topo/compressão", não do bloco "🧭 Confiança" que é o que sai em todo alerta automático e no /analise; agora corta os dois e também tira linhas de regra fixa repetidas) (V39 = V38 + alerta dos minutos finais agora EDITA a mesma mensagem em vez de mandar uma nova a cada rodada do cron; detecta pavio de rejeição (tocou a linha e recuou 1x+ dentro da mesma vela) e avisa antes do LIGUE AGORA; botão "🔔 Já liguei" registra a hora real que a pessoa ligou o robô (tabela ligacoes_robo); sinal de velocidade 🚀 acelerando / 🐢 devagar comparando a aproximação da rodada atual com a anterior; comando /agora MOEDA com retrato compacto — fechamento, distância às duas linhas, confiança e toque/recuo) (V38 = modo Novato x Experiente, alertas e comandos compactados sem o texto explicando) (V37 = marca discreta 🔔 nos alertas proativos, autoapagamento, proteção do webhook e do cron) (V36 (V35 + inclinação da faixa na confiança: cruzamento contra a inclinação perde pontos, a favor ganha; radar de COMPRESSÃO em rodízio de todos os pares avisa "PREPARE: rompimento iminente" com a distância até as duas linhas; 1º cruzamento em faixa comprimida sem volume perde 1 ponto; /compressao no /placar; REPIQUE nos dois lados com prioridade: SHORT = despencou, repicou até a faixa e foi rejeitada (radar de topo); LONG = disparou, recuou até a faixa e está segurando (radar de fundo); /oportunidade e /reversao alinhados com os alertas: a lista sai pelo LADO da virada (reversão mostra LONG → SHORT e SHORT → LONG), não só pela variação do dia) (V35 = V34 + radar de TOPO e repique SHORT, espelho do fundo: alta medida desde a mínima recente, rejeição na faixa pontua, /topo) (V34 = V33 + radar de fundo que enxerga o REPIQUE NA FAIXA depois de pump: queda medida desde a máxima recente, não só 24h; toque na faixa pontua; PREPARE/LIGUE no texto) (V33 = V32 + /analise em blocos "de fora / já dentro" com "ligar o robô?", textos dos avisos alinhados ao robô que vira sozinho, /help por grupos e botão "⬆️ Ir ao topo" junto da mensagem) (historico das versoes: CHANGELOG.md)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const TELEGRAM_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
@@ -27,7 +36,7 @@ const ALERT_IDADE_MAX_CANDLES = Number(Deno.env.get("ALERT_IDADE_MAX_CANDLES") |
 let ANTEC_ETA_MAX_CANDLES = Number(Deno.env.get("ANTEC_ETA_MAX_CANDLES") || "6");
 let ANTEC_DIST_MAX_PCT = Number(Deno.env.get("ANTEC_DIST_MAX_PCT") || "1");
 const TRAVA_PRECO_ON = (Deno.env.get("TRAVA_PRECO_ON") || "1") !== "0";
-const ANTEC_DIST_MAX_ATR = Number(Deno.env.get("ANTEC_DIST_MAX_ATR") || "1.5");
+let ANTEC_DIST_MAX_ATR = Number(Deno.env.get("ANTEC_DIST_MAX_ATR") || "1.5");
 const ANTEC_LIGUE_ETA_CANDLES = Number(Deno.env.get("ANTEC_LIGUE_ETA_CANDLES") || "2");
 const ALERT_MAX_POR_RODADA = Number(Deno.env.get("ALERT_MAX_POR_RODADA") || "5");
 const ALERT_POOL = 40;
@@ -123,6 +132,9 @@ const FINAL_CANCELA_ATR = Number(Deno.env.get("FINAL_CANCELA_ATR") || "0.15");
 const FINAL_PREFILTRO_PCT = Number(Deno.env.get("FINAL_PREFILTRO_PCT") || "0.4");
 const FINAL_MAX_POR_RODADA = Number(Deno.env.get("FINAL_MAX_POR_RODADA") || "3");
 const FINAL_MAX_CAND = Number(Deno.env.get("FINAL_MAX_CAND") || "8");
+// V41: cluster/rotação — a partir de quantas moedas "chegando" juntas no pool vale avisar que pode ser o
+// mercado todo se movendo (não edge da moeda específica).
+const CLUSTER_ALERTA_MIN = Number(Deno.env.get("CLUSTER_ALERTA_MIN") || "4");
 const FINAL_PREPARE_MAX_MIN = Number(Deno.env.get("FINAL_PREPARE_MAX_MIN") || "10");
 const FINAL_PREPARE_DIST_PCT = Number(Deno.env.get("FINAL_PREPARE_DIST_PCT") || "0.15");
 const FINAL_PREPARE_MAX = Number(Deno.env.get("FINAL_PREPARE_MAX") || "3");
@@ -269,10 +281,18 @@ async function modoJaEscolhido(chatId: number | string): Promise<boolean> {
 function compactarExperiente(texto: string): string {
   let t = texto
     .replace(/\n?<i>[\s\S]*?<\/i>/g, "")
-    .replace(/(🧭 Sinal de [^\n]+)(\n {3}[✅⚠️][^\n]*)+/g, "$1")
-    // "Ligar o robô?": mantém a confirmação (PREPARE/LIGUE AGORA/Ainda não/Já cruzou) + a 1ª frase
-    // (que já traz a distância/preço), corta a explicação de regra que vem depois na mesma linha.
-    .replace(/(<b>(?:Já cruzou|LIGUE AGORA|PREPARE|Ainda não)<\/b>[^\n]*?\.)(?=\s[A-ZÀ-Ú])[^\n]*/g, "$1")
+    // Qualquer bloco "🧭 ... X/10": mantém o cabeçalho (e o resumo "📊 Filtros: N a favor · N contra" se vier
+    // logo abaixo) mas corta a lista de motivos ✅/⚠️ linha a linha. Antes só pegava "🧭 Sinal de ..." (usado no
+    // radar de fundo/topo/compressão); não pegava "🧭 Confiança: ..." — que é o bloco que sai em TODO alerta
+    // automático (checarAlertaFinal/runAlertaProativo) e no /analise, então era o principal motivo de ainda
+    // sobrar muito texto no modo Experiente.
+    .replace(/(🧭 [^\n]*\d+\/10[^\n]*(?:\n {3}📊[^\n]*)?)(?:\n {3}[✅⚠️][^\n]*)+/g, "$1")
+    // "Ligar o robô?": mantém a confirmação (PREPARE/LIGUE AGORA/LIGUE O ROBÔ AGORA/Ainda não/Já cruzou) + a 1ª
+    // frase (que já traz a distância/preço/tempo), corta a explicação de regra que vem depois na mesma linha.
+    .replace(/(<b>(?:Já cruzou|LIGUE O ROBÔ AGORA|LIGUE AGORA|PREPARE|Ainda não)<\/b>[^\n]*?\.)(?=\s[A-ZÀ-Ú])[^\n]*/g, "$1")
+    // "🔁 Se o preço recuar..." e "Robô entra no fechamento": linhas de regra fixa que se repetem em toda
+    // mensagem — quem já está no modo Experiente já sabe a regra, então saem inteiras.
+    .replace(/\n🔁 Se o preço recuar pra dentro antes do fechamento, eu aviso pra desligar\.\n?/g, "\n")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -741,6 +761,20 @@ async function btcVar1h(): Promise<number | null> {
   _btcFundoCache = { t: Date.now(), pct };
   return pct;
 }
+// V41: ETH como segunda referência além do BTC — mesma ideia do btcVar1h, espelhada pra ETH-USDT.
+let _ethFundoCache: { t: number; pct: number | null } | null = null;
+async function ethVar1h(): Promise<number | null> {
+  if (_ethFundoCache && Date.now() - _ethFundoCache.t < 60000) return _ethFundoCache.pct;
+  let pct: number | null = null;
+  try {
+    const d = await xCandles("ETH-USDT", TIMEFRAME, CANDLES_LIMIT_PRECISO);
+    if (d && d.c.length > 6) { const n = d.c.length; pct = ((d.c[n - 1] - d.c[n - 5]) / d.c[n - 5]) * 100; }
+  } catch { }
+  _ethFundoCache = { t: Date.now(), pct };
+  return pct;
+}
+const ETH_DIR_ON = (Deno.env.get("ETH_DIR") || "1") !== "0";
+const ETH_DIR_PCT = Number(Deno.env.get("ETH_DIR_PCT") || "1.5");
 type FundoFinal = FundoRes & { fo: FoInfo | null; btc: number | null };
 async function fundoFinal(pre: FundoRes, instId: string, foPre?: FoInfo | null): Promise<FundoFinal> {
   const [fo, btc] = await Promise.all([
@@ -1431,7 +1465,7 @@ const _watchEnviado = new Set<string>();
 type FinalPend = {
   inst: string; lado: "long" | "short"; ck: number; linha: number; atrPct: number;
   chats: string[]; estado: "ativo" | "cancelado"; tipo: "aviso" | "prepare";
-  msgIds?: Record<string, number>; distPrev?: number; distPrevT?: number; cruzouAntes?: boolean; toques?: number;
+  msgIds?: Record<string, number>; distPrev?: number; distPrevT?: number; cruzouAntes?: boolean; toques?: number; velPrev?: number;
 };
 const _finalPend = new Map<string, FinalPend>();
 const finalKey = (inst: string, lado: string, ck: number) => `${inst}|${lado}|${ck}`;
@@ -1458,6 +1492,7 @@ async function carregarEstado(SB: any) {
         distPrev: isFinite(Number(p.distPrev)) ? Number(p.distPrev) : undefined,
         distPrevT: isFinite(Number(p.distPrevT)) ? Number(p.distPrevT) : undefined,
         cruzouAntes: !!p.cruzouAntes, toques: isFinite(Number(p.toques)) ? Number(p.toques) : 0,
+        velPrev: isFinite(Number(p.velPrev)) ? Number(p.velPrev) : undefined,
       });
     }
   } catch (e) { console.log("⚠️ carregarEstado falhou (segue sem estado salvo)", e); }
@@ -1550,16 +1585,32 @@ const distLinha = (lado: "long" | "short", preco: number, topo: number, fundo: n
 // V39: compara a distância medida agora com a da rodada anterior do cron (guardada em pend) pra dizer se o
 // preço está acelerando em direção à linha ou andando devagar — ajuda a decidir "ligo agora ou espero".
 // distAgora: negativo = já passou da linha (não mostra velocidade, não faz sentido nesse caso).
-function velocidadeTxt(pend: FinalPend | undefined, distAgora: number): string {
-  if (distAgora <= 0 || !pend || pend.distPrev === undefined || !pend.distPrevT) return "";
+// V40: antes só comparava a distância desta rodada com a rodada anterior (1 medida de velocidade = fácil de
+// confundir um pico de ruído com aceleração de verdade). Agora guarda também a velocidade da rodada anterior
+// (pend.velPrev) e compara as duas: só chama de "acelerando de verdade" quando GANHOU ritmo 2 rodadas seguidas,
+// e só reforça o alerta de "devagar" quando ESTEVE devagar nas 2 últimas rodadas (não numa piscada só).
+// V41: sinal agora vem classificado (não só texto) pra poder entrar no pontuar() — "acelerando2x"/"devagar2x"
+// só quando CONFIRMOU 2 rodadas seguidas (mesmo critério que já gerava o 🚀🚀/🐢🐢 no texto).
+type VelSinal = "acelerando" | "acelerando2x" | "devagar" | "devagar2x" | null;
+function velocidadeTxt(pend: FinalPend | undefined, distAgora: number): { txt: string; vel?: number; sinal: VelSinal } {
+  if (distAgora <= 0 || !pend || pend.distPrev === undefined || !pend.distPrevT) return { txt: "", sinal: null };
   const elapsedMin = (Date.now() - pend.distPrevT) / 60000;
-  if (elapsedMin < 0.3) return ""; // rodadas muito próximas: medida instável, melhor não mostrar
+  if (elapsedMin < 0.3) return { txt: "", sinal: null }; // rodadas muito próximas: medida instável, melhor não mostrar
   const velAtual = (pend.distPrev - distAgora) / elapsedMin; // % de distância fechada por minuto
   const minutosRestantes = Math.max(1, finalRestMin());
   const velNecessaria = distAgora / minutosRestantes;
-  if (velAtual >= velNecessaria * 1.3) return `🚀 acelerando em direção à linha (a favor de fechar cruzado)\n`;
-  if (velAtual <= velNecessaria * 0.5) return `🐢 se aproximando devagar — no ritmo atual pode não chegar a tempo\n`;
-  return "";
+  const rapido = velAtual >= velNecessaria * 1.3;
+  const devagar = velAtual <= velNecessaria * 0.5;
+  const velPrev = pend.velPrev;
+  if (rapido) {
+    const acelerouMais = velPrev !== undefined && velAtual >= velPrev * 1.15;
+    return { txt: acelerouMais ? `🚀🚀 acelerando de verdade — ganhando ritmo 2 rodadas seguidas\n` : `🚀 acelerando em direção à linha (a favor de fechar cruzado)\n`, vel: velAtual, sinal: acelerouMais ? "acelerando2x" : "acelerando" };
+  }
+  if (devagar) {
+    const jaEstavaDevagar = velPrev !== undefined && velPrev <= velNecessaria * 0.5;
+    return { txt: jaEstavaDevagar ? `🐢🐢 devagar 2 rodadas seguidas — chance real de não chegar a tempo\n` : `🐢 se aproximando devagar — no ritmo atual pode não chegar a tempo\n`, vel: velAtual, sinal: jaEstavaDevagar ? "devagar2x" : "devagar" };
+  }
+  return { txt: "", vel: velAtual, sinal: null };
 }
 async function enviarOuEditarFinal(SB: any, pend: FinalPend | undefined, chats: string[], inst: string, msgPorChat: (ch: string) => Promise<string> | string, botoesExtra?: Botoes): Promise<Record<string, number>> {
   const botoes: Botoes = [...(botoesExtra ?? []), ...botaoAnalisar(inst)];
@@ -1743,6 +1794,11 @@ async function checarAlertaFinal(
   });
   if (!cands.length) { console.log(`⏱ final (${modo}): faltam ${(rest / 60000).toFixed(1)} min, nenhum candidato perto da linha`); return; }
   cands.sort((a, b) => a.d - b.d);
+  // V41: cluster/rotação — quantas moedas do pool estão "🎯 CHEGANDO" na linha ao mesmo tempo (mesma rodada).
+  // Muita moeda chegando junto geralmente é o mercado todo (BTC) puxando, não uma moeda isolada com edge própria.
+  const clusterTotal = cands.length;
+  const clusterPorLado = new Map<"long" | "short", number>();
+  for (const c of cands) clusterPorLado.set(c.lado, (clusterPorLado.get(c.lado) ?? 0) + 1);
   const top = cands.slice(0, FINAL_MAX_CAND);
   // 2) simulação exata: fecha a vela "de mentira" no preço de agora
   //    aviso: tem que ser cruzamento NOVO; prepare: ainda não cruzou, mas está colada na linha
@@ -1792,7 +1848,14 @@ async function checarAlertaFinal(
     // quem já está posicionado no lado do sinal não precisa do "ligue o robô"
     const destinos = [...new Set([...ativos, ...protegidos])].filter((ch) => !posDe(ch, inst).some((p) => p.lado === lado));
     if (!destinos.length) continue;
-    const confRes = await calcConfiancaAlerta(s, x.vol, perfil);
+    // V41: pendAntes/distAgora/vel precisam ser calculados ANTES da confiança pra o sinal 🚀🚀/🐢🐢 poder entrar no pontuar()
+    const pendAntes = _finalPend.get(finalKey(inst, lado, ck));
+    const distAgora = modo === "aviso" ? -hip.distAbs : x.dist;
+    const cruzouAgora = distAgora <= 0;
+    const toques = (pendAntes?.toques ?? 0) + (pendAntes?.cruzouAntes && !cruzouAgora ? 1 : 0);
+    const vel = velocidadeTxt(pendAntes, distAgora);
+    const velTxt = vel.txt;
+    const confRes = await calcConfiancaAlerta(s, x.vol, perfil, vel.sinal);
     const minBase = s.tipo === "reversao" ? (lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
     // moeda que ainda não cruzou pontua ~1–2 pts a menos que a que cruzou: o PREPARE tem essa folga, o 🚨 não
     const minConf = modo === "aviso" ? minBase : Math.max(0, minBase - FINAL_PREPARE_FOLGA_CONF);
@@ -1816,26 +1879,23 @@ async function checarAlertaFinal(
     const linhaConf = "\n" + janelaTxt(perfil) + (confRes ? confLinha(confRes) : "");
     const nomeCurto = lado === "long" ? "LONG" : "SHORT";
     const stopAlvoFin = hip.atr > 0 ? stopAlvoTxt(lado, vivo, hip.topo, hip.fundo, hip.atr, true).replace(/^🎯 /, "") : "";
-    // V39: distância "com sinal" nesta rodada (negativa = já além da linha) pra comparar com a rodada anterior
-    // (velocidade de aproximação) e pra detectar pavio de rejeição (tocou a linha e recuou pra dentro).
-    const pendAntes = _finalPend.get(finalKey(inst, lado, ck));
-    const distAgora = modo === "aviso" ? -hip.distAbs : x.dist;
-    const cruzouAgora = distAgora <= 0;
-    const toques = (pendAntes?.toques ?? 0) + (pendAntes?.cruzouAntes && !cruzouAgora ? 1 : 0);
-    const velTxt = velocidadeTxt(pendAntes, distAgora);
     const toqueTxt = toques > 0 ? `⚠️ já tocou a linha e recuou ${toques}x nesta vela — cruzamento pode falhar\n` : "";
+    const clusterN = clusterPorLado.get(lado) ?? 0;
+    const clusterTxt = clusterTotal >= CLUSTER_ALERTA_MIN
+      ? `🎯 ${clusterTotal} moeda(s) do pool chegando na linha nesta rodada (${clusterN} em ${nomeCurto}) — pode ser o mercado todo se movendo junto\n`
+      : "";
     const msg = modo === "aviso"
       ? `🚨 <b>${inst}</b> — VAI FECHAR CRUZADO\n${DIVISOR}\n\n${tipoTxt} · ${pctTxt}Robô abriria: <b>${ladoTxt}</b>\n` +
         subTitulo("🔌 Ligar o robô?") +
         `⏱ <b>LIGUE O ROBÔ AGORA</b> — faltam ~${finalRestMin()} min pra vela de ${TIMEFRAME} fechar e o preço já está ${lado === "long" ? "acima" : "abaixo"} da linha (${hip.distAbs.toFixed(3)}% além). O robô entra no fechamento.\n` +
         `🔁 Se o preço recuar pra dentro antes do fechamento, eu aviso pra desligar.\n` +
-        toqueTxt + velTxt +
+        toqueTxt + velTxt + clusterTxt +
         subTitulo("📍 Onde está") + `${linhas}\n` +
         (stopAlvoFin ? subTitulo("🎯 Se for entrar") + stopAlvoFin : "")
       : `🕒 <b>${inst}</b> — PREPARE (fecha em ~${finalRestMin()} min)\n${DIVISOR}\n\n${tipoTxt} · ${pctTxt}Robô abriria: <b>${ladoTxt}</b>\n` +
         subTitulo("🔌 Ligar o robô?") +
         `🕒 <b>PREPARE</b> — ainda NÃO ligue: o preço está a ${x.dist.toFixed(3)}% da linha de ${nomeCurto} e chegando. Se cruzar antes do fechamento, eu mando o 🚨 (LIGUE AGORA).\n` +
-        toqueTxt + velTxt +
+        toqueTxt + velTxt + clusterTxt +
         subTitulo("📍 Onde está") + `${linhas}\n`;
     const botaoLiguei: Botoes = modo === "aviso" ? [[{ text: "🔔 Já liguei", callback_data: `liguei:${inst}:${lado}:${ck}` }]] : [];
     const msgIds = await enviarOuEditarFinal(SB, pendAntes, destinos, inst, async (ch) =>
@@ -1844,6 +1904,7 @@ async function checarAlertaFinal(
       inst, lado, ck, linha: lado === "long" ? hip.topo : hip.fundo,
       atrPct: hip.preco > 0 ? (hip.atr / hip.preco) * 100 : 0, chats: destinos, estado: "ativo", tipo: modo,
       msgIds: Object.keys(msgIds).length ? msgIds : undefined, distPrev: distAgora, distPrevT: Date.now(), cruzouAntes: cruzouAgora, toques,
+      velPrev: vel.vel,
     });
     if (modo === "aviso") await registrarAlertaFinal(SB, s, confRes?.conf ?? null);
     enviados++;
@@ -1857,6 +1918,7 @@ async function runAlertaProativo() {
   await carregarEstado(SB);
   for (const k of Object.keys(_fonte)) delete _fonte[k];
   await avisarCronParado(SB).catch((e) => console.log("⚠️ erro avisarCronParado", e));
+  await autoCalibrarAntecipacao(SB).catch((e) => console.log("⚠️ erro autoCalibrarAntecipacao", e));
   const inicio = Date.now();
   const silencio = emSilencio();
   await carregarPausas(SB).catch((e) => console.log("⚠️ pausas", e));
@@ -2189,6 +2251,14 @@ async function xRegimeCache(): Promise<XRegime | null> {
   if (_btcReg && Date.now() - _btcReg.t < 4 * 60000) return _btcReg.v;
   const v = await xRegime("BTC-USDT").catch(() => null);
   _btcReg = { t: Date.now(), v };
+  return v;
+}
+// V41: espelho de xRegimeCache pra ETH-USDT — segunda referência de regime/ADX além do BTC.
+let _ethReg: { t: number; v: XRegime | null } | null = null;
+async function xRegimeCacheEth(): Promise<XRegime | null> {
+  if (_ethReg && Date.now() - _ethReg.t < 4 * 60000) return _ethReg.v;
+  const v = await xRegime("ETH-USDT").catch(() => null);
+  _ethReg = { t: Date.now(), v };
   return v;
 }
 async function xRegime(instId: string): Promise<XRegime | null> {
@@ -2762,8 +2832,12 @@ async function runAnalise(chatId: number | string, entrada: string) {
   const volRatio = volAcel(d15.v);
   const chegadaForte = chegadaEmJanelaForte(apChega, perfil);
   const bottomA = FUNDO_ON ? calcFundoPre(d15, info, atr, adx, adxAntes) : null;
+  const [fundingTendA, confiabInstA, ethRegA, ethVA, bookImbA] = await Promise.all([
+    fundingTendencia(instId, fo ?? { funding: null, oiChg: null }), confiabilidadeMoeda(instId), xRegimeCacheEth(), ethVar1h(), getBookImbalance(instId),
+  ]);
   const { motivos, total, veredito, conf } = pontuar({
     info, lado, adx, adxDif, rsi, volUsdt, trocas, h1, btcAdx: btc ? btc.adx : null, perfil, fo, volRatio, chegadaForte, apChega, tipo: setup?.tipo ?? null, pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
+    fundingTend: fundingTendA, confiabInst: confiabInstA, ethAdx: ethRegA ? ethRegA.adx : null, ethVar: ethVA, bookImb: bookImbA,
   });
   let invalida: string;
   const nTopo = fmtPrice(info.topo), nFundo = fmtPrice(info.fundo);
@@ -2858,6 +2932,8 @@ type CtxPontos = {
   trocas: number; h1: IndicadorInfo | null; btcAdx: number | null; perfil: XPerfil | null; fo: FoInfo | null;
   volRatio: number | null; chegadaForte: boolean; apChega: Aprox | null;
   tipo?: "oportunidade" | "reversao" | null; pct24?: number | null; bottom?: FundoRes | null; top?: FundoRes | null; btcVar?: number | null;
+  velSinal?: VelSinal; fundingTend?: FundingTend; confiabInst?: ConfiabInfo | null;
+  ethAdx?: number | null; ethVar?: number | null; bookImb?: number | null;
 };
 const confiancaDe = (total: number) => Math.max(0, Math.min(10, Math.round(((total + 3) * 10) / 11)));
 const confEmoji = (n: number) => (n >= CONF_VERDE ? "🟢" : n >= CONF_AMARELO ? "🟡" : "🔴");
@@ -2902,6 +2978,10 @@ function pontuar(x: CtxPontos) {
   else if (idade > ANALISE_TARDE_CANDLES) add(-1, `cruzou há ${idade * TF_MIN} min (já andou)`);
   else add(0, `cruzou há ${idade * TF_MIN} min`);
   if (apChega) add(1, `aproximando da linha: chega em ~${Math.max(1, Math.round(apChega.etaCandles * TF_MIN))} min (estimativa)`);
+  // V41: velocidade de aproximação só pontua quando CONFIRMOU 2 rodadas seguidas (🚀🚀/🐢🐢) — 1 rodada isolada
+  // é sinal fraco demais (pode ser ruído), fica só no texto do alerta.
+  if (x.velSinal === "acelerando2x") add(1, "🚀🚀 acelerando de verdade rumo à linha (ganhando ritmo 2 rodadas seguidas)");
+  else if (x.velSinal === "devagar2x") add(-1, "🐢🐢 devagar 2 rodadas seguidas: chance real de não chegar a tempo");
   if (info.larguraRel !== undefined && info.larguraRel <= SQUEEZE_REL && (idade === null || idade <= ALERT_FRESCO_CANDLES)) {
     const pctTip = `${Math.round(info.larguraRel * 100)}% da largura típica`;
     const volConfirma = volRatio !== null && volRatio >= VOL_ACEL_RATIO;
@@ -2920,13 +3000,19 @@ function pontuar(x: CtxPontos) {
   if (info.distAbs > FILTRO_DIST_MAX_PCT) add(-2, `${info.distAbs.toFixed(2)}% longe da faixa`);
   if (trocas >= 4) add(-1, `vai e vem: ${trocas} trocas de posição em 4h`);
   if (btcAdx !== null && btcAdx < X_ADX_FRACO) add(-1, `BTC lateral (ADX ${btcAdx.toFixed(1)})`);
+  // V41: ETH como segunda referência de mercado — só reforça (não duplica) quando o BTC já não pegou o mesmo alerta
+  else if (x.ethAdx != null && x.ethAdx < X_ADX_FRACO) add(-1, `ETH também lateral (ADX ${x.ethAdx.toFixed(1)})`);
   if (perfil) {
     const j = xInfoJanela(perfil, Date.now());
     if (j.idxAgora >= X_JANELA_FORTE) add(1, "janela forte de movimento");
     else if (j.idxAgora <= X_JANELA_FRACA) add(-1, "janela fraca de movimento");
   }
   if (fo && fo.funding !== null && ((lado === "long" && fo.funding > FUNDING_ALTO_PCT) || (lado === "short" && fo.funding < -FUNDING_ALTO_PCT))) {
-    add(-1, `funding ${fo.funding >= 0 ? "+" : ""}${fo.funding.toFixed(3)}% (multidão esticada do mesmo lado)`);
+    // V41: por tendência — subindo rápido rumo ao extremo pesa mais que já estar parado lá há horas
+    const ft = x.fundingTend;
+    if (ft?.subindoRapido) add(-2, `funding ${fo.funding >= 0 ? "+" : ""}${fo.funding.toFixed(3)}% e esticando rápido (multidão do mesmo lado, correção pode vir logo)`);
+    else if (ft?.parado) add(0, `funding ${fo.funding >= 0 ? "+" : ""}${fo.funding.toFixed(3)}% já parado no extremo há horas (multidão esticada, mas sinal mais velho)`);
+    else add(-1, `funding ${fo.funding >= 0 ? "+" : ""}${fo.funding.toFixed(3)}% (multidão esticada do mesmo lado)`);
   }
   if (BTC_DIR_ON && btcVar != null && isFinite(btcVar)) {
     const f = BTC_DIR_PCT;
@@ -2934,7 +3020,36 @@ function pontuar(x: CtxPontos) {
     else if (lado === "short" && btcVar <= -f && tipo === "reversao") add(1, `BTC caindo ${btcVar.toFixed(1)}% na última hora: ajuda o SHORT de reversão`);
     else if (lado === "long" && btcVar <= -f && !(pct24 != null && pct24 < 0)) add(-1, `BTC caindo ${btcVar.toFixed(1)}% na última hora: o pump pode perder força`);
   }
-  if (fo && fo.funding !== null && lado === "short" && fo.funding > FUNDING_ALTO_PCT) add(1, `funding +${fo.funding.toFixed(3)}%: multidão comprada, combustível pra queda`);
+  // V41: ETH como segunda referência (peso menor que o BTC, só reforça o risco de curto prazo)
+  if (ETH_DIR_ON && x.ethVar != null && isFinite(x.ethVar)) {
+    const f = ETH_DIR_PCT;
+    if (lado === "short" && x.ethVar >= f) add(-1, `ETH subindo +${x.ethVar.toFixed(1)}% na última hora: reforça risco pro SHORT`);
+    else if (lado === "long" && x.ethVar <= -f && !(pct24 != null && pct24 < 0)) add(-1, `ETH caindo ${x.ethVar.toFixed(1)}% na última hora: reforça risco pro LONG`);
+  }
+  // V41: CVD / desequilíbrio do book — proxy via profundidade do livro (bid vs ask), único dado que antecipa
+  // antes do fechamento da vela; positivo = mais volume comprador no book, negativo = mais vendedor.
+  if (x.bookImb != null && isFinite(x.bookImb)) {
+    const IMB = BOOK_IMB_MIN_PCT;
+    if (lado === "long" && x.bookImb >= IMB) add(1, `book desequilibrado pra compra (${x.bookImb >= 0 ? "+" : ""}${x.bookImb.toFixed(0)}%): mais gente comprando que vendendo agora`);
+    else if (lado === "short" && x.bookImb <= -IMB) add(1, `book desequilibrado pra venda (${x.bookImb.toFixed(0)}%): mais gente vendendo que comprando agora`);
+    else if (lado === "long" && x.bookImb <= -IMB) add(-1, `book pesando pro lado vendedor (${x.bookImb.toFixed(0)}%): contra o LONG`);
+    else if (lado === "short" && x.bookImb >= IMB) add(-1, `book pesando pro lado comprador (${x.bookImb >= 0 ? "+" : ""}${x.bookImb.toFixed(0)}%): contra o SHORT`);
+  }
+  if (fo && fo.funding !== null && lado === "short" && fo.funding > FUNDING_ALTO_PCT) {
+    const ft = x.fundingTend;
+    if (ft?.parado) add(0, `funding +${fo.funding.toFixed(3)}% já parado no alto há horas: sinal de reversão mais fraco (multidão comprada, mas não é fresco)`);
+    else if (ft?.subindoRapido) add(2, `funding +${fo.funding.toFixed(3)}% subindo rápido: multidão comprada e esticando, combustível forte pra queda`);
+    else add(1, `funding +${fo.funding.toFixed(3)}%: multidão comprada, combustível pra queda`);
+  }
+  if (fo && fo.oiChg !== null) {
+    if (fo.oiChg >= OI_SUBINDO_PCT) add(1, `OI subindo ${fo.oiChg >= 0 ? "+" : ""}${fo.oiChg.toFixed(1)}% (4h): posição nova entrando, movimento tem combustível`);
+    else if (fo.oiChg <= OI_CAINDO_PCT) add(-1, `OI caindo ${fo.oiChg.toFixed(1)}% (4h): parece fechamento de posição (squeeze), não gente nova entrando`);
+  }
+  if (x.confiabInst) {
+    const c = x.confiabInst;
+    if (c.pts > 0) add(c.pts, `histórico da moeda: confirma bem os cruzamentos (${Math.round(c.taxa * 100)}% em ${c.n} casos)`);
+    else if (c.pts < 0) add(c.pts, `histórico da moeda: é "serrote" — cruza e volta com frequência (${Math.round(c.taxa * 100)}% acerto em ${c.n} casos)`);
+  }
   if (ESTRAT_PUMP && lado === "long" && ((pct24 != null && pct24 < 0) || tipo === "reversao")) {
     if (FUNDO_ON && FUNDO_LIBERA_LONG && bottom) {
       if (fundoOk(bottom)) add(2, `sinais de fundo (${bottom.conf}/10)${bottom.repique ? " ⭐ repique segurando na faixa" : ": queda esgotando"}, reversão com apoio`);
@@ -2965,17 +3080,22 @@ function avisoLimiteLado(lista: Pos[] | null, lado: "long" | "short"): string {
   const n = lista.filter((p) => p.lado === lado).length;
   return n >= LIMITE_LADO ? `\n⚠️ Você já tem ${n} ${lado === "long" ? "LONG" : "SHORT"}(s) abertos — essas moedas tendem a andar juntas com o BTC; considere não abrir mais um.` : "";
 }
-async function calcConfiancaAlerta(c: Setup, volUsdt: number | null, perfil: XPerfil | null) {
+async function calcConfiancaAlerta(c: Setup, volUsdt: number | null, perfil: XPerfil | null, velSinal?: VelSinal) {
   try {
     const f = c.info as InfoFiltravel;
     const inst = c.info.instId;
-    const [d1h, btc, fo, btcV] = await Promise.all([xCandles(inst, "1H", 500), xRegimeCache(), getFundingOI(inst), btcVar1h()]);
+    const [d1h, btc, fo, btcV, ethReg, ethV, bookImb] = await Promise.all([
+      xCandles(inst, "1H", 500), xRegimeCache(), getFundingOI(inst), btcVar1h(), xRegimeCacheEth(), ethVar1h(), getBookImbalance(inst),
+    ]);
     const h1 = d1h ? calcIndicadorDeCloses(inst, d1h.c) : null;
     const ap = c.aprox ?? null;
+    const fundingTend = await fundingTendencia(inst, fo);
+    const confiabInst = await confiabilidadeMoeda(inst);
     const r = pontuar({
       info: c.info, lado: c.lado, adx: f.adx ?? 0, adxDif: (f.adx ?? 0) - (f.adxAntes ?? f.adx ?? 0), rsi: f.rsi ?? 50,
       volUsdt, trocas: f.trocas ?? 0, h1, btcAdx: btc ? btc.adx : null, perfil, fo, volRatio: f.volRatio ?? null,
       chegadaForte: chegadaEmJanelaForte(ap, perfil), apChega: ap, tipo: c.tipo, pct24: c.pct, bottom: f.bottom ?? null, top: f.top ?? null, btcVar: btcV,
+      velSinal: velSinal ?? null, fundingTend, confiabInst, ethAdx: ethReg ? ethReg.adx : null, ethVar: ethV, bookImb,
     });
     return { ...r, fo, btcVar: btcV };
   } catch (e) { console.log("⚠️ confiança do alerta falhou", e); return null; }
@@ -2987,10 +3107,23 @@ async function registrarAntecipacao(SB: any, c: Setup, chats: string[]) {
     if (!ap) return;
     const { data: pend } = await SB.from(ANTEC_TABELA).select("id").eq("instid", c.info.instId).is("resultado", null).limit(1);
     if (pend && pend.length) return;
-    const { error } = await SB.from(ANTEC_TABELA).insert({
+    // V41: grava também o ATR% do momento (distância normalizada pela volatilidade típica da moeda), pra dar pra
+    // calibrar ANTEC_DIST_MAX_ATR sozinho depois (não só ANTEC_DIST_MAX_PCT). Exige a coluna atr_pct (numeric,
+    // nullable) na tabela antecipacoes_log — se ainda não existir, cai pro insert antigo sem travar o registro.
+    const atrRaw = (c.info as { atr?: number }).atr;
+    const atrPct = typeof atrRaw === "number" && atrRaw > 0 && c.info.preco > 0 ? (atrRaw / c.info.preco) * 100 : null;
+    const campos: Record<string, unknown> = {
       instid: c.info.instId, lado: c.lado, eta_prev_min: Math.max(1, Math.round(ap.etaCandles * TF_MIN)),
       dist_pct: ap.dist, chats: chats.join(","),
-    });
+    };
+    if (atrPct !== null) campos.atr_pct = atrPct;
+    let { error } = await SB.from(ANTEC_TABELA).insert(campos);
+    if (error && atrPct !== null && /atr_pct/i.test(error.message || "")) {
+      // coluna ainda não existe no banco: registra sem ela em vez de perder o registro
+      delete campos.atr_pct;
+      ({ error } = await SB.from(ANTEC_TABELA).insert(campos));
+      console.log("⚠️ coluna atr_pct não existe em antecipacoes_log ainda — registrado sem ela (veja nota no /calibracao)");
+    }
     if (error) console.log("⚠️ registrarAntecipacao:", error.message);
   } catch (e) { console.log("⚠️ registrarAntecipacao erro", e); }
 }
@@ -3070,7 +3203,71 @@ async function montarCalibracao(SB: any, dias: number): Promise<string> {
   else if (sug === null) t += `💡 Nenhuma faixa de antecipação chega a 60% de acerto: considere reduzir ANTEC_ETA_MAX_CANDLES (hoje ${ANTEC_ETA_MAX_CANDLES}).\n`;
   else if (sug !== ANTEC_ETA_MAX_CANDLES) t += `💡 Sugestão: ANTEC_ETA_MAX_CANDLES=${sug} (hoje ${ANTEC_ETA_MAX_CANDLES}) — maior janela com ≥60% de acerto.\n`;
   else t += `💡 ANTEC_ETA_MAX_CANDLES=${ANTEC_ETA_MAX_CANDLES} está bem calibrado (≥60% de acerto).\n`;
+  // V41: status do ATR — só existe amostra se a coluna atr_pct já estiver criada em antecipacoes_log
+  const comAtr = rows.filter((r) => isFinite(Number(r.atr_pct)) && Number(r.atr_pct) > 0);
+  t += comAtr.length
+    ? `📐 ANTEC_DIST_MAX_ATR=${ANTEC_DIST_MAX_ATR} (${comAtr.length} amostra(s) com ATR registrado — a auto-calibração já ajusta este limiar sozinha)\n`
+    : `📐 ANTEC_DIST_MAX_ATR=${ANTEC_DIST_MAX_ATR}: ainda sem amostra com ATR — crie a coluna <code>atr_pct numeric</code> em <code>antecipacoes_log</code> no Supabase pra esse limiar também se auto-calibrar (os outros dois já ajustam sozinhos, este continua fixo até a coluna existir).\n`;
   return t + "\n";
+}
+// V41: calibração automática das janelas de antecipação — antes o /calibracao só MOSTRAVA o erro; agora, uma vez
+// por AUTO_CALIB_INTERVALO_H horas (gatilho salvo na mesma tabela de estado, sobrevive a cold start), recalcula
+// e AJUSTA ANTEC_ETA_MAX_CANDLES / ANTEC_DIST_MAX_PCT sozinho, com a mesma regra de "maior faixa com ≥60% de
+// acerto" que o /calibracao já sugeria — só que agora aplica, em vez de só sugerir. Avisa o dono quando muda algo.
+const AUTO_CALIB_ON = (Deno.env.get("AUTO_CALIB") || "1") !== "0";
+const AUTO_CALIB_INTERVALO_H = Number(Deno.env.get("AUTO_CALIB_INTERVALO_H") || "24");
+const AUTO_CALIB_DIAS = Number(Deno.env.get("AUTO_CALIB_DIAS") || "14");
+const AUTO_CALIB_ROW = "_auto_calib_antecipacao";
+async function autoCalibrarAntecipacao(SB: any) {
+  if (!AUTO_CALIB_ON) return;
+  try {
+    const { data: row } = await SB.from(TAB).select("last_status").eq("instid", AUTO_CALIB_ROW).maybeSingle();
+    const ultimo = row?.last_status ? Number(JSON.parse(row.last_status).t) || 0 : 0;
+    if (Date.now() - ultimo < AUTO_CALIB_INTERVALO_H * 3600000) return;
+    const desde = new Date(Date.now() - AUTO_CALIB_DIAS * 86400000).toISOString();
+    const { data, error } = await SB.from(ANTEC_TABELA).select("*").gt("criado_em", desde).not("resultado", "is", null).limit(2000);
+    const marcarRodou = async () => upsertLinha(SB, AUTO_CALIB_ROW, { last_status: JSON.stringify({ t: Date.now(), eta: ANTEC_ETA_MAX_CANDLES, dist: ANTEC_DIST_MAX_PCT }) });
+    if (error || !data || data.length < ANTEC_CALIB_MIN) { await marcarRodou(); return; }
+    const rows = data as any[];
+    const maxC = Math.max(ANTEC_ETA_MAX_CANDLES, 8);
+    let sugEta: number | null = null;
+    for (let k = 1; k <= maxC; k++) {
+      const acum = rows.filter((r) => Number(r.eta_prev_min) <= k * TF_MIN);
+      if (acum.length >= 5 && acum.filter((r) => r.resultado === "cruzou").length / acum.length >= 0.6) sugEta = k;
+    }
+    const dists = [...new Set(rows.map((r) => Math.round(Number(r.dist_pct) * 100) / 100))].filter((d) => isFinite(d) && d > 0).sort((a, b) => a - b);
+    let sugDist: number | null = null;
+    for (const d of dists) {
+      const acum = rows.filter((r) => Number(r.dist_pct) <= d);
+      if (acum.length >= 5 && acum.filter((r) => r.resultado === "cruzou").length / acum.length >= 0.6) sugDist = d;
+    }
+    // V41: distância normalizada pela volatilidade (dist_pct / atr_pct) — só usa linhas que já têm atr_pct
+    // gravado (registros a partir da V41); com poucas linhas ainda, simplesmente não ajusta esse limiar.
+    const comAtr = rows.filter((r) => isFinite(Number(r.atr_pct)) && Number(r.atr_pct) > 0);
+    let sugAtr: number | null = null;
+    if (comAtr.length >= ANTEC_CALIB_MIN) {
+      const razoes = [...new Set(comAtr.map((r) => Math.round((Number(r.dist_pct) / Number(r.atr_pct)) * 100) / 100))].filter((v) => isFinite(v) && v > 0).sort((a, b) => a - b);
+      for (const ratio of razoes) {
+        const acum = comAtr.filter((r) => Number(r.dist_pct) / Number(r.atr_pct) <= ratio);
+        if (acum.length >= 5 && acum.filter((r) => r.resultado === "cruzou").length / acum.length >= 0.6) sugAtr = ratio;
+      }
+    }
+    const antes = { eta: ANTEC_ETA_MAX_CANDLES, dist: ANTEC_DIST_MAX_PCT, atr: ANTEC_DIST_MAX_ATR };
+    if (sugEta !== null && sugEta !== ANTEC_ETA_MAX_CANDLES) ANTEC_ETA_MAX_CANDLES = sugEta;
+    if (sugDist !== null && Math.abs(sugDist - ANTEC_DIST_MAX_PCT) / Math.max(ANTEC_DIST_MAX_PCT, 0.01) > 0.1) ANTEC_DIST_MAX_PCT = Math.round(sugDist * 100) / 100;
+    if (sugAtr !== null && Math.abs(sugAtr - ANTEC_DIST_MAX_ATR) / Math.max(ANTEC_DIST_MAX_ATR, 0.01) > 0.1) ANTEC_DIST_MAX_ATR = sugAtr;
+    await marcarRodou();
+    if (antes.eta !== ANTEC_ETA_MAX_CANDLES || antes.dist !== ANTEC_DIST_MAX_PCT || antes.atr !== ANTEC_DIST_MAX_ATR) {
+      console.log(`🛠️ auto-calibração: ETA ${antes.eta}→${ANTEC_ETA_MAX_CANDLES} velas, DIST ${antes.dist}→${ANTEC_DIST_MAX_PCT}%, ATR ${antes.atr}→${ANTEC_DIST_MAX_ATR} (amostra ${rows.length}, ${comAtr.length} com atr_pct)`);
+      if (DONO_CHAT) {
+        const msg = `🛠️ <b>Auto-calibração das janelas de antecipação</b> (amostra ${rows.length}, últimos ${AUTO_CALIB_DIAS}d)\n` +
+          `ANTEC_ETA_MAX_CANDLES: ${antes.eta} → <b>${ANTEC_ETA_MAX_CANDLES}</b> velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min)\n` +
+          `ANTEC_DIST_MAX_PCT: ${antes.dist}% → <b>${ANTEC_DIST_MAX_PCT}%</b>` +
+          (antes.atr !== ANTEC_DIST_MAX_ATR ? `\nANTEC_DIST_MAX_ATR: ${antes.atr} → <b>${ANTEC_DIST_MAX_ATR}</b> (${comAtr.length} amostras com ATR)` : "");
+        await sendTelegram(DONO_CHAT, msg).catch(() => {});
+      }
+    }
+  } catch (e) { console.log("⚠️ autoCalibrarAntecipacao falhou", e); }
 }
 function botaoAnalisar(instId: string): Botoes {
   const s = instId.replace("-USDT", "");
@@ -3101,6 +3298,30 @@ async function upsertLinha(SB: any, instid: string, campos: Record<string, unkno
   else await SB.from(TAB).insert({ instid, ...campos });
 }
 const FUNDING_ALTO_PCT = 0.05;
+// V40: OI (open interest) já era buscado (getFundingOI) mas só aparecia como texto — nunca pontuava.
+// OI subindo junto com o preço = posição nova entrando (movimento com "combustível" real).
+// OI caindo com o preço subindo = short squeeze fechando posição alavancada: sobe rápido, mas tende a perder força sem gente nova entrando.
+const OI_SUBINDO_PCT = Number(Deno.env.get("OI_SUBINDO_PCT") || "2");
+const OI_CAINDO_PCT = Number(Deno.env.get("OI_CAINDO_PCT") || "-2");
+// V41: CVD/desequilíbrio do book. CVD "puro" (soma de trades agressores) exigiria assinar o stream de trades,
+// pesado demais pra rodar em toda moeda do pool a cada rodada; em vez disso usa a profundidade do livro agora
+// (bid vs ask nos primeiros níveis) como proxy — mesma ideia (pressão compradora x vendedora), mais leve.
+const BOOK_IMB_MIN_PCT = Number(Deno.env.get("BOOK_IMB_MIN_PCT") || "15");
+async function getBookImbalance(instId: string): Promise<number | null> {
+  try {
+    const sym = instId.replace("-", "");
+    const r = await fetch(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${sym}&limit=50`);
+    const j = await r.json();
+    const bids = j?.result?.b as [string, string][] | undefined;
+    const asks = j?.result?.a as [string, string][] | undefined;
+    if (!bids?.length || !asks?.length) return null;
+    const soma = (arr: [string, string][]) => arr.reduce((s, [, q]) => s + (parseFloat(q) || 0), 0);
+    const bidVol = soma(bids), askVol = soma(asks);
+    const total = bidVol + askVol;
+    if (total <= 0) return null;
+    return ((bidVol - askVol) / total) * 100;
+  } catch { return null; }
+}
 async function getFundingOI(instId: string): Promise<{ funding: number | null; oiChg: number | null }> {
   const sym = instId.replace("-", "");
   let funding: number | null = null, oiChg: number | null = null;
@@ -3128,6 +3349,47 @@ async function getFundingOI(instId: string): Promise<{ funding: number | null; o
     }
   } catch { }
   return { funding, oiChg };
+}
+// V41: funding por TENDÊNCIA, não só valor atual. Guarda a última leitura de cada moeda em memória (zera a
+// cada cold start, degrada bem — sem histórico, simplesmente não classifica tendência) e compara com a leitura
+// agora: "subindoRapido" = ficou mais esticado rumo ao extremo desde a última rodada (sinal preditivo melhor);
+// "parado" = já estava no extremo e continua lá, sem se mover, há pelo menos 2h (sinal mais fraco/velho).
+type FundingTend = { subindoRapido: boolean; parado: boolean } | null;
+const _fundingHist = new Map<string, { funding: number; t: number }>();
+async function fundingTendencia(instId: string, fo: { funding: number | null; oiChg: number | null }): Promise<FundingTend> {
+  if (!fo || fo.funding === null) return null;
+  const prev = _fundingHist.get(instId);
+  _fundingHist.set(instId, { funding: fo.funding, t: Date.now() });
+  if (!prev) return null;
+  const horas = (Date.now() - prev.t) / 3600000;
+  if (horas < 0.25) return null; // rodadas muito próximas: medida instável
+  const jaExtremo = Math.abs(prev.funding) >= FUNDING_ALTO_PCT;
+  const aindaExtremo = Math.abs(fo.funding) >= FUNDING_ALTO_PCT;
+  const mesmoLado = Math.sign(fo.funding) === Math.sign(prev.funding) || prev.funding === 0;
+  const subindoRapido = aindaExtremo && mesmoLado && Math.abs(fo.funding) > Math.abs(prev.funding) * 1.15;
+  const parado = jaExtremo && aindaExtremo && mesmoLado && horas >= 2 && Math.abs(fo.funding - prev.funding) < Math.abs(fo.funding) * 0.1;
+  return { subindoRapido, parado };
+}
+// V41: confiabilidade por moeda — algumas moedas são cronicamente mais "serrote" (cruzam a linha e voltam) que
+// outras. Usa o próprio histórico de antecipações (antecipacoes_log) da moeda: "cruzou" conta como acerto,
+// "contra"/"recuou" como erro. Só ajusta com amostra mínima, pra não reagir a 2-3 casos isolados.
+type ConfiabInfo = { pts: number; taxa: number; n: number };
+const CONFIAB_MIN_AMOSTRA = Number(Deno.env.get("CONFIAB_MIN_AMOSTRA") || "6");
+const CONFIAB_PTS = 1;
+async function confiabilidadeMoeda(instId: string): Promise<ConfiabInfo | null> {
+  try {
+    const SB = getSupabase();
+    if (!SB) return null;
+    const { data } = await SB.from(ANTEC_TABELA).select("resultado").eq("instid", instId).not("resultado", "is", null).order("criado_em", { ascending: false }).limit(20);
+    const rows = (data || []) as any[];
+    const acertos = rows.filter((r) => r.resultado === "cruzou").length;
+    const erros = rows.filter((r) => r.resultado === "contra" || r.resultado === "recuou").length;
+    const n = acertos + erros;
+    if (n < CONFIAB_MIN_AMOSTRA) return null;
+    const taxa = acertos / n;
+    const pts = taxa >= 0.65 ? CONFIAB_PTS : taxa <= 0.35 ? -CONFIAB_PTS : 0;
+    return { pts, taxa, n };
+  } catch { return null; }
 }
 function fundingOiTxt(fo: { funding: number | null; oiChg: number | null }): string {
   const p: string[] = [];
