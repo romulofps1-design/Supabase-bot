@@ -1,13 +1,21 @@
-// telegram-bot V45 (V44 + trava do cron virou compare-and-swap de verdade num UPDATE só, sem a janela teórica de
-// corrida da versão anterior (ler→checar→escrever em 2 chamadas); autoconferência da escala de confiança —
-// avisa no log se o total de pontuar() escapar de CONFIANCA_TOTAL_MIN/MAX, pra pegar deriva se algum peso mudar
-// sem recalcular as constantes; ANTEC_CALIB_MIN e a janela de amostras do confiabilidadeMoeda (CONFIAB_JANELA_N)
-// agora são env var, como os outros limites de calibração; registrarAntecipacao deduplica por moeda+lado, não
-// só por moeda) (V44 = V43 + espelho do repique: LONG que já devolveu o dia positivo (fundo) e SHORT que já devolveu
+// telegram-bot V46 (V45 + upsertLinha agora usa upsert() nativo do Postgres (INSERT ... ON CONFLICT DO UPDATE)
+// em vez de select→insert/update em 2 chamadas — mesma corrida "ler→checar→escrever" que o V45 já tinha
+// corrigido especificamente pro lock do cron, só que essa função é usada em dezenas de outros lugares
+// (_FUNDO_, _MSG_, _MODO_, _PAUSA_, autoapagar...) que também podem receber chamadas concorrentes vindas de
+// callbacks do Telegram; FUNDO_PTS_MAX virou derivado de REPIQUE_BONUS em vez de número fixo calculado na
+// mão, pra nunca ficar desatualizado sozinho se REPIQUE_BONUS mudar pela env; correção da escala de confiança
+// — CONFIANCA_TOTAL_MIN/MAX ajustados de -31/+24 pra -30/+23 (o cálculo original tinha somado 2 pontos de
+// confiabInst quando CONFIAB_PTS = 1, e contado "cruzamento muito velho" e squeeze como se pudessem coexistir
+// no mesmo pontuar(), quando na prática nunca coexistem)) (V45 = V44 + trava do cron virou compare-and-swap de
+// verdade num UPDATE só, sem a janela teórica de corrida da versão anterior (ler→checar→escrever em 2
+// chamadas); autoconferência da escala de confiança — avisa no log se o total de pontuar() escapar de
+// CONFIANCA_TOTAL_MIN/MAX, pra pegar deriva se algum peso mudar sem recalcular as constantes; ANTEC_CALIB_MIN
+// e a janela de amostras do confiabilidadeMoeda (CONFIAB_JANELA_N) agora são env var, como os outros limites
+// de calibração; registrarAntecipacao deduplica por moeda+lado, não só por moeda) (V44 = V43 + espelho do repique: LONG que já devolveu o dia positivo (fundo) e SHORT que já devolveu
 // o dia negativo (topo) agora classificam tipo "oportunidade" em vez de sempre "reversao", mesma regra do
 // tipoDoLado) (V43 = V42 + zona morta REPIQUE_PCT_ZONA (±2%, padrão) em torno de pct≈0 pra classificar o tipo do
 // repique — sem ela, ruído de rodada cruzava o zero e trocava oportunidade↔reversão à toa (mudava a confiança
-// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-31 a +24, o
+// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-30 a +23, o
 // piso e o teto reais de `total` em pontuar() somando todos os add() possíveis) substituem a faixa antiga de -3
 // a +8, que era estreita demais e estourava/travava em 10 ou 0 com qualquer sinal decente; CONF_MIN_OPORT e
 // CONF_AMARELO subiram de 5 pra 6 pra exigir aproximadamente os mesmos pontos brutos de antes na escala nova)
@@ -71,6 +79,15 @@ let FILTRO_ADX_MIN = numEnv("FILTRO_ADX_MIN", "18");
 let FILTRO_RSI_MAX = numEnv("FILTRO_RSI_MAX", "85");
 let FILTRO_RSI_MIN = numEnv("FILTRO_RSI_MIN", "15");
 let FILTRO_DIST_MAX_PCT = numEnv("FILTRO_DIST_MAX_PCT", "2");
+// Lista negra manual: instId separados por vírgula (ex.: "BTC-USDT,ETH-USDT,META-USDT") pra tirar
+// moedas mais consolidadas/paradas da lista, independente de volume ou volatilidade.
+const BLACKLIST_MOEDAS = new Set(
+  (Deno.env.get("BLACKLIST_MOEDAS") || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean)
+);
+// Amplitude mínima (%) pra uma moeda entrar no radar: usa o maior entre |variação 24h|, queda desde o
+// topo e alta desde o fundo. Serve pra empurrar pra fora as moedas "paradas" e priorizar as que estão
+// bombando, sem precisar listar cada uma na mão. 0 desliga o filtro (comportamento atual).
+let FILTRO_AMPLITUDE_MIN = numEnv("FILTRO_AMPLITUDE_MIN", "0");
 const ADX_REF = 25;
 const CANDLES_LIMIT_PADRAO = 500;
 const CANDLES_LIMIT_PRECISO = 500;
@@ -141,7 +158,29 @@ const FUNDO_BTC_QUEDA_PCT = numEnv("FUNDO_BTC_QUEDA_PCT", "1.5");
 // da escala ficava "achatado" e não dava pra diferenciar um sinal forte de um excepcional. FUNDO_CONF_MIN/
 // TOPO_CONF_MIN/REPIQUE_CONF_MIN foram recalculados junto pra continuar exigindo os MESMOS pontos brutos de
 // antes (nenhum alerta que disparava deixa de disparar, e vice-versa) — só o número mostrado ficou exato.
-const FUNDO_PTS_MAX = 17;
+// V46: antes era um número fixo (17) calculado na mão somando o melhor caso de calcFundoPre/calcTopoPre
+// (13, incluindo o bônus de repique) + fundoFinal/topoFinal (funding +2, OI +1, BTC +1 = 4). Só batia porque
+// REPIQUE_BONUS era 1; se REPIQUE_BONUS mudar pela env sem atualizar esse número junto, a escala 0-10
+// desalinha em silêncio — o mesmo bug que o comentário V43 (CONFIANCA_TOTAL_MIN/MAX, acima) já corrigiu na
+// pontuar(). Aqui o teto vira derivado, então nunca fica desatualizado sozinho.
+const FUNDO_PTS_MAX = 16 + Math.max(0, REPIQUE_BONUS);
+// piso teórico: caindoFaca (-2) + ADX acelerando (-1) no pré-filtro, + OI subindo (-1) + BTC contra (-2) no
+// final = -6. Não afeta a escala (confFundo trava em 0 com Math.max), só serve de referência pra auto-checagem abaixo.
+const FUNDO_PTS_MIN = -6;
+let _fundoPtsExtremoMin = FUNDO_PTS_MIN, _fundoPtsExtremoMax = FUNDO_PTS_MAX;
+function checarDerivaFundo(total: number) {
+  if (total < FUNDO_PTS_MIN && total < _fundoPtsExtremoMin) {
+    _fundoPtsExtremoMin = total;
+    const msg = `⚠️ confFundo(): total ${total} abaixo do piso assumido (FUNDO_PTS_MIN=${FUNDO_PTS_MIN}) — recalcule o comentário V46 acima de FUNDO_PTS_MAX/MIN`;
+    console.log(msg);
+    avisarAdmin(msg);
+  } else if (total > FUNDO_PTS_MAX && total > _fundoPtsExtremoMax) {
+    _fundoPtsExtremoMax = total;
+    const msg = `⚠️ confFundo(): total ${total} acima do teto assumido (FUNDO_PTS_MAX=${FUNDO_PTS_MAX}) — recalcule o comentário V46 acima de FUNDO_PTS_MAX/MIN`;
+    console.log(msg);
+    avisarAdmin(msg);
+  }
+}
 const _fundoAvaliado = new Map<string, number>();
 const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") || "";
 const CRON_SO_HEADER = (Deno.env.get("CRON_SO_HEADER") || "0") === "1";
@@ -344,6 +383,23 @@ function compactarExperiente(texto: string): string {
     .trim();
   return t;
 }
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+// POST genérico pra API do Telegram com 1 retry em 429 (flood control). O Telegram manda quanto esperar
+// em parameters.retry_after (segundos); aqui a espera é limitada a TG_RETRY_MAX_S pra não travar a função
+// serverless por muito tempo numa rodada de cron. Se ainda vier 429 depois do retry, desiste (j.ok = false).
+const TG_RETRY_MAX_S = numEnv("TG_RETRY_MAX_S", "10");
+async function tgPost(path: string, body: any): Promise<any> {
+  const r = await fetch(`${TG_API}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  let j: any = await J(r);
+  if (j?.ok === false && j?.error_code === 429) {
+    const espera = Math.min(Number(j?.parameters?.retry_after) || 1, TG_RETRY_MAX_S);
+    console.log(`⏳ Telegram 429 em ${path}, aguardando ${espera}s e tentando de novo`);
+    await sleep(espera * 1000);
+    const r2 = await fetch(`${TG_API}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    j = await J(r2);
+  }
+  return j;
+}
 async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes): Promise<number | null> {
   if (await getModo(chatId) === "experiente") text = compactarExperiente(text);
   // texto grande: o botão "⬆️ Ir ao topo" já vai na própria mensagem (teclado inline, 1 chamada só).
@@ -353,25 +409,25 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
   const markup = { reply_markup: inline ? { inline_keyboard: inline } : { keyboard: TECLADO_FIXO, resize_keyboard: true } };
   let id: number | null = null;
   try {
-    const r = await fetch(`${TG_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, disable_notification: false, ...markup }),
-    });
-    const j: any = await J(r);
+    const j: any = await tgPost("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, disable_notification: false, ...markup });
     if (j.ok === false) {
       console.log(`⚠️ sendTelegram HTML falhou (${JSON.stringify(j).slice(0,200)}), tentando sem parse_mode`);
-      const r2 = await fetch(`${TG_API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: text.replace(/<\/?[bi]>/g, ""), disable_web_page_preview: true, ...markup }),
-      });
-      const j2: any = await J(r2);
+      const j2: any = await tgPost("sendMessage", { chat_id: chatId, text: text.replace(/<\/?[a-z]+>/gi, ""), disable_web_page_preview: true, ...markup });
       id = j2?.result?.message_id ?? null;
     } else id = j?.result?.message_id ?? null;
   } catch (e) { console.log("Erro sendTelegram", e); }
   if (id && typeof chatId === "number") await uiRegistrar(chatId, id).catch(() => {});
   return id;
+}
+// V47: avisos de deriva das escalas (confFundo/pontuar) e de outros erros "silenciosos" só iam pro
+// console.log do Deno Deploy — ninguém vê a menos que entre no painel de logs por acaso. avisarAdmin()
+// manda o mesmo texto pro chat do admin (ADMIN_CHAT_ID), reaproveitando o sendTelegram normal. Fire-and-
+// forget (sem await de quem chama) pra não atrasar o cálculo de pontuação por causa de uma notificação;
+// erro de envio cai só no console (não pode ficar chamando avisarAdmin recursivamente se o próprio
+// avisarAdmin falhar). Sem ADMIN_CHAT_ID configurado, não faz nada (mesmo comportamento de hoje).
+async function avisarAdmin(texto: string): Promise<void> {
+  if (!ADMIN_CHAT_ID) return;
+  try { await sendTelegram(ADMIN_CHAT_ID, texto); } catch (e) { console.log("⚠️ avisarAdmin falhou", e); }
 }
 // V39: edita uma mensagem já mandada (usado nos minutos finais da vela, pra atualizar a MESMA mensagem —
 // distância/tempo restando — em vez de mandar uma nova a cada rodada do cron). Se a edição falhar (mensagem
@@ -381,11 +437,7 @@ async function editarTelegram(chatId: number | string, messageId: number, text: 
   if (await getModo(chatId) === "experiente") t = compactarExperiente(t);
   const markup = botoes ? { reply_markup: { inline_keyboard: botoes } } : {};
   try {
-    const r = await fetch(`${TG_API}/editMessageText`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: t, parse_mode: "HTML", disable_web_page_preview: true, ...markup }),
-    });
-    const j: any = await J(r);
+    const j: any = await tgPost("editMessageText", { chat_id: chatId, message_id: messageId, text: t, parse_mode: "HTML", disable_web_page_preview: true, ...markup });
     if (j.ok === false) {
       if (String(j.description || "").includes("message is not modified")) return true;
       console.log(`⚠️ editarTelegram falhou (${JSON.stringify(j).slice(0, 150)}), mandando mensagem nova`);
@@ -631,6 +683,12 @@ function quedaTxt(pct: number, queda: number): string {
   if (queda > Math.max(0, -pct) + 1) return `recuou ${queda.toFixed(1)}% desde a máxima recente (no dia: ${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
   return `caiu ${(-pct).toFixed(2)}% em 24h`;
 }
+// Filtro de amplitude: true = passa. Usa o maior entre |variação 24h|, queda desde o topo e alta desde
+// o fundo — assim pega tanto quem está subindo quanto quem está caindo forte, e só barra quem está parado.
+function passaAmplitude(pct: number, dd: number, up: number): boolean {
+  if (FILTRO_AMPLITUDE_MIN <= 0) return true;
+  return Math.max(Math.abs(pct), dd || 0, up || 0) >= FILTRO_AMPLITUDE_MIN;
+}
 async function getVariacoes24h(): Promise<VarInfo[]> {
   const pares = await getFuturesPairs();
   const paresSet = new Set(pares);
@@ -639,17 +697,23 @@ async function getVariacoes24h(): Promise<VarInfo[]> {
   if (bulk) {
     for (const t of bulk) {
       if (!t.instId || !paresSet.has(t.instId)) continue;
+      if (BLACKLIST_MOEDAS.has(t.instId.toUpperCase())) continue;
       const last = parseFloat(t.last || "0"), open = parseFloat(t.open24h || "0");
       if (open <= 0 || last <= 0) continue;
-      variacoes.push({ instId: t.instId, pct: ((last - open) / open) * 100, last, volUsdt: (parseFloat(t.volCurrency24h || "0") || 0) * last, dd: ddDeTicker(t, last), up: upDeTicker(t, last) });
+      const pct = ((last - open) / open) * 100, dd = ddDeTicker(t, last), up = upDeTicker(t, last);
+      if (!passaAmplitude(pct, dd, up)) continue;
+      variacoes.push({ instId: t.instId, pct, last, volUsdt: (parseFloat(t.volCurrency24h || "0") || 0) * last, dd, up });
     }
   } else {
     const resultados = await emLotes(pares, 25, getTickerOne);
     resultados.forEach((t, i) => {
       if (!t) return;
+      if (BLACKLIST_MOEDAS.has(pares[i].toUpperCase())) return;
       const last = parseFloat(t.last || "0"), open = parseFloat(t.open24h || "0");
       if (open <= 0 || last <= 0) return;
-      variacoes.push({ instId: pares[i], pct: ((last - open) / open) * 100, last, volUsdt: (parseFloat(t.volCurrency24h || "0") || 0) * last, dd: ddDeTicker(t, last), up: upDeTicker(t, last) });
+      const pct = ((last - open) / open) * 100, dd = ddDeTicker(t, last), up = upDeTicker(t, last);
+      if (!passaAmplitude(pct, dd, up)) return;
+      variacoes.push({ instId: pares[i], pct, last, volUsdt: (parseFloat(t.volCurrency24h || "0") || 0) * last, dd, up });
     });
   }
   return variacoes;
@@ -732,9 +796,10 @@ function rsiSerie(closes: number[], period = 14): number[] {
   }
   return out;
 }
-function confFundo(total: number, caindoFaca: boolean): number {
+function confFundo(total: number, caindoFaca: boolean, teto = FUNDO_CONF_MIN): number {
+  checarDerivaFundo(total);
   const c = Math.max(0, Math.min(10, Math.round((total * 10) / FUNDO_PTS_MAX)));
-  return caindoFaca ? Math.min(c, Math.max(0, FUNDO_CONF_MIN - 1)) : c;
+  return caindoFaca ? Math.min(c, Math.max(0, teto - 1)) : c;
 }
 function calcFundoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, adxAntes: number): FundoRes | null {
   const n = d.c.length;
@@ -1022,7 +1087,7 @@ function calcTopoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, a
   repique = repique && !subindoFoguete;
   if (repique && REPIQUE_BONUS > 0) add(REPIQUE_BONUS, "⭐ repique rejeitado na faixa: virada LONG → SHORT a favor da queda anterior (prioridade)");
   const pts = motivos.reduce((s, m) => s + m.pts, 0);
-  return { pts, conf: confFundo(pts, subindoFoguete), motivos, caindoFaca: subindoFoguete, minimo: maxH, dAtr, repique };
+  return { pts, conf: confFundo(pts, subindoFoguete, TOPO_CONF_MIN), motivos, caindoFaca: subindoFoguete, minimo: maxH, dAtr, repique };
 }
 async function topoFinal(pre: FundoRes, instId: string, foPre?: FoInfo | null): Promise<FundoFinal> {
   const [fo, btc] = await Promise.all([
@@ -1044,7 +1109,7 @@ async function topoFinal(pre: FundoRes, instId: string, foPre?: FoInfo | null): 
     else if (btc <= -0.5) add(1, `BTC caindo ${btc.toFixed(1)}% na última hora`);
   }
   const pts = motivos.reduce((s, m) => s + m.pts, 0);
-  return { ...pre, motivos, pts, conf: confFundo(pts, pre.caindoFaca), fo: fo ?? null, btc };
+  return { ...pre, motivos, pts, conf: confFundo(pts, pre.caindoFaca, TOPO_CONF_MIN), fo: fo ?? null, btc };
 }
 function topoTxt(r: { motivos: Motivo[]; conf: number }, maxPos = 5, maxNeg = 3): string {
   return fundoTxt(r, maxPos, maxNeg).replace("Sinal de fundo", "Sinal de topo");
@@ -1976,7 +2041,16 @@ async function travarCron(SB: any): Promise<boolean> {
     if (!eIns) return true;
     if (/duplicate|already exists|23505/i.test(String(eIns.message || eIns.code || ""))) return false;
     throw eIns;
-  } catch (e) { console.log("⚠️ erro travando cron (seguindo sem trava)", e); return true; }
+  } catch (e) {
+    // Fail-open deliberado: se o Supabase falhar bem aqui (rede/timeout), a rodada segue sem trava em vez
+    // de não rodar. Pra um bot de alerta, ficar mudo numa falha transitória do Supabase é pior que o risco
+    // de 2 rodadas raras se sobrepondo (que na pior hipótese manda um alerta duplicado — chato, não perigoso;
+    // o próprio upsertLinha usado pra gravar estado já é atômico via upsert() nativo, então não corrompe
+    // dado mesmo se colidir). Se algum dia isso virar problema de verdade (ex.: alerta duplicado causando
+    // ação real do usuário), trocar `return true` por `return false` aqui vira fail-safe (pula a rodada).
+    console.log("⚠️ erro travando cron (seguindo sem trava)", e);
+    return true;
+  }
 }
 async function destravarCron(SB: any) {
   try { await upsertLinha(SB, CRON_LOCK_ROW, { last_status: "0" }); } catch (e) { console.log("⚠️ erro destravando cron", e); }
@@ -2755,6 +2829,9 @@ function ligarRoboTxt(x: { info: IndicadorInfo; lado: "long" | "short"; vivo: nu
   let t = "";
   if (info.idadeCandles !== null) {
     t += `⌛ <b>Já cruzou</b> pra ${nome(lado)} há ~${info.idadeCandles * TF_MIN} min: a entrada do robô foi no fechamento daquela vela${entradaRobo ? ` (≈${fmtPrice(entradaRobo)})` : ""}. Já não é caso de ligar antes do cruzamento.\n`;
+    if (conf >= CONF_AMARELO && info.idadeCandles <= ANTEC_LIGUE_ETA_CANDLES) {
+      t += `💡 Perdeu a entrada? Sinal bom, entre no manual e ative o robô.\n`;
+    }
   } else if (apChega) {
     const dViva = vivo !== null ? distLinha(apChega.alvo, vivo, info.topo, info.fundo) : apChega.dist;
     const eta = dViva <= 0 ? 0 : (apChega.vel > 0 ? dViva / apChega.vel : apChega.etaCandles);
@@ -2846,7 +2923,13 @@ async function runAgora(chatId: number | string, entrada: string) {
   const h1 = d1h ? calcIndicadorDeCloses(instId, d1h.c) : null;
   const trocas = contarTrocas(d15.c);
   const volRatio = volAcel(d15.v);
-  const apChega = chegandoNaLinha(info);
+  const atr = calcATR(d15.h, d15.l, d15.c, 14);
+  // V47: sem o atr anexado ao info, chegandoNaLinha() caía sempre no limiar fixo ANTEC_DIST_MAX_PCT (1%) em
+  // vez do limiar relativo ao ATR que o radar automático usa (calcIndicadorFiltro já devolve o atr dentro do
+  // info) — moeda volátil perto da linha (ex. 1.05%) não pontuava aproximação aqui, mesmo quando pontuaria
+  // no radar, pra exatamente a mesma distância.
+  const infoAtr = { ...info, atr };
+  const apChega = chegandoNaLinha(infoAtr);
   const { conf } = pontuar({
     info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1,
     btcAdx: btc ? btc.adx : null, perfil: null, fo, volRatio, chegadaForte: false, apChega,
@@ -2888,12 +2971,20 @@ async function runAnalise(chatId: number | string, entrada: string) {
   const v = (vars as VarInfo[]).find((x) => x.instId === instId);
   const pct = v ? v.pct : null;
   const volUsdt = v ? v.volUsdt : null;
-  const apChega = chegandoNaLinha(info);
+  // V47: mesma correção do /agora — sem o atr anexado ao info, chegandoNaLinha() caía sempre no limiar fixo
+  // ANTEC_DIST_MAX_PCT (1%) em vez do limiar relativo ao ATR que o radar automático usa (calcIndicadorFiltro
+  // já devolve o atr dentro do info) — moeda volátil perto da linha (ex. 1.05%) não gerava PREPARE aqui,
+  // mesmo quando geraria no radar, pra exatamente a mesma distância.
+  const infoAtr = { ...info, atr };
+  const apChega = chegandoNaLinha(infoAtr);
   const lado: "long" | "short" = info.preco > info.topo ? "long" : info.preco < info.fundo ? "short" : apChega ? apChega.alvo : (info.regiao.includes("topo") ? "long" : "short");
   const ddPicoA = ddDoPico(d15.h, info.preco);
   const altaValeA = altaDoVale(d15.l, info.preco);
   const topA = TOPO_ON ? calcTopoPre(d15, info, atr, adx, adxAntes) : null;
-  const setup = pct !== null ? classificar({ ...info, ddPico: ddPicoA, altaVale: altaValeA, top: topA, bottom: FUNDO_ON ? calcFundoPre(d15, info, atr, adx, adxAntes) : null } as InfoFiltravel, pct) : null;
+  // V48: segunda instância do mesmo bug do V47, dentro da mesma função — este objeto espalhava `info` (sem atr)
+  // em vez de `infoAtr`, então o chegandoNaLinha() chamado por DENTRO do classificar() (pra decidir "🎯 CHEGANDO")
+  // caía no limiar fixo de 1% de novo, mesmo já corrigido o cálculo de apChega/lado acima.
+  const setup = pct !== null ? classificar({ ...infoAtr, ddPico: ddPicoA, altaVale: altaValeA, top: topA, bottom: FUNDO_ON ? calcFundoPre(d15, info, atr, adx, adxAntes) : null } as InfoFiltravel, pct) : null;
   const h1 = d1h ? calcIndicadorDeCloses(instId, d1h.c) : null;
   const lado1h = h1 ? ladoAtual(h1) : null;
   const trocas = contarTrocas(d15.c);
@@ -3007,18 +3098,23 @@ type CtxPontos = {
 // V43: CONFIANCA_TOTAL_MIN/MAX são o piso e o teto reais de `total` em pontuar(), somando TODOS os add()
 // possíveis (1H, ADX, RSI, volume, idade do cruzamento, velocidade, chegada em janela forte, squeeze,
 // inclinação, distância, trocas, BTC/ETH, perfil de janela, funding×2, OI, histórico da moeda, bônus de
-// fundo/topo). O teto real é +24 (SHORT em reversão com funding subindo rápido a favor + sinais de topo com
-// repique + chegada em janela forte) e o piso é -31 (LONG em reversão com tudo contra, incluindo o bônus de
+// fundo/topo). O teto real é +23 (SHORT em reversão com funding subindo rápido a favor + sinais de topo com
+// repique + chegada em janela forte) e o piso é -30 (LONG em reversão com tudo contra, incluindo o bônus de
 // fundo indo a -3). A fórmula antiga assumia -3 a +8 — qualquer sinal decente já estourava e travava em
 // 10/10 (ou em 0/10 do lado ruim), achatando a escala bem mais que o caso do FUNDO_PTS_MAX. CONF_MIN_OPORT e
 // CONF_AMARELO subiram de 5 pra 6 pra continuar exigindo (aproximadamente) os mesmos pontos brutos de antes —
-// a escala de 0-10 ficou ~5x mais "grossa" por ponto (55 pontos brutos / 10, contra 11/10 antes), então não
+// a escala de 0-10 ficou ~5x mais "grossa" por ponto (53 pontos brutos / 10, contra 11/10 antes), então não
 // dá pra preservar o corte exato ponto a ponto; onde não deu pra bater exato, o ajuste ficou do lado mais
 // permissivo (nunca mais rígido) pra não atrasar alerta que já disparava. CONF_MIN_FUNDO_LONG e
 // CONF_MIN_REVERSAO ficaram com os mesmos números (6 e 7), mas por causa da escala mais larga eles passam a
 // disparar um pouco mais cedo (mais sensível, não menos).
-const CONFIANCA_TOTAL_MIN = -31;
-const CONFIANCA_TOTAL_MAX = 24;
+// V45: piso/teto corrigidos de -31/+24 pra -30/+23 — o cálculo original somou 2 pontos de confiabInst
+// (histórico da moeda), mas CONFIAB_PTS = 1 (linha ~3612), soma no máximo 1; e o -2 de "cruzamento muito
+// velho" nunca coexiste com o -1 do squeeze no mesmo pontuar() (o bloco do squeeze só roda se
+// idade === null || idade <= ALERT_FRESCO_CANDLES, e um cruzamento "muito velho" nunca satisfaz isso), então
+// esses dois não somam juntos no pior caso.
+const CONFIANCA_TOTAL_MIN = -30;
+const CONFIANCA_TOTAL_MAX = 23;
 const confiancaDe = (total: number) =>
   Math.max(0, Math.min(10, Math.round(((total - CONFIANCA_TOTAL_MIN) * 10) / (CONFIANCA_TOTAL_MAX - CONFIANCA_TOTAL_MIN))));
 // V45: autoconferência da escala — CONFIANCA_TOTAL_MIN/MAX acima foram calculados na mão somando o pior/melhor
@@ -3029,10 +3125,14 @@ let _confExtremoMin = CONFIANCA_TOTAL_MIN, _confExtremoMax = CONFIANCA_TOTAL_MAX
 function checarDerivaConfianca(total: number) {
   if (total < CONFIANCA_TOTAL_MIN && total < _confExtremoMin) {
     _confExtremoMin = total;
-    console.log(`⚠️ pontuar(): total ${total} abaixo do piso assumido (CONFIANCA_TOTAL_MIN=${CONFIANCA_TOTAL_MIN}) — recalcule as constantes (comentário V43 acima de CONFIANCA_TOTAL_MIN/MAX)`);
+    const msg = `⚠️ pontuar(): total ${total} abaixo do piso assumido (CONFIANCA_TOTAL_MIN=${CONFIANCA_TOTAL_MIN}) — recalcule as constantes (comentário V43 acima de CONFIANCA_TOTAL_MIN/MAX)`;
+    console.log(msg);
+    avisarAdmin(msg);
   } else if (total > CONFIANCA_TOTAL_MAX && total > _confExtremoMax) {
     _confExtremoMax = total;
-    console.log(`⚠️ pontuar(): total ${total} acima do teto assumido (CONFIANCA_TOTAL_MAX=${CONFIANCA_TOTAL_MAX}) — recalcule as constantes (comentário V43 acima de CONFIANCA_TOTAL_MIN/MAX)`);
+    const msg = `⚠️ pontuar(): total ${total} acima do teto assumido (CONFIANCA_TOTAL_MAX=${CONFIANCA_TOTAL_MAX}) — recalcule as constantes (comentário V43 acima de CONFIANCA_TOTAL_MIN/MAX)`;
+    console.log(msg);
+    avisarAdmin(msg);
   }
 }
 const confEmoji = (n: number) => (n >= CONF_VERDE ? "🟢" : n >= CONF_AMARELO ? "🟡" : "🔴");
@@ -4436,7 +4536,7 @@ function montarConfig(): string {
   m += `🔴 <b>V35 · radar de topo</b> (${on(TOPO_ON)})\n• alta ≥ ${TOPO_ALTA_MIN}% (em 24h ou desde a mínima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_ALTA} · rejeição na faixa após alta ≥ ${TOPO_TOQUE_VALE_MIN}% pontua · confiança ≥ ${TOPO_CONF_MIN}/10 · pré-filtro ≥ ${TOPO_PRE_MIN} pts · cooldown ${TOPO_COOLDOWN_MIN} min\n\n`;
   m += `🟢 <b>V28/V34 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% (em 24h ou desde a máxima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_RECUO} moedas que mais recuaram · toque na faixa após recuo ≥ ${FUNDO_TOQUE_PICO_MIN}% pontua · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n\n`;
   m += `🧭 <b>V26</b>\n• squeeze: faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica · volume das velas ≥ ${VOL_ACEL_RATIO}× (seco ≤ ${VOL_SECO_RATIO}×)\n• alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou passar de 2× o prazo\n• confiança: verde ≥ ${CONF_VERDE}/10 · amarelo ≥ ${CONF_AMARELO}/10\n• modo pump (${on(ESTRAT_PUMP)}): mín. confiança oportunidade ${CONF_MIN_OPORT} · reversão ${CONF_MIN_REVERSAO} · serrote ≥ ${SERROTE_MAX} trocas/4h barra · RSI máx LONG ${FILTRO_RSI_MAX_LONG} · limite ${LIMITE_LADO} por lado\n\n`;
-  m += `🧹 <b>Filtros</b> (${on(ALERT_FILTROS_ON)})\n• volume ≥ ${(FILTRO_VOL_MIN_USDT / 1000).toFixed(0)}k USDT · ADX ≥ ${FILTRO_ADX_MIN}\n• RSI entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX} · distância ≤ ${FILTRO_DIST_MAX_PCT}%\n\n`;
+  m += `🧹 <b>Filtros</b> (${on(ALERT_FILTROS_ON)})\n• volume ≥ ${(FILTRO_VOL_MIN_USDT / 1000).toFixed(0)}k USDT · ADX ≥ ${FILTRO_ADX_MIN}\n• RSI entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX} · distância ≤ ${FILTRO_DIST_MAX_PCT}%\n• amplitude mín. ${FILTRO_AMPLITUDE_MIN > 0 ? `${FILTRO_AMPLITUDE_MIN}%` : "desligada"}\n• 🚫 lista negra (${BLACKLIST_MOEDAS.size}): ${BLACKLIST_MOEDAS.size ? [...BLACKLIST_MOEDAS].sort().join(", ") : "nenhuma"}\n\n`;
   m += `🎯 <b>Stop / alvo / trailing</b>\n• stop: faixa + ${STOP_ATR_MULT}×ATR · alvo RR ${ALVO_RR}:1\n• stop de reserva: ${STOP_ATR_RESERVA}×ATR\n• trailing (${on(PROT_LUCRO_ON)}): degrau de ${TRAIL_ATR_MULT}×ATR\n• RSI esticado: ≥ ${ESTICADO_RSI} (long) · ≤ ${100 - ESTICADO_RSI} (short)\n\n`;
   m += `🚨 <b>Risco</b> (${on(RISCO_ON)}): liquidação < ${RISCO_LIQ_PCT}% (crítico ${RISCO_LIQ_CRITICO_PCT}%) · prejuízo ≥ ${RISCO_PERDA_PCT}% (crítico ${RISCO_PERDA_CRITICA_PCT}%) · reenvio ${RISCO_COOLDOWN_MIN} min\n\n`;
   m += `🌙 <b>Silêncio</b> (${on(SILENCIO_ON)}): ${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h, proteção ${on(SILENCIO_PROTECAO)} · fuso ${tz}\n`;
