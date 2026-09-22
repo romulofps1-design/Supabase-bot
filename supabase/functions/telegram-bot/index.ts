@@ -1,4 +1,17 @@
-// telegram-bot V42 (V41 + auto-calibração agora tem limites de segurança (ANTEC_ETA_MIN_LIM/MAX_LIM,
+// telegram-bot V45 (V44 + trava do cron virou compare-and-swap de verdade num UPDATE só, sem a janela teórica de
+// corrida da versão anterior (ler→checar→escrever em 2 chamadas); autoconferência da escala de confiança —
+// avisa no log se o total de pontuar() escapar de CONFIANCA_TOTAL_MIN/MAX, pra pegar deriva se algum peso mudar
+// sem recalcular as constantes; ANTEC_CALIB_MIN e a janela de amostras do confiabilidadeMoeda (CONFIAB_JANELA_N)
+// agora são env var, como os outros limites de calibração; registrarAntecipacao deduplica por moeda+lado, não
+// só por moeda) (V44 = V43 + espelho do repique: LONG que já devolveu o dia positivo (fundo) e SHORT que já devolveu
+// o dia negativo (topo) agora classificam tipo "oportunidade" em vez de sempre "reversao", mesma regra do
+// tipoDoLado) (V43 = V42 + zona morta REPIQUE_PCT_ZONA (±2%, padrão) em torno de pct≈0 pra classificar o tipo do
+// repique — sem ela, ruído de rodada cruzava o zero e trocava oportunidade↔reversão à toa (mudava a confiança
+// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-31 a +24, o
+// piso e o teto reais de `total` em pontuar() somando todos os add() possíveis) substituem a faixa antiga de -3
+// a +8, que era estreita demais e estourava/travava em 10 ou 0 com qualquer sinal decente; CONF_MIN_OPORT e
+// CONF_AMARELO subiram de 5 pra 6 pra exigir aproximadamente os mesmos pontos brutos de antes na escala nova)
+// (V42 = V41 + auto-calibração agora tem limites de segurança (ANTEC_ETA_MIN_LIM/MAX_LIM,
 // ANTEC_DIST_MIN_LIM/MAX_LIM, ANTEC_ATR_MIN_LIM/MAX_LIM) e passo máximo por ciclo — amostra pequena/enviesada
 // não consegue mais empurrar ANTEC_ETA_MAX_CANDLES/ANTEC_DIST_MAX_PCT/ANTEC_DIST_MAX_ATR pra um valor estranho
 // de uma vez; a calibração agora sobrevive a cold start — antes vivia só em memória (as 3 variáveis eram `let`
@@ -28,101 +41,100 @@ const ALLOWED_CHAT_IDS = (Deno.env.get("ALLOWED_CHAT_IDS") || "")
 .filter(Boolean);
 const ALERT_EXCLUIR = (Deno.env.get("ALERT_EXCLUIR_IDS") || "").split(",").map((x) => x.trim()).filter(Boolean);
 const ALERT_CHAT_IDS = [...new Set(ALLOWED_CHAT_IDS)].filter((x) => !ALERT_EXCLUIR.includes(x));
-let ALERT_OPORT_PCT_MIN = Number(Deno.env.get("ALERT_OPORT_PCT_MIN") || "8");
-let ALERT_REV_PCT_MIN = Number(Deno.env.get("ALERT_REV_PCT_MIN") || "12");
+let ALERT_OPORT_PCT_MIN = numEnv("ALERT_OPORT_PCT_MIN", "8");
+let ALERT_REV_PCT_MIN = numEnv("ALERT_REV_PCT_MIN", "12");
 // V37: alertas proativos (os que o robô manda sozinho, sem comando) levam uma marca discreta
 // (🔔 na frente do título, não mais uma linha inteira separada) e se autoapagam ALERTA_AUTOAPAGAR_MIN
 // minutos depois de enviados.
 const ALERTA_MARCA = "🔔 ";
-const ALERTA_AUTOAPAGAR_MIN = Number(Deno.env.get("ALERTA_AUTOAPAGAR_MIN") || "15");
-const ALERT_COOLDOWN_MIN = Number(Deno.env.get("ALERT_COOLDOWN_MIN") || "60");
-const ALERT_COOLDOWN_REPETIDO_MIN = Number(Deno.env.get("ALERT_COOLDOWN_REPETIDO_MIN") || "180");
-const WATCH_HORAS = Number(Deno.env.get("WATCH_HORAS") || "48");
+const ALERTA_AUTOAPAGAR_MIN = numEnv("ALERTA_AUTOAPAGAR_MIN", "15");
+const ALERT_COOLDOWN_MIN = numEnv("ALERT_COOLDOWN_MIN", "60");
+const ALERT_COOLDOWN_REPETIDO_MIN = numEnv("ALERT_COOLDOWN_REPETIDO_MIN", "180");
+const WATCH_HORAS = numEnv("WATCH_HORAS", "48");
 const TF_MIN = 15;
-const ALERT_FRESCO_CANDLES = Number(Deno.env.get("ALERT_FRESCO_CANDLES") || "2");
-const ALERT_IDADE_MAX_CANDLES = Number(Deno.env.get("ALERT_IDADE_MAX_CANDLES") || "0");
-let ANTEC_ETA_MAX_CANDLES = Number(Deno.env.get("ANTEC_ETA_MAX_CANDLES") || "6");
-let ANTEC_DIST_MAX_PCT = Number(Deno.env.get("ANTEC_DIST_MAX_PCT") || "1");
+const ALERT_FRESCO_CANDLES = numEnv("ALERT_FRESCO_CANDLES", "2");
+const ALERT_IDADE_MAX_CANDLES = numEnv("ALERT_IDADE_MAX_CANDLES", "0");
+let ANTEC_ETA_MAX_CANDLES = numEnv("ANTEC_ETA_MAX_CANDLES", "6");
+let ANTEC_DIST_MAX_PCT = numEnv("ANTEC_DIST_MAX_PCT", "1");
 const TRAVA_PRECO_ON = (Deno.env.get("TRAVA_PRECO_ON") || "1") !== "0";
-let ANTEC_DIST_MAX_ATR = Number(Deno.env.get("ANTEC_DIST_MAX_ATR") || "1.5");
-const ANTEC_LIGUE_ETA_CANDLES = Number(Deno.env.get("ANTEC_LIGUE_ETA_CANDLES") || "2");
-const ALERT_MAX_POR_RODADA = Number(Deno.env.get("ALERT_MAX_POR_RODADA") || "5");
+let ANTEC_DIST_MAX_ATR = numEnv("ANTEC_DIST_MAX_ATR", "1.5");
+const ANTEC_LIGUE_ETA_CANDLES = numEnv("ANTEC_LIGUE_ETA_CANDLES", "2");
+const ALERT_MAX_POR_RODADA = numEnv("ALERT_MAX_POR_RODADA", "5");
 const ALERT_POOL = 40;
 const TIMEFRAME = "15m";
 const PESO_SUPREMA = 0.5;
-const TOP_N = 20;
 const TOP_N_CRUZADO = 10;
 const OPORT_POOL = 40;
 const PAIRS_CACHE_MS = 30 * 60 * 1000;
-let FILTRO_VOL_MIN_USDT = Number(Deno.env.get("FILTRO_VOL_MIN_USDT") || "1000000");
-let FILTRO_ADX_MIN = Number(Deno.env.get("FILTRO_ADX_MIN") || "18");
-let FILTRO_RSI_MAX = Number(Deno.env.get("FILTRO_RSI_MAX") || "85");
-let FILTRO_RSI_MIN = Number(Deno.env.get("FILTRO_RSI_MIN") || "15");
-let FILTRO_DIST_MAX_PCT = Number(Deno.env.get("FILTRO_DIST_MAX_PCT") || "2");
+let FILTRO_VOL_MIN_USDT = numEnv("FILTRO_VOL_MIN_USDT", "1000000");
+let FILTRO_ADX_MIN = numEnv("FILTRO_ADX_MIN", "18");
+let FILTRO_RSI_MAX = numEnv("FILTRO_RSI_MAX", "85");
+let FILTRO_RSI_MIN = numEnv("FILTRO_RSI_MIN", "15");
+let FILTRO_DIST_MAX_PCT = numEnv("FILTRO_DIST_MAX_PCT", "2");
 const ADX_REF = 25;
 const CANDLES_LIMIT_PADRAO = 500;
 const CANDLES_LIMIT_PRECISO = 500;
 let ALERT_FILTROS_ON = (Deno.env.get("ALERT_FILTROS") || "1") !== "0";
-const VOL_ACEL_RATIO = Number(Deno.env.get("VOL_ACEL_RATIO") || "1.5");
-const VOL_SECO_RATIO = Number(Deno.env.get("VOL_SECO_RATIO") || "0.6");
-const SQUEEZE_REL = Number(Deno.env.get("SQUEEZE_REL") || "0.6");
+const VOL_ACEL_RATIO = numEnv("VOL_ACEL_RATIO", "1.5");
+const VOL_SECO_RATIO = numEnv("VOL_SECO_RATIO", "0.6");
+const SQUEEZE_REL = numEnv("SQUEEZE_REL", "0.6");
 const ANTEC_TABELA = "antecipacoes_log";
-const ANTEC_CANCELA_RECUO = Number(Deno.env.get("ANTEC_CANCELA_RECUO") || "1.3");
-const ANTEC_CALIB_MIN = 10;
+const ANTEC_CANCELA_RECUO = numEnv("ANTEC_CANCELA_RECUO", "1.3");
+const ANTEC_CALIB_MIN = numEnv("ANTEC_CALIB_MIN", "10");
 const CONF_VERDE = 7;
 const CONF_AMARELO = 6;
 const ESTRAT_PUMP = (Deno.env.get("ESTRATEGIA_PUMP") || "1") !== "0";
-const FILTRO_RSI_MAX_LONG = Number(Deno.env.get("FILTRO_RSI_MAX_LONG") || "90");
-const SERROTE_MAX = Number(Deno.env.get("SERROTE_MAX") || "4");
-const LIMITE_LADO = Number(Deno.env.get("LIMITE_LADO") || "3");
-const CONF_MIN_OPORT = Number(Deno.env.get("CONF_MIN_OPORT") || "6");
-const CONF_MIN_REVERSAO = Number(Deno.env.get("CONF_MIN_REVERSAO") || "7");
+const FILTRO_RSI_MAX_LONG = numEnv("FILTRO_RSI_MAX_LONG", "90");
+const SERROTE_MAX = numEnv("SERROTE_MAX", "4");
+const LIMITE_LADO = numEnv("LIMITE_LADO", "3");
+const CONF_MIN_OPORT = numEnv("CONF_MIN_OPORT", "6");
+const CONF_MIN_REVERSAO = numEnv("CONF_MIN_REVERSAO", "7");
 const _confBarrada = new Map<string, number>();
 const FUNDO_ON = (Deno.env.get("FUNDO_RADAR") || "1") !== "0";
-const FUNDO_QUEDA_MIN = Number(Deno.env.get("FUNDO_QUEDA_MIN") || "10");
-const FUNDO_JAN_PICO = Number(Deno.env.get("FUNDO_JAN_PICO") || "96");
-const FUNDO_TOQUE_PICO_MIN = Number(Deno.env.get("FUNDO_TOQUE_PICO_MIN") || "6");
-const ALERT_POOL_RECUO = Number(Deno.env.get("ALERT_POOL_RECUO") || "15");
+const FUNDO_QUEDA_MIN = numEnv("FUNDO_QUEDA_MIN", "10");
+const FUNDO_JAN_PICO = numEnv("FUNDO_JAN_PICO", "96");
+const FUNDO_TOQUE_PICO_MIN = numEnv("FUNDO_TOQUE_PICO_MIN", "6");
+const ALERT_POOL_RECUO = numEnv("ALERT_POOL_RECUO", "15");
 const TOPO_ON = (Deno.env.get("TOPO_RADAR") || "1") !== "0";
-const TOPO_ALTA_MIN = Number(Deno.env.get("TOPO_ALTA_MIN") || "10");
-const TOPO_CONF_MIN = Number(Deno.env.get("TOPO_CONF_MIN") || "5");
-const TOPO_PRE_MIN = Number(Deno.env.get("TOPO_PRE_MIN") || "5");
-const TOPO_TOQUE_VALE_MIN = Number(Deno.env.get("TOPO_TOQUE_VALE_MIN") || "6");
-const TOPO_COOLDOWN_MIN = Number(Deno.env.get("TOPO_COOLDOWN_MIN") || "240");
-const TOPO_MAX_POR_RODADA = Number(Deno.env.get("TOPO_MAX_POR_RODADA") || "2");
-const ALERT_POOL_ALTA = Number(Deno.env.get("ALERT_POOL_ALTA") || "15");
+const TOPO_ALTA_MIN = numEnv("TOPO_ALTA_MIN", "10");
+const TOPO_CONF_MIN = numEnv("TOPO_CONF_MIN", "5");
+const TOPO_PRE_MIN = numEnv("TOPO_PRE_MIN", "5");
+const TOPO_TOQUE_VALE_MIN = numEnv("TOPO_TOQUE_VALE_MIN", "6");
+const TOPO_COOLDOWN_MIN = numEnv("TOPO_COOLDOWN_MIN", "240");
+const TOPO_MAX_POR_RODADA = numEnv("TOPO_MAX_POR_RODADA", "2");
+const ALERT_POOL_ALTA = numEnv("ALERT_POOL_ALTA", "15");
 // V36: inclinação da faixa, medida em "velas típicas por vela" (quanto o meio da faixa anda por vela, dividido pelo movimento típico de uma vela da moeda)
-const INCLINA_JAN = Number(Deno.env.get("INCLINA_JAN") || "8");
-const INCLINA_FORTE = Number(Deno.env.get("INCLINA_FORTE") || "0.25");
-const INCLINA_MOD = Number(Deno.env.get("INCLINA_MOD") || "0.12");
-const INCLINA_PLANA = Number(Deno.env.get("INCLINA_PLANA") || "0.08");
+const INCLINA_JAN = numEnv("INCLINA_JAN", "8");
+const INCLINA_FORTE = numEnv("INCLINA_FORTE", "0.25");
+const INCLINA_MOD = numEnv("INCLINA_MOD", "0.12");
+const INCLINA_PLANA = numEnv("INCLINA_PLANA", "0.08");
 // V36: radar de compressão (faixa achatada + velas minúsculas + volume começando a subir = rompimento iminente, direção imprevisível)
 const COMPRESS_ON = (Deno.env.get("COMPRESS_RADAR") || "1") !== "0";
-const COMPRESS_REL = Number(Deno.env.get("COMPRESS_REL") || "0.5");
-const COMPRESS_VOL_MIN = Number(Deno.env.get("COMPRESS_VOL_MIN") || "1.1");
-const COMPRESS_DIST_MAX_PCT = Number(Deno.env.get("COMPRESS_DIST_MAX_PCT") || "1.5");
-const COMPRESS_CONF_MIN = Number(Deno.env.get("COMPRESS_CONF_MIN") || "6");
-const COMPRESS_COOLDOWN_MIN = Number(Deno.env.get("COMPRESS_COOLDOWN_MIN") || "180");
-const COMPRESS_MAX_POR_RODADA = Number(Deno.env.get("COMPRESS_MAX_POR_RODADA") || "2");
-const COMPRESS_ROT_N = Number(Deno.env.get("COMPRESS_ROT_N") || "25");
-const COMPRESS_MANUAL_N = Number(Deno.env.get("COMPRESS_MANUAL_N") || "60");
+const COMPRESS_REL = numEnv("COMPRESS_REL", "0.5");
+const COMPRESS_VOL_MIN = numEnv("COMPRESS_VOL_MIN", "1.1");
+const COMPRESS_DIST_MAX_PCT = numEnv("COMPRESS_DIST_MAX_PCT", "1.5");
+const COMPRESS_CONF_MIN = numEnv("COMPRESS_CONF_MIN", "6");
+const COMPRESS_COOLDOWN_MIN = numEnv("COMPRESS_COOLDOWN_MIN", "180");
+const COMPRESS_MAX_POR_RODADA = numEnv("COMPRESS_MAX_POR_RODADA", "2");
+const COMPRESS_ROT_N = numEnv("COMPRESS_ROT_N", "25");
+const COMPRESS_MANUAL_N = numEnv("COMPRESS_MANUAL_N", "60");
 const COMPRESS_PTS_MAX = 12;
-const LISTA_POOL_LADO = Number(Deno.env.get("LISTA_POOL_LADO") || "30");
+const LISTA_POOL_LADO = numEnv("LISTA_POOL_LADO", "30");
 // V36: prioridade do REPIQUE SHORT (moeda que despencou, repicou até a faixa e está sendo rejeitada = virada LONG → SHORT a favor da queda)
-const REPIQUE_BONUS = Number(Deno.env.get("REPIQUE_BONUS") || "1");
-const REPIQUE_CONF_MIN = Number(Deno.env.get("REPIQUE_CONF_MIN") || "4");
-const REPIQUE_COOLDOWN_MIN = Number(Deno.env.get("REPIQUE_COOLDOWN_MIN") || "120");
-const REPIQUE_MAX_POR_RODADA = Number(Deno.env.get("REPIQUE_MAX_POR_RODADA") || "3");
+const REPIQUE_BONUS = numEnv("REPIQUE_BONUS", "1");
+const REPIQUE_CONF_MIN = numEnv("REPIQUE_CONF_MIN", "4");
+const REPIQUE_COOLDOWN_MIN = numEnv("REPIQUE_COOLDOWN_MIN", "120");
+const REPIQUE_MAX_POR_RODADA = numEnv("REPIQUE_MAX_POR_RODADA", "3");
 const topoOk = (t?: FundoRes | null) => !!t && t.conf >= (t.repique && !t.caindoFaca ? REPIQUE_CONF_MIN : TOPO_CONF_MIN);
 const fundoOk = (b?: FundoRes | null) => !!b && b.conf >= (b.repique && !b.caindoFaca ? REPIQUE_CONF_MIN : FUNDO_CONF_MIN);
 let _compCursor = 0;
-const FUNDO_CONF_MIN = Number(Deno.env.get("FUNDO_CONF_MIN") || "5");
-const FUNDO_PRE_MIN = Number(Deno.env.get("FUNDO_PRE_MIN") || "5");
+const FUNDO_CONF_MIN = numEnv("FUNDO_CONF_MIN", "5");
+const FUNDO_PRE_MIN = numEnv("FUNDO_PRE_MIN", "5");
 const FUNDO_LIBERA_LONG = (Deno.env.get("FUNDO_LIBERA_LONG") || "1") !== "0";
-const CONF_MIN_FUNDO_LONG = Number(Deno.env.get("CONF_MIN_FUNDO_LONG") || "6");
-const FUNDO_COOLDOWN_MIN = Number(Deno.env.get("FUNDO_COOLDOWN_MIN") || "240");
-const FUNDO_MAX_POR_RODADA = Number(Deno.env.get("FUNDO_MAX_POR_RODADA") || "2");
-const FUNDO_BTC_QUEDA_PCT = Number(Deno.env.get("FUNDO_BTC_QUEDA_PCT") || "1.5");
+const CONF_MIN_FUNDO_LONG = numEnv("CONF_MIN_FUNDO_LONG", "6");
+const FUNDO_COOLDOWN_MIN = numEnv("FUNDO_COOLDOWN_MIN", "240");
+const FUNDO_MAX_POR_RODADA = numEnv("FUNDO_MAX_POR_RODADA", "2");
+const FUNDO_BTC_QUEDA_PCT = numEnv("FUNDO_BTC_QUEDA_PCT", "1.5");
 // V42: FUNDO_PTS_MAX é o teto real de pontos somando o pré-filtro (calcFundoPre/calcTopoPre, até 13) +
 // o que fundoFinal/topoFinal ainda somam depois (funding até +2, OI até +1, BTC até +1 = até +4). Antes
 // estava em 13 (só o pré-filtro), então qualquer moeda com 13 a 17 pontos aparecia igual, 10/10 — o topo
@@ -134,26 +146,26 @@ const _fundoAvaliado = new Map<string, number>();
 const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") || "";
 const CRON_SO_HEADER = (Deno.env.get("CRON_SO_HEADER") || "0") === "1";
 const BTC_DIR_ON = (Deno.env.get("BTC_DIR") || "1") !== "0";
-const BTC_DIR_PCT = Number(Deno.env.get("BTC_DIR_PCT") || "1.5");
-const BTC_BLOQ_REV_PCT = Number(Deno.env.get("BTC_BLOQ_REV_PCT") || "2.5");
+const BTC_DIR_PCT = numEnv("BTC_DIR_PCT", "1.5");
+const BTC_BLOQ_REV_PCT = numEnv("BTC_BLOQ_REV_PCT", "2.5");
 const ESTADO_ROW = "_ESTADO_";
 const FINAL_ON = (Deno.env.get("ALERTA_FINAL") || "1") !== "0";
-const FINAL_JANELA_MAX_MIN = Number(Deno.env.get("FINAL_JANELA_MAX_MIN") || "5");
-const FINAL_JANELA_MIN_MIN = Number(Deno.env.get("FINAL_JANELA_MIN_MIN") || "1");
-const FINAL_ENTRADA_PCT = Number(Deno.env.get("FINAL_ENTRADA_PCT") || "0.03");
-const FINAL_CANCELA_PCT = Number(Deno.env.get("FINAL_CANCELA_PCT") || "0.1");
-const FINAL_CANCELA_ATR = Number(Deno.env.get("FINAL_CANCELA_ATR") || "0.15");
-const FINAL_PREFILTRO_PCT = Number(Deno.env.get("FINAL_PREFILTRO_PCT") || "0.4");
-const FINAL_MAX_POR_RODADA = Number(Deno.env.get("FINAL_MAX_POR_RODADA") || "3");
-const FINAL_MAX_CAND = Number(Deno.env.get("FINAL_MAX_CAND") || "8");
+const FINAL_JANELA_MAX_MIN = numEnv("FINAL_JANELA_MAX_MIN", "5");
+const FINAL_JANELA_MIN_MIN = numEnv("FINAL_JANELA_MIN_MIN", "1");
+const FINAL_ENTRADA_PCT = numEnv("FINAL_ENTRADA_PCT", "0.03");
+const FINAL_CANCELA_PCT = numEnv("FINAL_CANCELA_PCT", "0.1");
+const FINAL_CANCELA_ATR = numEnv("FINAL_CANCELA_ATR", "0.15");
+const FINAL_PREFILTRO_PCT = numEnv("FINAL_PREFILTRO_PCT", "0.4");
+const FINAL_MAX_POR_RODADA = numEnv("FINAL_MAX_POR_RODADA", "3");
+const FINAL_MAX_CAND = numEnv("FINAL_MAX_CAND", "8");
 // V41: cluster/rotação — a partir de quantas moedas "chegando" juntas no pool vale avisar que pode ser o
 // mercado todo se movendo (não edge da moeda específica).
-const CLUSTER_ALERTA_MIN = Number(Deno.env.get("CLUSTER_ALERTA_MIN") || "4");
-const FINAL_PREPARE_MAX_MIN = Number(Deno.env.get("FINAL_PREPARE_MAX_MIN") || "10");
-const FINAL_PREPARE_DIST_PCT = Number(Deno.env.get("FINAL_PREPARE_DIST_PCT") || "0.15");
-const FINAL_PREPARE_MAX = Number(Deno.env.get("FINAL_PREPARE_MAX") || "3");
-const FINAL_PREPARE_FOLGA_CONF = Number(Deno.env.get("FINAL_PREPARE_FOLGA_CONF") || "1");
-const FINAL_PROXIMA_DIST_PCT = Number(Deno.env.get("FINAL_PROXIMA_DIST_PCT") || "0.3");
+const CLUSTER_ALERTA_MIN = numEnv("CLUSTER_ALERTA_MIN", "4");
+const FINAL_PREPARE_MAX_MIN = numEnv("FINAL_PREPARE_MAX_MIN", "10");
+const FINAL_PREPARE_DIST_PCT = numEnv("FINAL_PREPARE_DIST_PCT", "0.15");
+const FINAL_PREPARE_MAX = numEnv("FINAL_PREPARE_MAX", "3");
+const FINAL_PREPARE_FOLGA_CONF = numEnv("FINAL_PREPARE_FOLGA_CONF", "1");
+const FINAL_PROXIMA_DIST_PCT = numEnv("FINAL_PROXIMA_DIST_PCT", "0.3");
 const FINAL_PLACAR_ON = (Deno.env.get("FINAL_PLACAR") || "1") !== "0";
 function igualSeguro(a: string, b: string): boolean {
   const ea = new TextEncoder().encode(a), eb = new TextEncoder().encode(b);
@@ -161,6 +173,26 @@ function igualSeguro(a: string, b: string): boolean {
   const n = Math.max(ea.length, eb.length);
   for (let i = 0; i < n; i++) d |= (ea[i] ?? 0) ^ (eb[i] ?? 0);
   return d === 0;
+}
+// Lê uma env var numérica com fallback seguro. `Number(Deno.env.get(X) || "padrao")` só cai no padrão
+// quando a env var está AUSENTE/VAZIA — se alguém digitar um valor inválido no Secret (ex. "8%" em vez
+// de "8"), Number(...) vira NaN e essa NaN se propaga em silêncio por todo comparador (>=, <, etc sempre
+// dão false), desligando filtros e limiares sem nenhum aviso. numEnv() pega esse caso: loga 1x e cai no
+// padrão em vez de deixar a NaN vazar.
+const _numEnvAvisado = new Set<string>();
+function numEnv(nome: string, padrao: string): number {
+  const bruto = Deno.env.get(nome);
+  const def = Number(padrao);
+  if (bruto === undefined || bruto === "") return def;
+  const v = Number(bruto);
+  if (!isFinite(v)) {
+    if (!_numEnvAvisado.has(nome)) {
+      _numEnvAvisado.add(nome);
+      console.log(`⚠️ env var ${nome}="${bruto}" não é um número válido — usando o padrão ${padrao}`);
+    }
+    return def;
+  }
+  return v;
 }
 const FALLBACK_PAIRS = ["BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","ADA-USDT","AVAX-USDT","LINK-USDT","DOT-USDT","LTC-USDT","BCH-USDT","ONE-USDT","SUI-USDT","APT-USDT","ARB-USDT","OP-USDT","INJ-USDT","NEAR-USDT","ATOM-USDT","PEPE-USDT"];
 async function J(r: Response) {
@@ -362,7 +394,7 @@ async function editarTelegram(chatId: number | string, messageId: number, text: 
     return true;
   } catch (e) { console.log("Erro editarTelegram", e); return false; }
 }
-const TOPO_MIN_CHARS = Number(Deno.env.get("TOPO_MIN_CHARS") || "700");
+const TOPO_MIN_CHARS = numEnv("TOPO_MIN_CHARS", "700");
 const BOTAO_TOPO: Botao = { text: "⬆️ Ir ao topo", callback_data: "topo" };
 const DIVISOR = "➖➖➖➖➖➖➖➖➖➖";
 const MINI_DIVISOR = "┄┄┄┄┄┄┄┄┄┄"; // separador leve entre itens de uma lista (mais fino que o DIVISOR, que separa seções)
@@ -559,7 +591,6 @@ function inclinaTxt(info: IndicadorInfo): string {
 async function calcIndicadorLimit(instId: string, limit: number): Promise<IndicadorInfo | null> {
   return calcIndicadorDeCloses(instId, await getCandles(instId, TIMEFRAME, limit));
 }
-const calcIndicador = (instId: string) => calcIndicadorLimit(instId, CANDLES_LIMIT_PADRAO);
 const calcIndicador500 = (instId: string) => calcIndicadorLimit(instId, CANDLES_LIMIT_PRECISO);
 function indicadorTxt(info: IndicadorInfo | null) {
   if (!info) return `Indicador: sem dado`;
@@ -788,7 +819,7 @@ async function ethVar1h(): Promise<number | null> {
   return pct;
 }
 const ETH_DIR_ON = (Deno.env.get("ETH_DIR") || "1") !== "0";
-const ETH_DIR_PCT = Number(Deno.env.get("ETH_DIR_PCT") || "1.5");
+const ETH_DIR_PCT = numEnv("ETH_DIR_PCT", "1.5");
 type FundoFinal = FundoRes & { fo: FoInfo | null; btc: number | null };
 async function fundoFinal(pre: FundoRes, instId: string, foPre?: FoInfo | null): Promise<FundoFinal> {
   const [fo, btc] = await Promise.all([
@@ -1280,8 +1311,8 @@ async function runCompressao(chatId: number | string) {
   msg += `<i>Aviso antecipado, não é entrada: a direção do rompimento não dá pra prever e o 1º cruzamento costuma ser falso. Use /seguir MOEDA pra ser avisado na linha.</i>`;
   await sendTelegram(chatId, cortar(msg), top.length ? botoesAnalisarLista(top.map(({ info }) => info.instId)) : undefined);
 }
-const ALVO_RR = Number(Deno.env.get("ALVO_RR") || "2");
-const STOP_ATR_MULT = Number(Deno.env.get("STOP_ATR_MULT") || "1");
+const ALVO_RR = numEnv("ALVO_RR", "2");
+const STOP_ATR_MULT = numEnv("STOP_ATR_MULT", "1");
 type StopAlvo = { stop: number; alvo: number; riscoPct: number; retornoPct: number };
 function calcStopAlvo(lado: "long" | "short", preco: number, topo: number, fundo: number, atr: number): StopAlvo | null {
   if (!(atr > 0) || !(preco > 0)) return null;
@@ -1330,21 +1361,6 @@ function motivoDescarte(x: InfoFiltravel, volUsdt: number, checaDist: boolean, l
   if (checaDist && x.distAbs > FILTRO_DIST_MAX_PCT) return "dist";
   if (lado && SERROTE_MAX > 0 && (x.trocas ?? 0) >= SERROTE_MAX) return "serrote";
   return null;
-}
-function filtraCandidatos(infos: (InfoFiltravel | null)[], volMap: Map<string, number>, rotulo: string): InfoFiltravel[] {
-  const validos = infos.filter((x): x is InfoFiltravel => x !== null);
-  const cont: Record<MotivoDescarte, number> = { volume: 0, adx: 0, rsi: 0, dist: 0, serrote: 0 };
-  const passaram = validos.filter((x) => {
-    const m = motivoDescarte(x, volMap.get(x.instId) ?? 0, true);
-    if (m) { cont[m]++; return false; }
-    return true;
-  });
-  console.log(`🧹 ${rotulo}: ${infos.length} no pool, ${validos.length} com dados -> ${passaram.length} passaram | descartadas: volume ${cont.volume}, ADX ${cont.adx}, RSI extremo ${cont.rsi}, distancia>${FILTRO_DIST_MAX_PCT}% ${cont.dist}`);
-  return passaram
-  .map((x) => ({ x, nota: x.distAbs * (ADX_REF / Math.max(x.adx, 1)) }))
-  .sort((a, b) => a.nota - b.nota)
-  .slice(0, TOP_N_CRUZADO)
-  .map((e) => e.x);
 }
 // V36: /oportunidade e /reversao seguem a mesma regra dos alertas — o tipo vem do LADO que o robô pegaria contra o movimento de 24h
 //   oportunidade = a favor do dia · reversão = contra o dia (SHORT em moeda que subiu = virada LONG → SHORT; LONG em moeda que caiu = virada SHORT → LONG)
@@ -1441,6 +1457,12 @@ function ladoDoSetup(info: IndicadorInfo, ap: Aprox | null): "long" | "short" {
 // oportunidade = a favor do dia (LONG em moeda que subiu, SHORT em moeda que caiu); reversão = contra o dia (virada LONG → SHORT ou SHORT → LONG)
 const tipoDoLado = (lado: "long" | "short", pct: number): "oportunidade" | "reversao" =>
   (lado === "long" && pct > 0) || (lado === "short" && pct < 0) ? "oportunidade" : "reversao";
+// V43: zona morta em torno de pct≈0 pra classificar o TIPO do repique (fundo/topo) — o repique por natureza
+// acontece com a moeda devolvendo boa parte do movimento, então o pct de 24h costuma ficar bem perto de zero
+// exatamente nesses casos; sem margem, ruído de rodada cruzava o zero e trocava oportunidade ↔ reversão à toa
+// (mudando a confiança mínima exigida e o bloqueio de BTC). Dentro da zona morta, fica sempre "reversao" (mais
+// conservador — só vira "oportunidade" quando o dia já virou de forma inequívoca).
+const REPIQUE_PCT_ZONA = numEnv("REPIQUE_PCT_ZONA", "2");
 const tipoTxtDe = (tipo: "oportunidade" | "reversao", lado: "long" | "short") =>
   tipo === "oportunidade" ? "🚀 <b>OPORTUNIDADE</b> (continuação)" : `🔄 <b>REVERSÃO</b> — virada ${lado === "short" ? "LONG → SHORT" : "SHORT → LONG"} (moeda esticada)`;
 function classificar(info: IndicadorInfo, pct: number): Setup | null {
@@ -1464,12 +1486,12 @@ function classificar(info: IndicadorInfo, pct: number): Setup | null {
   // era sempre "reversao", mesmo com o dia já virado positivo — agora espelha o bloco SHORT abaixo)
   if (lado === "long" && FUNDO_ON && FUNDO_LIBERA_LONG) {
     const f = info as Partial<InfoFiltravel>;
-    if ((f.ddPico ?? 0) >= FUNDO_QUEDA_MIN && f.bottom && f.bottom.pts >= (f.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN) && !f.bottom.caindoFaca) return { info, pct, lado, tipo: pct > 0 ? "oportunidade" : "reversao", status, fresco, aprox: ap };
+    if ((f.ddPico ?? 0) >= FUNDO_QUEDA_MIN && f.bottom && f.bottom.pts >= (f.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN) && !f.bottom.caindoFaca) return { info, pct, lado, tipo: pct > REPIQUE_PCT_ZONA ? "oportunidade" : "reversao", status, fresco, aprox: ap };
   }
   // espelho: moeda que despencou e repicou até a faixa (dia ainda fraco) mostrando exaustão da alta: repique SHORT
   if (lado === "short" && TOPO_ON) {
     const f = info as Partial<InfoFiltravel>;
-    if ((f.altaVale ?? 0) >= TOPO_ALTA_MIN && f.top && f.top.pts >= (f.top.repique ? Math.max(1, TOPO_PRE_MIN - 1) : TOPO_PRE_MIN) && !f.top.caindoFaca) return { info, pct, lado, tipo: pct < 0 ? "oportunidade" : "reversao", status, fresco, aprox: ap };
+    if ((f.altaVale ?? 0) >= TOPO_ALTA_MIN && f.top && f.top.pts >= (f.top.repique ? Math.max(1, TOPO_PRE_MIN - 1) : TOPO_PRE_MIN) && !f.top.caindoFaca) return { info, pct, lado, tipo: pct < -REPIQUE_PCT_ZONA ? "oportunidade" : "reversao", status, fresco, aprox: ap };
   }
   return null;
 }
@@ -1926,19 +1948,34 @@ async function checarAlertaFinal(
     console.log(`⏱ final ${inst} ${lado} (${modo}): avisado (${modo === "aviso" ? `${hip.distAbs.toFixed(3)}% além` : `${x.dist.toFixed(3)}% da linha`}, faltam ~${finalRestMin()} min, ${destinos.length} chat(s))`);
   }
 }
-// V42: trava simples contra sobreposição do cron — sem isso, se uma rodada demorar mais que o intervalo do
+// V42: trava contra sobreposição do cron — sem isso, se uma rodada demorar mais que o intervalo do
 // cron (1-2 min), a próxima chamada começa em cima da anterior e as duas escrevem no mesmo estado ao mesmo
 // tempo (risco de alerta duplicado / corrida no Supabase). Trava por até CRON_LOCK_TIMEOUT_MS; se destravar()
 // falhar (crash no meio da rodada), ela expira sozinha depois desse tempo, então nunca fica travado pra sempre.
+// V45: virou compare-and-swap de verdade — antes era ler → checar em memória → escrever (2 chamadas separadas),
+// então duas rodadas quase simultâneas podiam ler as duas "livre" antes de qualquer uma escrever. Agora é 1
+// UPDATE só com o prazo no WHERE (o Postgres serializa updates concorrentes na mesma linha — só quem realmente
+// casar o WHERE depois da outra commitar é que ganha a trava); a 1ª vez que a linha ainda não existe cai num
+// INSERT, e se duas rodadas colidirem nesse INSERT a chave duplicada decide sozinha quem perdeu.
 const CRON_LOCK_ROW = "_CRON_LOCK_";
-const CRON_LOCK_TIMEOUT_MS = Number(Deno.env.get("CRON_LOCK_TIMEOUT_MS") || "110000");
+const CRON_LOCK_TIMEOUT_MS = numEnv("CRON_LOCK_TIMEOUT_MS", "110000");
 async function travarCron(SB: any): Promise<boolean> {
   try {
-    const { data: r } = await SB.from(TAB).select("last_status").eq("instid", CRON_LOCK_ROW).maybeSingle();
-    const preso = Number(r?.last_status) || 0;
-    if (preso && Date.now() - preso < CRON_LOCK_TIMEOUT_MS) return false;
-    await upsertLinha(SB, CRON_LOCK_ROW, { last_status: String(Date.now()) });
-    return true;
+    const agora = Date.now();
+    const cutoff = String(agora - CRON_LOCK_TIMEOUT_MS);
+    const { data: upd, error: eUpd } = await SB.from(TAB)
+      .update({ last_status: String(agora) })
+      .eq("instid", CRON_LOCK_ROW)
+      .lt("last_status", cutoff)
+      .select("instid");
+    if (eUpd) throw eUpd;
+    if (upd && upd.length) return true;
+    // ninguém travado agora: ou a linha não existe ainda (1ª rodada), ou já está travada dentro do prazo
+    // (update não bateu no WHERE). Tenta criar a linha; se já existir (corrida no insert), perdeu a trava.
+    const { error: eIns } = await SB.from(TAB).insert({ instid: CRON_LOCK_ROW, last_status: String(agora) });
+    if (!eIns) return true;
+    if (/duplicate|already exists|23505/i.test(String(eIns.message || eIns.code || ""))) return false;
+    throw eIns;
   } catch (e) { console.log("⚠️ erro travando cron (seguindo sem trava)", e); return true; }
 }
 async function destravarCron(SB: any) {
@@ -2120,10 +2157,10 @@ async function runAlertaProativo() {
   await salvarEstado(SB);
   await processarAutoApagar(SB).catch((e) => console.log("❌ erro autoapagar", e));
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
-  await extrasV13(SB, poolInfoMap, posMap);
+  await extrasV13(SB, posMap);
   } finally { await destravarCron(SB); }
 }
-const X_TZ_OFFSET_H = Number(Deno.env.get("TZ_OFFSET_H") || "-3");
+const X_TZ_OFFSET_H = numEnv("TZ_OFFSET_H", "-3");
 const X_JANELA_FORTE = 1.15;
 const X_JANELA_FRACA = 0.85;
 const X_ADX_FORTE = 25;
@@ -2212,11 +2249,6 @@ function xDistancia(preco: number, topo: number, fundo: number) {
   if (preco < fundo) return { distAbs: ((fundo - preco) / fundo) * 100, regiao: "abaixo, já cruzou" };
   const dT = ((topo - preco) / preco) * 100, dF = ((preco - fundo) / preco) * 100;
   return dT <= dF ? { distAbs: dT, regiao: "dentro, perto do topo" } : { distAbs: dF, regiao: "dentro, perto do fundo" };
-}
-function xDur(min: number) {
-  const m = Math.max(0, Math.round(min));
-  if (m < 60) return `${m} min`;
-  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`;
 }
 const xHH = (h: number) => `${String(h).padStart(2, "0")}h`;
 type XPerfil = { idx: number[]; dias: number; tipo: string; geradoEm: number };
@@ -2386,8 +2418,8 @@ async function registrarAlerta(SB: any, c: Setup, conf: number | null = null) {
     }, conf);
   } catch (e) { console.log("⚠️ registrarAlerta erro", e); }
 }
-const TAXA_TAKER_PCT = Number(Deno.env.get("TAXA_TAKER_PCT") || "0.06");
-const TAXA_IDA_VOLTA_PCT = Number(Deno.env.get("TAXA_IDA_VOLTA_PCT") || String(TAXA_TAKER_PCT * 2));
+const TAXA_TAKER_PCT = numEnv("TAXA_TAKER_PCT", "0.06");
+const TAXA_IDA_VOLTA_PCT = numEnv("TAXA_IDA_VOLTA_PCT", String(TAXA_TAKER_PCT * 2));
 function retornoLog(r: any, h: number): number | null {
   const p = r[`preco_${h}h`], p0 = r.preco;
   if (p == null || p0 == null || Number(p0) <= 0) return null;
@@ -2396,7 +2428,7 @@ function retornoLog(r: any, h: number): number | null {
 }
 const PLACAR_ENTRADA_ON = (Deno.env.get("PLACAR_ENTRADA") || "1") !== "0";
 const ehFinalLog = (r: any) => String(r?.status || "").includes("VAI FECHAR");
-const ENTRADA_MAX_CANDLES = Number(Deno.env.get("ENTRADA_MAX_CANDLES") || "8");
+const ENTRADA_MAX_CANDLES = numEnv("ENTRADA_MAX_CANDLES", "8");
 let _placarTemEntrada = true;
 type EntradaRes = { st: "pendente" } | { st: "nao_entrou" | "contra" } | { st: "entrou"; preco: number; emMs: number };
 function achaEntrada(d: XVelas, jd: { suprema: number; j6: number }[], r: any): EntradaRes {
@@ -2989,6 +3021,20 @@ const CONFIANCA_TOTAL_MIN = -31;
 const CONFIANCA_TOTAL_MAX = 24;
 const confiancaDe = (total: number) =>
   Math.max(0, Math.min(10, Math.round(((total - CONFIANCA_TOTAL_MIN) * 10) / (CONFIANCA_TOTAL_MAX - CONFIANCA_TOTAL_MIN))));
+// V45: autoconferência da escala — CONFIANCA_TOTAL_MIN/MAX acima foram calculados na mão somando o pior/melhor
+// caso de todos os add() de pontuar(); se algum dia um peso mudar (ex.: funding de -2 pra -3) sem recalcular
+// esses dois números, a escala 0-10 desalinha em silêncio (satura em 0 ou 10 igual ao bug que o V43 corrigiu).
+// Só loga quando o total observado bate um recorde fora da faixa assumida — 1x por recorde, sem spam.
+let _confExtremoMin = CONFIANCA_TOTAL_MIN, _confExtremoMax = CONFIANCA_TOTAL_MAX;
+function checarDerivaConfianca(total: number) {
+  if (total < CONFIANCA_TOTAL_MIN && total < _confExtremoMin) {
+    _confExtremoMin = total;
+    console.log(`⚠️ pontuar(): total ${total} abaixo do piso assumido (CONFIANCA_TOTAL_MIN=${CONFIANCA_TOTAL_MIN}) — recalcule as constantes (comentário V43 acima de CONFIANCA_TOTAL_MIN/MAX)`);
+  } else if (total > CONFIANCA_TOTAL_MAX && total > _confExtremoMax) {
+    _confExtremoMax = total;
+    console.log(`⚠️ pontuar(): total ${total} acima do teto assumido (CONFIANCA_TOTAL_MAX=${CONFIANCA_TOTAL_MAX}) — recalcule as constantes (comentário V43 acima de CONFIANCA_TOTAL_MIN/MAX)`);
+  }
+}
 const confEmoji = (n: number) => (n >= CONF_VERDE ? "🟢" : n >= CONF_AMARELO ? "🟡" : "🔴");
 function pontuar(x: CtxPontos) {
   const { info, lado, adx, adxDif, rsi, volUsdt, trocas, h1, btcAdx, perfil, fo, volRatio, chegadaForte, apChega, tipo, pct24, bottom, top, btcVar } = x;
@@ -3113,6 +3159,7 @@ function pontuar(x: CtxPontos) {
   }
   if (TOPO_ON && lado === "short" && topoOk(top)) add(2, `sinais de topo (${top!.conf}/10)${top!.repique ? " ⭐ repique rejeitado na faixa" : ": alta esgotando"}, virada SHORT com apoio`);
   const total = motivos.reduce((s, m) => s + m.pts, 0);
+  checarDerivaConfianca(total);
   const veredito = total >= ANALISE_VERDE ? "🟢 <b>FAVORÁVEL</b>" : total >= ANALISE_AMARELO ? "🟡 <b>COM ATENÇÃO</b>" : "🔴 <b>EVITAR / ESPERAR</b>";
   return { motivos, total, veredito, conf: confiancaDe(total) };
 }
@@ -3159,7 +3206,10 @@ async function registrarAntecipacao(SB: any, c: Setup, chats: string[]) {
   try {
     const ap = c.aprox;
     if (!ap) return;
-    const { data: pend } = await SB.from(ANTEC_TABELA).select("id").eq("instid", c.info.instId).is("resultado", null).limit(1);
+    // V45: dedupe por moeda+lado (antes era só por moeda) — uma previsão pendente de LONG não bloqueia mais o
+    // registro de uma aproximação nova de SHORT na mesma moeda (raro, já que só existe 1 `aprox` por vez — a
+    // linha mais próxima — mas evita perder o registro se algum dia isso deixar de valer).
+    const { data: pend } = await SB.from(ANTEC_TABELA).select("id").eq("instid", c.info.instId).eq("lado", c.lado).is("resultado", null).limit(1);
     if (pend && pend.length) return;
     // V41: grava também o ATR% do momento (distância normalizada pela volatilidade típica da moeda), pra dar pra
     // calibrar ANTEC_DIST_MAX_ATR sozinho depois (não só ANTEC_DIST_MAX_PCT). Exige a coluna atr_pct (numeric,
@@ -3230,8 +3280,7 @@ async function checarAntecipacoes(SB: any, poolInfoMap: Map<string, IndicadorInf
 }
 async function montarCalibracao(SB: any, dias: number): Promise<string> {
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
-  const { data, error } = await SB.from(ANTEC_TABELA).select("*").gt("criado_em", desde).not("resultado", "is", null).limit(2000);
-  if (error || !data || !data.length) return "";
+  const { data, error } = await SB.from(ANTEC_TABELA).select("*").gt("criado_em", desde).not("resultado", "is", null).order("criado_em", { ascending: false }).limit(2000);
   const rows = data as any[];
   const conta = (res: string) => rows.filter((r) => r.resultado === res).length;
   const cruzou = rows.filter((r) => r.resultado === "cruzou");
@@ -3269,19 +3318,19 @@ async function montarCalibracao(SB: any, dias: number): Promise<string> {
 // e AJUSTA ANTEC_ETA_MAX_CANDLES / ANTEC_DIST_MAX_PCT sozinho, com a mesma regra de "maior faixa com ≥60% de
 // acerto" que o /calibracao já sugeria — só que agora aplica, em vez de só sugerir. Avisa o dono quando muda algo.
 const AUTO_CALIB_ON = (Deno.env.get("AUTO_CALIB") || "1") !== "0";
-const AUTO_CALIB_INTERVALO_H = Number(Deno.env.get("AUTO_CALIB_INTERVALO_H") || "24");
-const AUTO_CALIB_DIAS = Number(Deno.env.get("AUTO_CALIB_DIAS") || "14");
+const AUTO_CALIB_INTERVALO_H = numEnv("AUTO_CALIB_INTERVALO_H", "24");
+const AUTO_CALIB_DIAS = numEnv("AUTO_CALIB_DIAS", "14");
 const AUTO_CALIB_ROW = "_auto_calib_antecipacao";
 // V42: limites de segurança — mesmo com amostra pequena/enviesada, a auto-calibração nunca pode levar os
 // parâmetros pra fora dessa faixa, e o tamanho do passo por ciclo é limitado (evita salto brusco de uma vez).
-const ANTEC_ETA_MIN_LIM = Number(Deno.env.get("ANTEC_ETA_MIN_LIM") || "2");
-const ANTEC_ETA_MAX_LIM = Number(Deno.env.get("ANTEC_ETA_MAX_LIM") || "15");
-const ANTEC_ETA_PASSO_MAX = Number(Deno.env.get("ANTEC_ETA_PASSO_MAX") || "3");
-const ANTEC_DIST_MIN_LIM = Number(Deno.env.get("ANTEC_DIST_MIN_LIM") || "0.2");
-const ANTEC_DIST_MAX_LIM = Number(Deno.env.get("ANTEC_DIST_MAX_LIM") || "3");
-const ANTEC_ATR_MIN_LIM = Number(Deno.env.get("ANTEC_ATR_MIN_LIM") || "0.5");
-const ANTEC_ATR_MAX_LIM = Number(Deno.env.get("ANTEC_ATR_MAX_LIM") || "3");
-const ANTEC_CALIB_PASSO_PCT = Number(Deno.env.get("ANTEC_CALIB_PASSO_PCT") || "30");
+const ANTEC_ETA_MIN_LIM = numEnv("ANTEC_ETA_MIN_LIM", "2");
+const ANTEC_ETA_MAX_LIM = numEnv("ANTEC_ETA_MAX_LIM", "15");
+const ANTEC_ETA_PASSO_MAX = numEnv("ANTEC_ETA_PASSO_MAX", "3");
+const ANTEC_DIST_MIN_LIM = numEnv("ANTEC_DIST_MIN_LIM", "0.2");
+const ANTEC_DIST_MAX_LIM = numEnv("ANTEC_DIST_MAX_LIM", "3");
+const ANTEC_ATR_MIN_LIM = numEnv("ANTEC_ATR_MIN_LIM", "0.5");
+const ANTEC_ATR_MAX_LIM = numEnv("ANTEC_ATR_MAX_LIM", "3");
+const ANTEC_CALIB_PASSO_PCT = numEnv("ANTEC_CALIB_PASSO_PCT", "30");
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 let _calibRestaurada = false;
 // V42: as três variáveis só existem em memória — sem restaurar, todo cold start (deploy novo, isolate
@@ -3307,7 +3356,7 @@ async function autoCalibrarAntecipacao(SB: any) {
     const ultimo = row?.last_status ? Number(JSON.parse(row.last_status).t) || 0 : 0;
     if (Date.now() - ultimo < AUTO_CALIB_INTERVALO_H * 3600000) return;
     const desde = new Date(Date.now() - AUTO_CALIB_DIAS * 86400000).toISOString();
-    const { data, error } = await SB.from(ANTEC_TABELA).select("*").gt("criado_em", desde).not("resultado", "is", null).limit(2000);
+    const { data, error } = await SB.from(ANTEC_TABELA).select("*").gt("criado_em", desde).not("resultado", "is", null).order("criado_em", { ascending: false }).limit(2000);
     const marcarRodou = async () => upsertLinha(SB, AUTO_CALIB_ROW, { last_status: JSON.stringify({ t: Date.now(), eta: ANTEC_ETA_MAX_CANDLES, dist: ANTEC_DIST_MAX_PCT, atr: ANTEC_DIST_MAX_ATR }) });
     if (error || !data || data.length < ANTEC_CALIB_MIN) { await marcarRodou(); return; }
     const rows = data as any[];
@@ -3388,21 +3437,29 @@ const forcaLinha = (x: { adx?: number; adxAntes?: number; rsi?: number }): strin
   return `💪 ADX ${x.adx.toFixed(1)} ${d > 0.5 ? "↗" : d < -0.5 ? "↘" : "→"} · RSI ${x.rsi.toFixed(0)}\n`;
 };
 const TAB = "alertas_indicador";
+// V46: antes era select → depois insert OU update (2 chamadas), a mesma corrida "ler→checar→escrever"
+// que o V45 corrigiu especificamente pro lock do cron — mas upsertLinha é usada em dezenas de outros
+// lugares (_FUNDO_, _MSG_, _MODO_, _PAUSA_, autoapagar...) que podem receber chamadas concorrentes vindas
+// de callbacks do Telegram. upsert() nativo do Postgres/Supabase faz isso num INSERT ... ON CONFLICT DO
+// UPDATE só, sem a janela de corrida (requer unique constraint em "instid", que a tabela já trata como
+// chave de fato em todo o resto do arquivo).
 async function upsertLinha(SB: any, instid: string, campos: Record<string, unknown>) {
-  const { data: row } = await SB.from(TAB).select("instid").eq("instid", instid).maybeSingle();
-  if (row) await SB.from(TAB).update(campos).eq("instid", instid);
-  else await SB.from(TAB).insert({ instid, ...campos });
+  // Antes o erro do insert/update nem era lido (nenhum dos dois branches checava `.error`), então já era
+  // efetivamente "loga e segue" pra quem chama sem try/catch. Mantém esse contrato aqui dentro em vez de
+  // lançar, pra não mudar o comportamento dos vários call sites que não envolvem isso em try/catch.
+  const { error } = await SB.from(TAB).upsert({ instid, ...campos }, { onConflict: "instid" });
+  if (error) console.log(`⚠️ upsertLinha(${instid}) falhou:`, error.message ?? error);
 }
 const FUNDING_ALTO_PCT = 0.05;
 // V40: OI (open interest) já era buscado (getFundingOI) mas só aparecia como texto — nunca pontuava.
 // OI subindo junto com o preço = posição nova entrando (movimento com "combustível" real).
 // OI caindo com o preço subindo = short squeeze fechando posição alavancada: sobe rápido, mas tende a perder força sem gente nova entrando.
-const OI_SUBINDO_PCT = Number(Deno.env.get("OI_SUBINDO_PCT") || "2");
-const OI_CAINDO_PCT = Number(Deno.env.get("OI_CAINDO_PCT") || "-2");
+const OI_SUBINDO_PCT = numEnv("OI_SUBINDO_PCT", "2");
+const OI_CAINDO_PCT = numEnv("OI_CAINDO_PCT", "-2");
 // V41: CVD/desequilíbrio do book. CVD "puro" (soma de trades agressores) exigiria assinar o stream de trades,
 // pesado demais pra rodar em toda moeda do pool a cada rodada; em vez disso usa a profundidade do livro agora
 // (bid vs ask nos primeiros níveis) como proxy — mesma ideia (pressão compradora x vendedora), mais leve.
-const BOOK_IMB_MIN_PCT = Number(Deno.env.get("BOOK_IMB_MIN_PCT") || "15");
+const BOOK_IMB_MIN_PCT = numEnv("BOOK_IMB_MIN_PCT", "15");
 async function getBookImbalance(instId: string): Promise<number | null> {
   try {
     const sym = instId.replace("-", "");
@@ -3470,13 +3527,16 @@ async function fundingTendencia(instId: string, fo: { funding: number | null; oi
 // outras. Usa o próprio histórico de antecipações (antecipacoes_log) da moeda: "cruzou" conta como acerto,
 // "contra"/"recuou" como erro. Só ajusta com amostra mínima, pra não reagir a 2-3 casos isolados.
 type ConfiabInfo = { pts: number; taxa: number; n: number };
-const CONFIAB_MIN_AMOSTRA = Number(Deno.env.get("CONFIAB_MIN_AMOSTRA") || "6");
+const CONFIAB_MIN_AMOSTRA = numEnv("CONFIAB_MIN_AMOSTRA", "6");
+// V45: janela configurável (antes fixa em 20). Nunca menor que CONFIAB_MIN_AMOSTRA — senão uma configuração
+// errada (janela < mínimo) faria a amostra nunca bater o mínimo e a função sempre voltar null.
+const CONFIAB_JANELA_N = Math.max(numEnv("CONFIAB_JANELA_N", "20"), CONFIAB_MIN_AMOSTRA);
 const CONFIAB_PTS = 1;
 async function confiabilidadeMoeda(instId: string): Promise<ConfiabInfo | null> {
   try {
     const SB = getSupabase();
     if (!SB) return null;
-    const { data } = await SB.from(ANTEC_TABELA).select("resultado").eq("instid", instId).not("resultado", "is", null).order("criado_em", { ascending: false }).limit(20);
+    const { data } = await SB.from(ANTEC_TABELA).select("resultado").eq("instid", instId).not("resultado", "is", null).order("criado_em", { ascending: false }).limit(CONFIAB_JANELA_N);
     const rows = (data || []) as any[];
     const acertos = rows.filter((r) => r.resultado === "cruzou").length;
     const erros = rows.filter((r) => r.resultado === "contra" || r.resultado === "recuou").length;
@@ -3497,8 +3557,8 @@ async function linhaFundingOI(instId: string): Promise<string> {
   try { const t = fundingOiTxt(await getFundingOI(instId)); return t ? `\n💸 ${t}` : ""; } catch { return ""; }
 }
 const SEG_PREFIXO = "SEG_";
-const SEG_MAX = Number(Deno.env.get("SEG_MAX") || "10");
-const SEG_MAX_GLOBAL = Number(Deno.env.get("SEG_MAX_GLOBAL") || "40");
+const SEG_MAX = numEnv("SEG_MAX", "10");
+const SEG_MAX_GLOBAL = numEnv("SEG_MAX_GLOBAL", "40");
 const SEG_COOLDOWN_MIN = 60;
 type Seguida = { chat: string; inst: string; row: any };
 function parseSeg(row: any): Seguida | null {
@@ -3591,8 +3651,8 @@ async function checarSeguidas(SB: any) {
   });
 }
 const RESUMO_ON = (Deno.env.get("RESUMO") || "1") !== "0";
-const RESUMO_MANHA_H = Number(Deno.env.get("RESUMO_MANHA_H") || "8");
-const RESUMO_NOITE_H = Number(Deno.env.get("RESUMO_NOITE_H") || "21");
+const RESUMO_MANHA_H = numEnv("RESUMO_MANHA_H", "8");
+const RESUMO_NOITE_H = numEnv("RESUMO_NOITE_H", "21");
 const _ultimoResumo: Record<string, string> = {};
 function xJanelasFortes(p: XPerfil): { ini: number; fim: number }[] {
   const forte = p.idx.map((v) => v >= X_JANELA_FORTE);
@@ -3688,7 +3748,7 @@ async function runResumo(chatId: number | string) {
   await sendTelegram(chatId, await montarResumoManha(SB, chatId));
   await sendTelegram(chatId, await montarResumoNoite(SB, chatId));
 }
-async function extrasV13(SB: any, poolInfoMap: Map<string, IndicadorInfo>, posMap: Map<string, Pos[] | null>) {
+async function extrasV13(SB: any, posMap: Map<string, Pos[] | null>) {
   const partes: [string, () => Promise<void>][] = [
     ["placar", () => conferirPlacar(SB)],
     ["seguidas", () => checarSeguidas(SB)],
@@ -3735,8 +3795,8 @@ async function blofinPrivado(path: string, cred: Cred): Promise<any[]> {
 }
 
 const SILENCIO_ON = (Deno.env.get("SILENCIO") || "1") !== "0";
-const SILENCIO_INI_H = Number(Deno.env.get("SILENCIO_INI_H") || "3");
-const SILENCIO_FIM_H = Number(Deno.env.get("SILENCIO_FIM_H") || "6");
+const SILENCIO_INI_H = numEnv("SILENCIO_INI_H", "3");
+const SILENCIO_FIM_H = numEnv("SILENCIO_FIM_H", "6");
 const SILENCIO_PROTECAO = (Deno.env.get("SILENCIO_PROTECAO") || "1") !== "0";
 function emSilencio(): boolean {
   if (!SILENCIO_ON) return false;
@@ -3844,7 +3904,7 @@ function sugestaoPosicao(p: Pos, info: IndicadorInfo & { adx?: number; rsi?: num
   if (alvo && alvo !== p.lado) return { emoji: "🟠", titulo: "Chegando na linha OPOSTA à posição", contra: false, dica: `Se uma vela fechar além dela, o robô vira pra ${oposto}. Considere realizar parte ou apertar o stop antes${forca ? ". " + forca : ""}.` };
   return { emoji: "🟡", titulo: "Preço dentro das linhas, sem sinal", contra: false, dica: `O robô mantém a posição dentro da faixa e só vira se uma vela fechar ${longP ? "abaixo" : "acima"} de ${fmtPrice(longP ? info.fundo : info.topo)}. Mantenha o stop.` };
 }
-const STOP_ATR_RESERVA = Number(Deno.env.get("STOP_ATR_RESERVA") || "2");
+const STOP_ATR_RESERVA = numEnv("STOP_ATR_RESERVA", "2");
 function stopAlvoPosTxt(p: Pos, inf: { topo: number; fundo: number; atr?: number }): string {
   const atr = typeof inf.atr === "number" ? inf.atr : 0;
   if (!(atr > 0) || !(p.entrada > 0)) return "";
@@ -3912,8 +3972,8 @@ async function checarPosicoesChat(SB: any, chat: string, posList: Pos[] | null) 
 }
 
 const PROT_LUCRO_ON = (Deno.env.get("PROT_LUCRO") || "1") !== "0";
-const TRAIL_ATR_MULT = Number(Deno.env.get("TRAIL_ATR_MULT") || "2");
-const ESTICADO_RSI = Number(Deno.env.get("ESTICADO_RSI") || "80");
+const TRAIL_ATR_MULT = numEnv("TRAIL_ATR_MULT", "2");
+const ESTICADO_RSI = numEnv("ESTICADO_RSI", "80");
 const ESTICADO_FOLGA_RSI = 8;
 type Trail = { n: number; stop: number; travaPct: number; ganhoPct: number };
 function calcTrailing(p: Pos, atr: number): Trail | null {
@@ -3991,7 +4051,7 @@ async function checarProtecaoLucro(SB: any, posMap: Map<string, Pos[] | null>) {
   }));
 }
 const FRACO_POS_ON = (Deno.env.get("FRACO_POS") || "1") !== "0";
-const FRACO_COOLDOWN_MIN = Number(Deno.env.get("FRACO_COOLDOWN_MIN") || "45");
+const FRACO_COOLDOWN_MIN = numEnv("FRACO_COOLDOWN_MIN", "45");
 function nivelEnfraquece(s: Sugestao): 0 | 1 | 2 {
   if (s.titulo.startsWith("Linha virou CONTRA")) return 2;
   if (s.contra || /sem força|perdendo força|OPOSTA/.test(s.titulo)) return 1;
@@ -4035,7 +4095,7 @@ async function checarEnfraquecimento(SB: any, posMap: Map<string, Pos[] | null>)
     } catch (e) { console.log(`❌ erro enfraquecimento chat ${chat}`, e); }
   }));
 }
-const FONTE_FALLBACK_PCT = Number(Deno.env.get("FONTE_FALLBACK_PCT") || "30");
+const FONTE_FALLBACK_PCT = numEnv("FONTE_FALLBACK_PCT", "30");
 const FONTE_MIN_CHAMADAS = 10;
 async function avisarFonteDados(SB: any) {
   const blofin = _fonte["BloFin"] ?? 0, falhas = _fonte["FALHA"] ?? 0;
@@ -4066,11 +4126,11 @@ async function avisarFonteDados(SB: any) {
 }
 
 const RISCO_ON = (Deno.env.get("RISCO") || "1") !== "0";
-const RISCO_LIQ_PCT = Number(Deno.env.get("RISCO_LIQ_PCT") || "8");
-const RISCO_LIQ_CRITICO_PCT = Number(Deno.env.get("RISCO_LIQ_CRITICO_PCT") || "3");
-const RISCO_PERDA_PCT = Number(Deno.env.get("RISCO_PERDA_PCT") || "30");
-const RISCO_PERDA_CRITICA_PCT = Number(Deno.env.get("RISCO_PERDA_CRITICA_PCT") || "60");
-const RISCO_COOLDOWN_MIN = Number(Deno.env.get("RISCO_COOLDOWN_MIN") || "120");
+const RISCO_LIQ_PCT = numEnv("RISCO_LIQ_PCT", "8");
+const RISCO_LIQ_CRITICO_PCT = numEnv("RISCO_LIQ_CRITICO_PCT", "3");
+const RISCO_PERDA_PCT = numEnv("RISCO_PERDA_PCT", "30");
+const RISCO_PERDA_CRITICA_PCT = numEnv("RISCO_PERDA_CRITICA_PCT", "60");
+const RISCO_COOLDOWN_MIN = numEnv("RISCO_COOLDOWN_MIN", "120");
 function distLiqPct(p: Pos): number | null {
   if (!(p.liq > 0) || !(p.mark > 0)) return null;
   return (p.lado === "long" ? (p.mark - p.liq) : (p.liq - p.mark)) / p.mark * 100;
@@ -4193,7 +4253,7 @@ const horaLocal = (ms: number) => new Date(ms + X_TZ_OFFSET_H * 3600000).toISOSt
 async function heartbeat(SB: any, txt: string) {
   try { await upsertLinha(SB, "_CRON_", { last_status: txt, last_alert_at: new Date().toISOString() }); } catch { }
 }
-const CRON_AVISO_MIN = Number(Deno.env.get("CRON_AVISO_MIN") || "20");
+const CRON_AVISO_MIN = numEnv("CRON_AVISO_MIN", "20");
 async function avisarCronParado(SB: any) {
   try {
     const { data: r } = await SB.from(TAB).select("last_alert_at").eq("instid", "_CRON_").maybeSingle();
@@ -4235,7 +4295,7 @@ async function runPausar(chatId: number | string, arg: string) {
   _pausas.set(String(chatId), ate);
   await sendTelegram(chatId, `⏸ <b>Alertas pausados por ${h}h</b> (até ${horaLocal(ate)}).\n${protecao}Para voltar antes: /retomar.`);
 }
-const CRON_ALERTA_MIN = Number(Deno.env.get("CRON_ALERTA_MIN") || "15");
+const CRON_ALERTA_MIN = numEnv("CRON_ALERTA_MIN", "15");
 async function runStatus(chatId: number | string) {
   const SB = getSupabase();
   const teste = async (nome: string, fn: () => Promise<void>) => {
@@ -4372,7 +4432,7 @@ function montarConfig(): string {
   m += `📏 <b>Placar</b>: entrada pelo fechamento da vela do cruzamento ${on(PLACAR_ENTRADA_ON && _placarTemEntrada)}${PLACAR_ENTRADA_ON && !_placarTemEntrada ? " (faltam as colunas: rode o ALTER TABLE V30)" : ""} · cruzamento vale até ${ENTRADA_MAX_CANDLES} velas (${ENTRADA_MAX_CANDLES * TF_MIN} min) depois do aviso\n\n`;
   m += `⏱ <b>V32 · alerta dos minutos finais</b> (${on(FINAL_ON)})\n• 🚨 janela: de ${FINAL_JANELA_MAX_MIN} a ${FINAL_JANELA_MIN_MIN} min antes do fechamento da vela ${TIMEFRAME} (cron a cada 1–2 min)\n• avisa se o preço já está ${FINAL_ENTRADA_PCT}%+ além da linha projetada · cancela só se recuar ${FINAL_CANCELA_PCT}% (ou ${FINAL_CANCELA_ATR}×ATR) pra dentro (histerese)\n• 🕒 PREPARE: de ${FINAL_PREPARE_MAX_MIN} a ${FINAL_JANELA_MAX_MIN} min antes, moeda a ≤ ${FINAL_PREPARE_DIST_PCT}% da linha e chegando (máx ${FINAL_PREPARE_MAX} por rodada, confiança mín. −${FINAL_PREPARE_FOLGA_CONF})\n• 🔜 se a vela fechar sem cruzar mas seguir a ≤ ${FINAL_PROXIMA_DIST_PCT}% da linha e chegando, avisa que a chance passa pra próxima vela\n• ⚡ janela forte de horário no fechamento · placar próprio no /placar (${on(FINAL_PLACAR_ON)})\n• pré-filtro ${FINAL_PREFILTRO_PCT}% da linha · máx ${FINAL_MAX_POR_RODADA} por rodada · confirma ✅/❌ no fechamento\n\n`;
   m += `🛡️ <b>V29</b>\n• filtro BTC: ${on(BTC_DIR_ON)} (±${BTC_DIR_PCT}%/h pontua) · SHORT de reversão barrado com BTC ≥ +${BTC_BLOQ_REV_PCT}%/h${BTC_BLOQ_REV_PCT > 0 ? "" : " (desligado)"}\n• webhook: ${WEBHOOK_SECRET ? "com secret_token ✅" : "SEM secret_token ⚠️"} · cron: ${CRON_SO_HEADER ? "só por header ✅" : "aceita segredo na URL ⚠️"}\n• anti-repetição salva no Supabase\n\n`;
-  m += `📐 <b>V36 · inclinação e compressão</b>\n• inclinação da faixa (${INCLINA_JAN} velas, em velas típicas por vela): forte ≥ ${INCLINA_FORTE} (−2 contra) · moderada ≥ ${INCLINA_MOD} (−1 contra, +1 a favor) · plana ≤ ${INCLINA_PLANA} · virada com sinais de fundo/topo: penalidade aliviada\n• 1º cruzamento em faixa comprimida sem volume ≥ ${VOL_ACEL_RATIO}×: −1\n• 🗜️ radar de compressão (${on(COMPRESS_ON)}): faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica (muito: ≤ ${Math.round(COMPRESS_REL * 100)}%) · volume ≥ ${COMPRESS_VOL_MIN}× · confiança ≥ ${COMPRESS_CONF_MIN}/10 · rodízio de ${COMPRESS_ROT_N} pares por rodada · cooldown ${COMPRESS_COOLDOWN_MIN} min · máx ${COMPRESS_MAX_POR_RODADA} por rodada · entra no /placar (lado do 1º fechamento fora da faixa, em até ${ENTRADA_MAX_CANDLES * TF_MIN} min)\n• ⭐ repique nos dois lados (SHORT no radar de topo · LONG no radar de fundo): bônus +${REPIQUE_BONUS} pt · confiança mín. ${REPIQUE_CONF_MIN}/10 (topo comum ${TOPO_CONF_MIN}) · cooldown ${REPIQUE_COOLDOWN_MIN} min · até ${REPIQUE_MAX_POR_RODADA} por rodada · placar separado por lado\n• 📋 /oportunidade e /reversao: top ${LISTA_POOL_LADO} que mais subiram + top ${LISTA_POOL_LADO} que mais caíram, classificados pelo LADO da virada (igual ao alerta)\n\n`;
+  m += `📐 <b>V36 · inclinação e compressão</b>\n• inclinação da faixa (${INCLINA_JAN} velas, em velas típicas por vela): forte ≥ ${INCLINA_FORTE} (−2 contra) · moderada ≥ ${INCLINA_MOD} (−1 contra, +1 a favor) · plana ≤ ${INCLINA_PLANA} · virada com sinais de fundo/topo: penalidade aliviada\n• 1º cruzamento em faixa comprimida sem volume ≥ ${VOL_ACEL_RATIO}×: −1\n• 🗜️ radar de compressão (${on(COMPRESS_ON)}): faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica (muito: ≤ ${Math.round(COMPRESS_REL * 100)}%) · volume ≥ ${COMPRESS_VOL_MIN}× · confiança ≥ ${COMPRESS_CONF_MIN}/10 · rodízio de ${COMPRESS_ROT_N} pares por rodada · cooldown ${COMPRESS_COOLDOWN_MIN} min · máx ${COMPRESS_MAX_POR_RODADA} por rodada · entra no /placar (lado do 1º fechamento fora da faixa, em até ${ENTRADA_MAX_CANDLES * TF_MIN} min)\n• ⭐ repique nos dois lados (SHORT no radar de topo · LONG no radar de fundo): bônus +${REPIQUE_BONUS} pt · confiança mín. ${REPIQUE_CONF_MIN}/10 (topo comum ${TOPO_CONF_MIN}) · cooldown ${REPIQUE_COOLDOWN_MIN} min · até ${REPIQUE_MAX_POR_RODADA} por rodada · placar separado por lado · tipo (oportunidade/reversão) só considera o dia virado fora de ±${REPIQUE_PCT_ZONA}% (zona morta contra ruído perto de 0%)\n• 📋 /oportunidade e /reversao: top ${LISTA_POOL_LADO} que mais subiram + top ${LISTA_POOL_LADO} que mais caíram, classificados pelo LADO da virada (igual ao alerta)\n\n`;
   m += `🔴 <b>V35 · radar de topo</b> (${on(TOPO_ON)})\n• alta ≥ ${TOPO_ALTA_MIN}% (em 24h ou desde a mínima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_ALTA} · rejeição na faixa após alta ≥ ${TOPO_TOQUE_VALE_MIN}% pontua · confiança ≥ ${TOPO_CONF_MIN}/10 · pré-filtro ≥ ${TOPO_PRE_MIN} pts · cooldown ${TOPO_COOLDOWN_MIN} min\n\n`;
   m += `🟢 <b>V28/V34 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% (em 24h ou desde a máxima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_RECUO} moedas que mais recuaram · toque na faixa após recuo ≥ ${FUNDO_TOQUE_PICO_MIN}% pontua · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n\n`;
   m += `🧭 <b>V26</b>\n• squeeze: faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica · volume das velas ≥ ${VOL_ACEL_RATIO}× (seco ≤ ${VOL_SECO_RATIO}×)\n• alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou passar de 2× o prazo\n• confiança: verde ≥ ${CONF_VERDE}/10 · amarelo ≥ ${CONF_AMARELO}/10\n• modo pump (${on(ESTRAT_PUMP)}): mín. confiança oportunidade ${CONF_MIN_OPORT} · reversão ${CONF_MIN_REVERSAO} · serrote ≥ ${SERROTE_MAX} trocas/4h barra · RSI máx LONG ${FILTRO_RSI_MAX_LONG} · limite ${LIMITE_LADO} por lado\n\n`;
@@ -4383,7 +4443,8 @@ function montarConfig(): string {
   m += `🗓️ <b>Resumos</b> (${on(RESUMO_ON)}): manhã ${RESUMO_MANHA_H}h · noite ${RESUMO_NOITE_H}h\n`;
   m += `⭐ seguidas: ${SEG_MAX} por pessoa\n`;
   m += `📡 Fallback de dados avisa a partir de ${FONTE_FALLBACK_PCT}% das consultas\n`;
-  m += `⏱ Cron: aviso se parar > ${CRON_AVISO_MIN} min (/status alerta > ${CRON_ALERTA_MIN} min)\n\n`;
+  m += `⏱ Cron: aviso se parar > ${CRON_AVISO_MIN} min (/status alerta > ${CRON_ALERTA_MIN} min) · trava contra sobreposição ${(CRON_LOCK_TIMEOUT_MS / 1000).toFixed(0)}s\n`;
+  m += `🎯 Antecipação: auto-calibração ${on(AUTO_CALIB_ON)} a cada ${AUTO_CALIB_INTERVALO_H}h (janela ${AUTO_CALIB_DIAS}d, mín. ${ANTEC_CALIB_MIN} amostras) · confiabilidade por moeda: mín. ${CONFIAB_MIN_AMOSTRA} em até ${CONFIAB_JANELA_N} últimas previsões\n\n`;
   m += `👥 <b>Acesso</b>: ${ALLOWED_CHAT_IDS.length} chat(s) autorizado(s) · ${ALERT_CHAT_IDS.length} recebem alertas${ALERT_EXCLUIR.length ? ` (${ALERT_EXCLUIR.length} excluído(s))` : ""} · ${Object.keys(BLOFIN_USERS).length + (BLOFIN_LEGADO ? 1 : 0)} com chave BloFin\n`;
   m += `🔑 Admin: <b>${ADMIN_CHAT_ID || "não definido"}</b>\n`;
   if (!adminFixo) m += `⚠️ <i>Admin vem do 1º ID de ALLOWED_CHAT_IDS. Fixe ADMIN_CHAT_ID nos Secrets para não mudar se você reordenar a lista.</i>\n`;
