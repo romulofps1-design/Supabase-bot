@@ -1,4 +1,12 @@
-// telegram-bot V41 (V40 + velocidade 🚀🚀/🐢🐢 agora pontua de verdade no pontuar() (antes só era texto); funding
+// telegram-bot V42 (V41 + auto-calibração agora tem limites de segurança (ANTEC_ETA_MIN_LIM/MAX_LIM,
+// ANTEC_DIST_MIN_LIM/MAX_LIM, ANTEC_ATR_MIN_LIM/MAX_LIM) e passo máximo por ciclo — amostra pequena/enviesada
+// não consegue mais empurrar ANTEC_ETA_MAX_CANDLES/ANTEC_DIST_MAX_PCT/ANTEC_DIST_MAX_ATR pra um valor estranho
+// de uma vez; a calibração agora sobrevive a cold start — antes vivia só em memória (as 3 variáveis eram `let`
+// sem persistência) e se perdia silenciosamente a cada novo deploy/isolate reciclado, ficando presa no valor
+// padrão por até AUTO_CALIB_INTERVALO_H horas porque o Supabase ainda marcava "já calibrei hoje"; agora é
+// restaurada do Supabase 1x por isolate antes de qualquer uso; cron agora tem trava contra sobreposição
+// (CRON_LOCK_TIMEOUT_MS) — se uma rodada demorar mais que o intervalo do cron, a próxima chamada não começa
+// em cima da anterior escrevendo o mesmo estado ao mesmo tempo) (V41 = V40 + velocidade 🚀🚀/🐢🐢 agora pontua de verdade no pontuar() (antes só era texto); funding
 // pontua por TENDÊNCIA — esticando rápido rumo ao extremo pesa mais que já estar parado lá há horas; confiabilidade
 // por moeda — pontuação ajustada com o histórico de acerto de cada instId no antecipacoes_log (amostra mínima 6);
 // calibração automática — antes /calibracao só mostrava o erro, agora roda sozinha 1x/dia dentro do cron e ajusta
@@ -62,12 +70,12 @@ const ANTEC_TABELA = "antecipacoes_log";
 const ANTEC_CANCELA_RECUO = Number(Deno.env.get("ANTEC_CANCELA_RECUO") || "1.3");
 const ANTEC_CALIB_MIN = 10;
 const CONF_VERDE = 7;
-const CONF_AMARELO = 5;
+const CONF_AMARELO = 6;
 const ESTRAT_PUMP = (Deno.env.get("ESTRATEGIA_PUMP") || "1") !== "0";
 const FILTRO_RSI_MAX_LONG = Number(Deno.env.get("FILTRO_RSI_MAX_LONG") || "90");
 const SERROTE_MAX = Number(Deno.env.get("SERROTE_MAX") || "4");
 const LIMITE_LADO = Number(Deno.env.get("LIMITE_LADO") || "3");
-const CONF_MIN_OPORT = Number(Deno.env.get("CONF_MIN_OPORT") || "5");
+const CONF_MIN_OPORT = Number(Deno.env.get("CONF_MIN_OPORT") || "6");
 const CONF_MIN_REVERSAO = Number(Deno.env.get("CONF_MIN_REVERSAO") || "7");
 const _confBarrada = new Map<string, number>();
 const FUNDO_ON = (Deno.env.get("FUNDO_RADAR") || "1") !== "0";
@@ -77,7 +85,7 @@ const FUNDO_TOQUE_PICO_MIN = Number(Deno.env.get("FUNDO_TOQUE_PICO_MIN") || "6")
 const ALERT_POOL_RECUO = Number(Deno.env.get("ALERT_POOL_RECUO") || "15");
 const TOPO_ON = (Deno.env.get("TOPO_RADAR") || "1") !== "0";
 const TOPO_ALTA_MIN = Number(Deno.env.get("TOPO_ALTA_MIN") || "10");
-const TOPO_CONF_MIN = Number(Deno.env.get("TOPO_CONF_MIN") || "6");
+const TOPO_CONF_MIN = Number(Deno.env.get("TOPO_CONF_MIN") || "5");
 const TOPO_PRE_MIN = Number(Deno.env.get("TOPO_PRE_MIN") || "5");
 const TOPO_TOQUE_VALE_MIN = Number(Deno.env.get("TOPO_TOQUE_VALE_MIN") || "6");
 const TOPO_COOLDOWN_MIN = Number(Deno.env.get("TOPO_COOLDOWN_MIN") || "240");
@@ -102,20 +110,26 @@ const COMPRESS_PTS_MAX = 12;
 const LISTA_POOL_LADO = Number(Deno.env.get("LISTA_POOL_LADO") || "30");
 // V36: prioridade do REPIQUE SHORT (moeda que despencou, repicou até a faixa e está sendo rejeitada = virada LONG → SHORT a favor da queda)
 const REPIQUE_BONUS = Number(Deno.env.get("REPIQUE_BONUS") || "1");
-const REPIQUE_CONF_MIN = Number(Deno.env.get("REPIQUE_CONF_MIN") || "5");
+const REPIQUE_CONF_MIN = Number(Deno.env.get("REPIQUE_CONF_MIN") || "4");
 const REPIQUE_COOLDOWN_MIN = Number(Deno.env.get("REPIQUE_COOLDOWN_MIN") || "120");
 const REPIQUE_MAX_POR_RODADA = Number(Deno.env.get("REPIQUE_MAX_POR_RODADA") || "3");
 const topoOk = (t?: FundoRes | null) => !!t && t.conf >= (t.repique && !t.caindoFaca ? REPIQUE_CONF_MIN : TOPO_CONF_MIN);
 const fundoOk = (b?: FundoRes | null) => !!b && b.conf >= (b.repique && !b.caindoFaca ? REPIQUE_CONF_MIN : FUNDO_CONF_MIN);
 let _compCursor = 0;
-const FUNDO_CONF_MIN = Number(Deno.env.get("FUNDO_CONF_MIN") || "6");
+const FUNDO_CONF_MIN = Number(Deno.env.get("FUNDO_CONF_MIN") || "5");
 const FUNDO_PRE_MIN = Number(Deno.env.get("FUNDO_PRE_MIN") || "5");
 const FUNDO_LIBERA_LONG = (Deno.env.get("FUNDO_LIBERA_LONG") || "1") !== "0";
 const CONF_MIN_FUNDO_LONG = Number(Deno.env.get("CONF_MIN_FUNDO_LONG") || "6");
 const FUNDO_COOLDOWN_MIN = Number(Deno.env.get("FUNDO_COOLDOWN_MIN") || "240");
 const FUNDO_MAX_POR_RODADA = Number(Deno.env.get("FUNDO_MAX_POR_RODADA") || "2");
 const FUNDO_BTC_QUEDA_PCT = Number(Deno.env.get("FUNDO_BTC_QUEDA_PCT") || "1.5");
-const FUNDO_PTS_MAX = 13;
+// V42: FUNDO_PTS_MAX é o teto real de pontos somando o pré-filtro (calcFundoPre/calcTopoPre, até 13) +
+// o que fundoFinal/topoFinal ainda somam depois (funding até +2, OI até +1, BTC até +1 = até +4). Antes
+// estava em 13 (só o pré-filtro), então qualquer moeda com 13 a 17 pontos aparecia igual, 10/10 — o topo
+// da escala ficava "achatado" e não dava pra diferenciar um sinal forte de um excepcional. FUNDO_CONF_MIN/
+// TOPO_CONF_MIN/REPIQUE_CONF_MIN foram recalculados junto pra continuar exigindo os MESMOS pontos brutos de
+// antes (nenhum alerta que disparava deixa de disparar, e vice-versa) — só o número mostrado ficou exato.
+const FUNDO_PTS_MAX = 17;
 const _fundoAvaliado = new Map<string, number>();
 const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") || "";
 const CRON_SO_HEADER = (Deno.env.get("CRON_SO_HEADER") || "0") === "1";
@@ -1446,10 +1460,11 @@ function classificar(info: IndicadorInfo, pct: number): Setup | null {
   }
   if (seguiu && abs >= ALERT_OPORT_PCT_MIN) return { info, pct, lado, tipo: "oportunidade", status, fresco, aprox: ap };
   if (!seguiu && abs >= ALERT_REV_PCT_MIN) return { info, pct, lado, tipo: "reversao", status, fresco, aprox: ap };
-  // moeda que disparou e devolveu (dia ainda fraco ou levemente positivo) mas recuou forte desde o topo e mostra sinais de fundo: repique LONG
+  // moeda que disparou e devolveu, mostrando sinais de fundo; tipo segue a mesma regra do tipoDoLado (V44: antes
+  // era sempre "reversao", mesmo com o dia já virado positivo — agora espelha o bloco SHORT abaixo)
   if (lado === "long" && FUNDO_ON && FUNDO_LIBERA_LONG) {
     const f = info as Partial<InfoFiltravel>;
-    if ((f.ddPico ?? 0) >= FUNDO_QUEDA_MIN && f.bottom && f.bottom.pts >= (f.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN) && !f.bottom.caindoFaca) return { info, pct, lado, tipo: "reversao", status, fresco, aprox: ap };
+    if ((f.ddPico ?? 0) >= FUNDO_QUEDA_MIN && f.bottom && f.bottom.pts >= (f.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN) && !f.bottom.caindoFaca) return { info, pct, lado, tipo: pct > 0 ? "oportunidade" : "reversao", status, fresco, aprox: ap };
   }
   // espelho: moeda que despencou e repicou até a faixa (dia ainda fraco) mostrando exaustão da alta: repique SHORT
   if (lado === "short" && TOPO_ON) {
@@ -1911,10 +1926,31 @@ async function checarAlertaFinal(
     console.log(`⏱ final ${inst} ${lado} (${modo}): avisado (${modo === "aviso" ? `${hip.distAbs.toFixed(3)}% além` : `${x.dist.toFixed(3)}% da linha`}, faltam ~${finalRestMin()} min, ${destinos.length} chat(s))`);
   }
 }
+// V42: trava simples contra sobreposição do cron — sem isso, se uma rodada demorar mais que o intervalo do
+// cron (1-2 min), a próxima chamada começa em cima da anterior e as duas escrevem no mesmo estado ao mesmo
+// tempo (risco de alerta duplicado / corrida no Supabase). Trava por até CRON_LOCK_TIMEOUT_MS; se destravar()
+// falhar (crash no meio da rodada), ela expira sozinha depois desse tempo, então nunca fica travado pra sempre.
+const CRON_LOCK_ROW = "_CRON_LOCK_";
+const CRON_LOCK_TIMEOUT_MS = Number(Deno.env.get("CRON_LOCK_TIMEOUT_MS") || "110000");
+async function travarCron(SB: any): Promise<boolean> {
+  try {
+    const { data: r } = await SB.from(TAB).select("last_status").eq("instid", CRON_LOCK_ROW).maybeSingle();
+    const preso = Number(r?.last_status) || 0;
+    if (preso && Date.now() - preso < CRON_LOCK_TIMEOUT_MS) return false;
+    await upsertLinha(SB, CRON_LOCK_ROW, { last_status: String(Date.now()) });
+    return true;
+  } catch (e) { console.log("⚠️ erro travando cron (seguindo sem trava)", e); return true; }
+}
+async function destravarCron(SB: any) {
+  try { await upsertLinha(SB, CRON_LOCK_ROW, { last_status: "0" }); } catch (e) { console.log("⚠️ erro destravando cron", e); }
+}
 async function runAlertaProativo() {
   if (!ALERT_CHAT_IDS.length) { console.log("⚠️ nenhum chat recebe alerta (ALLOWED_CHAT_IDS vazio ou todos em ALERT_EXCLUIR_IDS)"); return; }
   const SB = getSupabase();
   if (!SB) { console.log("⚠️ SUPABASE_URL/KEY nao configurados"); return; }
+  await restaurarCalibracao(SB);
+  if (!(await travarCron(SB))) { console.log("⏭️ rodada anterior do cron ainda em andamento, pulando esta"); return; }
+  try {
   await carregarEstado(SB);
   for (const k of Object.keys(_fonte)) delete _fonte[k];
   await avisarCronParado(SB).catch((e) => console.log("⚠️ erro avisarCronParado", e));
@@ -2085,6 +2121,7 @@ async function runAlertaProativo() {
   await processarAutoApagar(SB).catch((e) => console.log("❌ erro autoapagar", e));
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
   await extrasV13(SB, poolInfoMap, posMap);
+  } finally { await destravarCron(SB); }
 }
 const X_TZ_OFFSET_H = Number(Deno.env.get("TZ_OFFSET_H") || "-3");
 const X_JANELA_FORTE = 1.15;
@@ -2935,7 +2972,23 @@ type CtxPontos = {
   velSinal?: VelSinal; fundingTend?: FundingTend; confiabInst?: ConfiabInfo | null;
   ethAdx?: number | null; ethVar?: number | null; bookImb?: number | null;
 };
-const confiancaDe = (total: number) => Math.max(0, Math.min(10, Math.round(((total + 3) * 10) / 11)));
+// V43: CONFIANCA_TOTAL_MIN/MAX são o piso e o teto reais de `total` em pontuar(), somando TODOS os add()
+// possíveis (1H, ADX, RSI, volume, idade do cruzamento, velocidade, chegada em janela forte, squeeze,
+// inclinação, distância, trocas, BTC/ETH, perfil de janela, funding×2, OI, histórico da moeda, bônus de
+// fundo/topo). O teto real é +24 (SHORT em reversão com funding subindo rápido a favor + sinais de topo com
+// repique + chegada em janela forte) e o piso é -31 (LONG em reversão com tudo contra, incluindo o bônus de
+// fundo indo a -3). A fórmula antiga assumia -3 a +8 — qualquer sinal decente já estourava e travava em
+// 10/10 (ou em 0/10 do lado ruim), achatando a escala bem mais que o caso do FUNDO_PTS_MAX. CONF_MIN_OPORT e
+// CONF_AMARELO subiram de 5 pra 6 pra continuar exigindo (aproximadamente) os mesmos pontos brutos de antes —
+// a escala de 0-10 ficou ~5x mais "grossa" por ponto (55 pontos brutos / 10, contra 11/10 antes), então não
+// dá pra preservar o corte exato ponto a ponto; onde não deu pra bater exato, o ajuste ficou do lado mais
+// permissivo (nunca mais rígido) pra não atrasar alerta que já disparava. CONF_MIN_FUNDO_LONG e
+// CONF_MIN_REVERSAO ficaram com os mesmos números (6 e 7), mas por causa da escala mais larga eles passam a
+// disparar um pouco mais cedo (mais sensível, não menos).
+const CONFIANCA_TOTAL_MIN = -31;
+const CONFIANCA_TOTAL_MAX = 24;
+const confiancaDe = (total: number) =>
+  Math.max(0, Math.min(10, Math.round(((total - CONFIANCA_TOTAL_MIN) * 10) / (CONFIANCA_TOTAL_MAX - CONFIANCA_TOTAL_MIN))));
 const confEmoji = (n: number) => (n >= CONF_VERDE ? "🟢" : n >= CONF_AMARELO ? "🟡" : "🔴");
 function pontuar(x: CtxPontos) {
   const { info, lado, adx, adxDif, rsi, volUsdt, trocas, h1, btcAdx, perfil, fo, volRatio, chegadaForte, apChega, tipo, pct24, bottom, top, btcVar } = x;
@@ -2978,6 +3031,7 @@ function pontuar(x: CtxPontos) {
   else if (idade > ANALISE_TARDE_CANDLES) add(-1, `cruzou há ${idade * TF_MIN} min (já andou)`);
   else add(0, `cruzou há ${idade * TF_MIN} min`);
   if (apChega) add(1, `aproximando da linha: chega em ~${Math.max(1, Math.round(apChega.etaCandles * TF_MIN))} min (estimativa)`);
+  if (chegadaForte) add(1, "chegada estimada dentro de janela historicamente forte de movimento");
   // V41: velocidade de aproximação só pontua quando CONFIRMOU 2 rodadas seguidas (🚀🚀/🐢🐢) — 1 rodada isolada
   // é sinal fraco demais (pode ser ruído), fica só no texto do alerta.
   if (x.velSinal === "acelerando2x") add(1, "🚀🚀 acelerando de verdade rumo à linha (ganhando ritmo 2 rodadas seguidas)");
@@ -3218,6 +3272,34 @@ const AUTO_CALIB_ON = (Deno.env.get("AUTO_CALIB") || "1") !== "0";
 const AUTO_CALIB_INTERVALO_H = Number(Deno.env.get("AUTO_CALIB_INTERVALO_H") || "24");
 const AUTO_CALIB_DIAS = Number(Deno.env.get("AUTO_CALIB_DIAS") || "14");
 const AUTO_CALIB_ROW = "_auto_calib_antecipacao";
+// V42: limites de segurança — mesmo com amostra pequena/enviesada, a auto-calibração nunca pode levar os
+// parâmetros pra fora dessa faixa, e o tamanho do passo por ciclo é limitado (evita salto brusco de uma vez).
+const ANTEC_ETA_MIN_LIM = Number(Deno.env.get("ANTEC_ETA_MIN_LIM") || "2");
+const ANTEC_ETA_MAX_LIM = Number(Deno.env.get("ANTEC_ETA_MAX_LIM") || "15");
+const ANTEC_ETA_PASSO_MAX = Number(Deno.env.get("ANTEC_ETA_PASSO_MAX") || "3");
+const ANTEC_DIST_MIN_LIM = Number(Deno.env.get("ANTEC_DIST_MIN_LIM") || "0.2");
+const ANTEC_DIST_MAX_LIM = Number(Deno.env.get("ANTEC_DIST_MAX_LIM") || "3");
+const ANTEC_ATR_MIN_LIM = Number(Deno.env.get("ANTEC_ATR_MIN_LIM") || "0.5");
+const ANTEC_ATR_MAX_LIM = Number(Deno.env.get("ANTEC_ATR_MAX_LIM") || "3");
+const ANTEC_CALIB_PASSO_PCT = Number(Deno.env.get("ANTEC_CALIB_PASSO_PCT") || "30");
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+let _calibRestaurada = false;
+// V42: as três variáveis só existem em memória — sem restaurar, todo cold start (deploy novo, isolate
+// reciclado) volta em silêncio pro padrão das env vars, enquanto o registro "já calibrei hoje" no Supabase
+// segue impedindo recalcular por até AUTO_CALIB_INTERVALO_H horas. Roda 1x por isolate, bem no início da rodada.
+async function restaurarCalibracao(SB: any) {
+  if (_calibRestaurada) return;
+  _calibRestaurada = true;
+  try {
+    const { data: row } = await SB.from(TAB).select("last_status").eq("instid", AUTO_CALIB_ROW).maybeSingle();
+    if (!row?.last_status) return;
+    const j = JSON.parse(row.last_status);
+    if (isFinite(Number(j.eta))) ANTEC_ETA_MAX_CANDLES = clamp(Math.round(Number(j.eta)), ANTEC_ETA_MIN_LIM, ANTEC_ETA_MAX_LIM);
+    if (isFinite(Number(j.dist))) ANTEC_DIST_MAX_PCT = clamp(Number(j.dist), ANTEC_DIST_MIN_LIM, ANTEC_DIST_MAX_LIM);
+    if (isFinite(Number(j.atr))) ANTEC_DIST_MAX_ATR = clamp(Number(j.atr), ANTEC_ATR_MIN_LIM, ANTEC_ATR_MAX_LIM);
+    console.log(`♻️ calibração restaurada: ETA=${ANTEC_ETA_MAX_CANDLES} DIST=${ANTEC_DIST_MAX_PCT}% ATR=${ANTEC_DIST_MAX_ATR}`);
+  } catch (e) { console.log("⚠️ erro restaurando calibração", e); }
+}
 async function autoCalibrarAntecipacao(SB: any) {
   if (!AUTO_CALIB_ON) return;
   try {
@@ -3226,7 +3308,7 @@ async function autoCalibrarAntecipacao(SB: any) {
     if (Date.now() - ultimo < AUTO_CALIB_INTERVALO_H * 3600000) return;
     const desde = new Date(Date.now() - AUTO_CALIB_DIAS * 86400000).toISOString();
     const { data, error } = await SB.from(ANTEC_TABELA).select("*").gt("criado_em", desde).not("resultado", "is", null).limit(2000);
-    const marcarRodou = async () => upsertLinha(SB, AUTO_CALIB_ROW, { last_status: JSON.stringify({ t: Date.now(), eta: ANTEC_ETA_MAX_CANDLES, dist: ANTEC_DIST_MAX_PCT }) });
+    const marcarRodou = async () => upsertLinha(SB, AUTO_CALIB_ROW, { last_status: JSON.stringify({ t: Date.now(), eta: ANTEC_ETA_MAX_CANDLES, dist: ANTEC_DIST_MAX_PCT, atr: ANTEC_DIST_MAX_ATR }) });
     if (error || !data || data.length < ANTEC_CALIB_MIN) { await marcarRodou(); return; }
     const rows = data as any[];
     const maxC = Math.max(ANTEC_ETA_MAX_CANDLES, 8);
@@ -3253,9 +3335,23 @@ async function autoCalibrarAntecipacao(SB: any) {
       }
     }
     const antes = { eta: ANTEC_ETA_MAX_CANDLES, dist: ANTEC_DIST_MAX_PCT, atr: ANTEC_DIST_MAX_ATR };
-    if (sugEta !== null && sugEta !== ANTEC_ETA_MAX_CANDLES) ANTEC_ETA_MAX_CANDLES = sugEta;
-    if (sugDist !== null && Math.abs(sugDist - ANTEC_DIST_MAX_PCT) / Math.max(ANTEC_DIST_MAX_PCT, 0.01) > 0.1) ANTEC_DIST_MAX_PCT = Math.round(sugDist * 100) / 100;
-    if (sugAtr !== null && Math.abs(sugAtr - ANTEC_DIST_MAX_ATR) / Math.max(ANTEC_DIST_MAX_ATR, 0.01) > 0.1) ANTEC_DIST_MAX_ATR = sugAtr;
+    // V42: toda sugestão passa por dois filtros — (1) nunca sai da faixa absoluta (ANTEC_*_MIN_LIM/MAX_LIM),
+    // (2) mudança por ciclo limitada a ANTEC_ETA_PASSO_MAX velas / ANTEC_CALIB_PASSO_PCT% do valor atual, pra
+    // uma amostra pequena/enviesada não conseguir "puxar" o parâmetro pra um valor estranho de uma vez só.
+    if (sugEta !== null && sugEta !== ANTEC_ETA_MAX_CANDLES) {
+      const alvo = clamp(sugEta, ANTEC_ETA_MIN_LIM, ANTEC_ETA_MAX_LIM);
+      ANTEC_ETA_MAX_CANDLES = Math.round(clamp(alvo, antes.eta - ANTEC_ETA_PASSO_MAX, antes.eta + ANTEC_ETA_PASSO_MAX));
+    }
+    if (sugDist !== null && Math.abs(sugDist - ANTEC_DIST_MAX_PCT) / Math.max(ANTEC_DIST_MAX_PCT, 0.01) > 0.1) {
+      const alvo = clamp(sugDist, ANTEC_DIST_MIN_LIM, ANTEC_DIST_MAX_LIM);
+      const passoMax = antes.dist * (ANTEC_CALIB_PASSO_PCT / 100);
+      ANTEC_DIST_MAX_PCT = Math.round(clamp(alvo, antes.dist - passoMax, antes.dist + passoMax) * 100) / 100;
+    }
+    if (sugAtr !== null && Math.abs(sugAtr - ANTEC_DIST_MAX_ATR) / Math.max(ANTEC_DIST_MAX_ATR, 0.01) > 0.1) {
+      const alvo = clamp(sugAtr, ANTEC_ATR_MIN_LIM, ANTEC_ATR_MAX_LIM);
+      const passoMax = antes.atr * (ANTEC_CALIB_PASSO_PCT / 100);
+      ANTEC_DIST_MAX_ATR = Math.round(clamp(alvo, antes.atr - passoMax, antes.atr + passoMax) * 100) / 100;
+    }
     await marcarRodou();
     if (antes.eta !== ANTEC_ETA_MAX_CANDLES || antes.dist !== ANTEC_DIST_MAX_PCT || antes.atr !== ANTEC_DIST_MAX_ATR) {
       console.log(`🛠️ auto-calibração: ETA ${antes.eta}→${ANTEC_ETA_MAX_CANDLES} velas, DIST ${antes.dist}→${ANTEC_DIST_MAX_PCT}%, ATR ${antes.atr}→${ANTEC_DIST_MAX_ATR} (amostra ${rows.length}, ${comAtr.length} com atr_pct)`);
