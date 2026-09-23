@@ -384,7 +384,7 @@ function compactarExperiente(texto: string): string {
     // radar de fundo/topo/compressão); não pegava "🧭 Confiança: ..." — que é o bloco que sai em TODO alerta
     // automático (checarAlertaFinal/runAlertaProativo) e no /analise, então era o principal motivo de ainda
     // sobrar muito texto no modo Experiente.
-    .replace(/(🧭 [^\n]*\d+\/10[^\n]*(?:\n {3}📊[^\n]*)?)(?:\n {3}[✅⚠️][^\n]*)+/g, "$1")
+    .replace(/(🧭 [^\n]*\d+\/10[^\n]*(?:\nMovimento: [^\n]*)?(?:\n {3}📊[^\n]*)?)(?:\n {3}[✅⚠️][^\n]*)+/g, "$1")
     // "Ligar o robô?": mantém a confirmação (PREPARE/LIGUE AGORA/LIGUE O ROBÔ AGORA/Ainda não/Já cruzou) + a 1ª
     // frase (que já traz a distância/preço/tempo), corta a explicação de regra que vem depois na mesma linha.
     .replace(/(<b>(?:Já cruzou|LIGUE O ROBÔ AGORA|LIGUE AGORA|PREPARE|Ainda não)<\/b>[^\n]*?\.)(?=\s[A-ZÀ-Ú])[^\n]*/g, "$1")
@@ -957,7 +957,7 @@ async function fundoFinal(pre: FundoRes, instId: string, foPre?: FoInfo | null):
 function fundoTxt(r: { motivos: Motivo[]; conf: number }, maxPos = 5, maxNeg = 3, seta = ""): string {
   const pos = r.motivos.filter((m) => m.pts > 0).sort((a, b) => b.pts - a.pts).slice(0, maxPos);
   const neg = r.motivos.filter((m) => m.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, maxNeg);
-  let t = `🧭 Sinal de fundo: <b>${r.conf}/10</b> ${confEmoji(r.conf)}${seta}`;
+  let t = `🧭 Sinal de fundo: <b>${r.conf}/10</b> ${confEmoji(r.conf)}${seta ? `\nMovimento: ${seta}` : ""}`;
   for (const m of pos) t += `\n   ✅ ${m.txt}`;
   for (const m of neg) t += `\n   ⚠️ ${m.txt}`;
   return t;
@@ -1322,7 +1322,7 @@ function calcCompressao(info: InfoFiltravel, volUsdt: number): CompRes | null {
 function compTxt(r: { motivos: Motivo[]; conf: number }, maxPos = 5, maxNeg = 3, seta = ""): string {
   const pos = r.motivos.filter((m) => m.pts > 0).sort((a, b) => b.pts - a.pts).slice(0, maxPos);
   const neg = r.motivos.filter((m) => m.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, maxNeg);
-  let t = `🧭 Sinal de compressão: <b>${r.conf}/10</b> ${confEmoji(r.conf)}${seta}`;
+  let t = `🧭 Sinal de compressão: <b>${r.conf}/10</b> ${confEmoji(r.conf)}${seta ? `\nMovimento: ${seta}` : ""}`;
   for (const m of pos) t += `\n   ✅ ${m.txt}`;
   for (const m of neg) t += `\n   ⚠️ ${m.txt}`;
   return t;
@@ -2873,7 +2873,7 @@ function viraQuandoTxt(ladoPos: "long" | "short", info: IndicadorInfo, preco: nu
   const linhaOpos = longP ? info.fundo : info.topo;
   const dist = preco > 0 ? (Math.abs(preco - linhaOpos) / preco) * 100 : 0;
   const emAtr = atr > 0 ? ` ≈ ${(Math.abs(preco - linhaOpos) / atr).toFixed(1)}×ATR` : "";
-  return `🔄 <b>O robô vira pra ${longP ? "SHORT" : "LONG"}</b> se uma vela 15m FECHAR ${longP ? "abaixo" : "acima"} de ${fmtPrice(linhaOpos)} (faltam ${dist.toFixed(2)}%${emAtr}).\n<i>Dentro da faixa (${fmtPrice(info.fundo)} – ${fmtPrice(info.topo)}) ele segue ${longP ? "LONG" : "SHORT"}: voltar pra dentro não é sinal de saída.</i>\n`;
+  return `🔄 <b>Vira pra ${longP ? "SHORT" : "LONG"}</b> se uma vela 15m FECHAR ${longP ? "abaixo" : "acima"} de ${fmtPrice(linhaOpos)} (faltam ${dist.toFixed(2)}%${emAtr}). Dentro da faixa segue ${longP ? "LONG" : "SHORT"}.\n`;
 }
 // mercado lateral: a virada falha mais (serrote). Mostra o que já está acontecendo agora.
 function pausarTxt(adx: number, trocas: number, btcAdx: number | null): string {
@@ -2988,7 +2988,7 @@ async function posicaoRealTxt(chatId: number | string, ps: Pos[], inf: any, alvo
   let t = "";
   for (const p of ps) {
     const s = await sugestaoPosicaoComSeta(SB, chatId, p, inf, alvo);
-    t += `📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)}${p.lev ? ` | ${p.lev}x` : ""}\n${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.dica}\n`;
+    t += `📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)}${p.lev ? ` | ${p.lev}x` : ""}\n${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.seta ? `Movimento: ${s.seta}\n` : ""}${s.dica}\n`;
     t += trailingTxt(p, typeof inf.atr === "number" ? inf.atr : 0) || stopAlvoPosTxt(p, inf);
     const atual = ladoAtual(inf as IndicadorInfo);
     if (atual !== null && atual !== p.lado) t += `🔄 A vela já fechou do lado ${atual === "long" ? "LONG" : "SHORT"}. <i>O robô vira no fechamento. Se sua posição continua ${p.lado === "long" ? "LONG" : "SHORT"}, confira se ele virou e se está ligado.</i>\n`;
@@ -3098,9 +3098,9 @@ async function runAgora(chatId: number | string, entrada: string) {
   let t = `📸 <b>${instId}</b> — agora\n${DIVISOR}\n\n`;
   t += `⏱ vela fecha em ~${finalRestMin()} min\n`;
   t += atual ? `✅ já cruzou pra <b>${nome(atual)}</b>\n` : `↔️ dentro da faixa\n`;
-  t += `📏 distância: LONG ${dTopo <= 0 ? "já passou" : dTopo.toFixed(2) + "%"} · SHORT ${dFundo <= 0 ? "já passou" : dFundo.toFixed(2) + "%"}\n`;
+  t += `📏 distância: Indicador ${(Math.min(Math.abs(vivo - info.topo), Math.abs(vivo - info.fundo)) / vivo * 100).toFixed(2)}%\n`; // até a linha mais próxima do indicador
   t += tocouTxt;
-  t += `🧭 Confiança (${nome(lado)}): ${confEmoji(conf)} <b>${conf}/10</b>${seta}\n`;
+  t += `🧭 Confiança (${nome(lado)}): ${confEmoji(conf)} <b>${conf}/10</b>${seta ? `\nMovimento: ${seta}` : ""}\n`;
   t += `preço ${fmtPrice(vivo)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
   await sendTelegram(chatId, cortar(t), botaoAnalisar(instId));
 }
@@ -3262,7 +3262,7 @@ async function runAnalise(chatId: number | string, entrada: string) {
 
   // ── 1) CABEÇALHO: veredito e números-chave ──
   let cab = `🔎 <b>ANÁLISE — ${instId}</b>\n${DIVISOR}\n\n`;
-  cab += `${veredito} (${total >= 0 ? "+" : ""}${total} pts) · confiança <b>${conf}/10</b> ${confEmoji(conf)}${seta}\nRobô abriria: <b>${lado === "long" ? "LONG (compra)" : "SHORT (venda)"}</b>\n${placarFiltros(motivos)}\n`;
+  cab += `${veredito} (${total >= 0 ? "+" : ""}${total} pts)\nConfiança: <b>${conf}/10</b> ${confEmoji(conf)}${seta ? `\nMovimento: ${seta}` : ""}\nRobô abriria: <b>${lado === "long" ? "LONG (compra)" : "SHORT (venda)"}</b>\n${placarFiltros(motivos)}\n`;
   cab += `💰 <b>${fmtPrice(preco)}</b>${vivo !== null ? " agora" : ""}${pct !== null ? ` · ${pct >= 0 ? "📈 +" : "📉 "}${pct.toFixed(2)}% (24h)` : ""}${volUsdt !== null ? ` · vol ${(volUsdt / 1e6).toFixed(2)}M` : ""}\n`;
 
   // ── 2) QUEM ESTÁ DE FORA ──
@@ -3300,12 +3300,12 @@ async function runAnalise(chatId: number | string, entrada: string) {
 
   // ── 3) QUEM JÁ ESTÁ DENTRO ──
   const minhas = posDaMoeda(posLista, instId);
-  let dentro = `\n${DIVISOR}\n📌 <b>PARA QUEM JÁ ESTÁ DENTRO</b>\n`;
+  let dentro = `\n${DIVISOR}\n`;
   const confirmadoDentro = ladoAtual(info) === lado;
-  if (minhas.length) {
-    dentro += `<i>sua posição real na BloFin</i>\n\n`;
+  if (minhas.length) { // posição real: o próprio "📌 Você está…" já é o título da seção
     dentro += await posicaoRealTxt(chatId, minhas, { ...info, adx, rsi, adxAntes, atr }, apChega ? apChega.alvo : undefined);
   } else {
+    dentro += `📌 <b>PARA QUEM JÁ ESTÁ DENTRO</b>\n`;
     dentro += confirmadoDentro
       ? `<i>robô ligado e posicionado ${lado === "long" ? "LONG" : "SHORT"} (sinal atual), sem saber seu preço de entrada</i>\n\n`
       : `<i>robô ligado, preço dentro da faixa (sem sinal novo)</i>\n\n`;
@@ -3320,16 +3320,16 @@ async function runAnalise(chatId: number | string, entrada: string) {
       const { data } = await SB.from(PLACAR_TABELA).select("*").eq("instid", instId).order("criado_em", { ascending: false }).limit(3);
       const hist = (data || []) as any[];
       if (hist.length) {
-        rodape += `\n📜 <b>Alertas anteriores</b>\n`;
+        rodape += `📜 <b>Alertas anteriores</b>\n`;
         for (const r of hist) {
           const horas = ((Date.now() - new Date(r.criado_em).getTime()) / 3600000).toFixed(1);
-          const res = PLACAR_HORIZONTES.map((h) => { const x = retornoLog(r, h); return `${h}h ${x === null ? "—" : (x >= 0 ? "+" : "") + x.toFixed(2) + "%"}`; }).join(" · ");
-          rodape += `• há ${horas}h ${r.lado === "long" ? "LONG" : "SHORT"} ${r.tipo} — ${res}\n`;
+          const res = PLACAR_HORIZONTES.map((h) => ({ h, x: retornoLog(r, h) })).filter((o) => o.x !== null).map((o) => `${o.h}h ${(o.x as number) >= 0 ? "+" : ""}${(o.x as number).toFixed(1)}%`).join(" · ");
+          rodape += `• há ${horas}h ${r.lado === "long" ? "LONG" : "SHORT"} ${r.tipo} — ${res || "aguardando resultado"}\n`;
         }
       }
     }
   } catch { }
-  rodape += `\n<i>Estatístico, não é recomendação: os pontos são um guia simples (ajuste no bloco V12).</i>`;
+  rodape += `${rodape ? "\n" : ""}<i>Estatístico, não é recomendação.</i>`;
 
   await enviarPartes(chatId, [cab, fora, dentro, rodape]);
 }
@@ -3400,7 +3400,7 @@ function setaTxt(statusAnterior: string | null | undefined, confAtual: number): 
   const prevConf = parseUltimaConf(statusAnterior);
   if (prevConf === null) return "";
   const corAntes = confEmoji(prevConf), corAgora = confEmoji(confAtual);
-  return corAntes === corAgora ? "" : ` (${corAntes}→${corAgora})`;
+  return corAntes === corAgora ? "" : `${corAntes}→${corAgora}`;
 }
 // Pra /analise e /agora: chave própria (_CONFGER_instId) compartilhada entre os dois comandos — eles pontuam
 // separado (lado/contexto podem diferir), mas quem olha pensa em "essa moeda", não "esse comando"; consultar
@@ -3448,14 +3448,14 @@ async function setaPosicao(SB: any, chatId: number | string, instId: string, lad
     const { data } = await SB.from(TAB).select("last_status").eq("instid", chave).maybeSingle();
     const antes = data?.last_status || null;
     await upsertLinha(SB, chave, { last_status: emojiAtual });
-    return antes && antes !== emojiAtual ? ` (${antes}→${emojiAtual})` : "";
+    return antes && antes !== emojiAtual ? `${antes}→${emojiAtual}` : "";
   } catch (e) { console.log(`⚠️ setaPosicao(${instId}) falhou:`, e); return ""; }
 }
 async function sugestaoPosicaoComSeta(SB: any, chatId: number | string, p: Pos, info: IndicadorInfo & { adx?: number; rsi?: number; adxAntes?: number }, alvo?: "long" | "short"): Promise<Sugestao> {
   const s = sugestaoPosicao(p, info, alvo);
   if (!SB) return s;
   const seta = await setaPosicao(SB, chatId, p.instId, p.lado, s.emoji);
-  return seta ? { ...s, titulo: s.titulo + seta } : s;
+  return seta ? { ...s, seta } : s;
 }
 function pontuar(x: CtxPontos) {
   const { info, lado, adx, adxDif, rsi, volUsdt, trocas, h1, btcAdx, perfil, fo, volRatio, chegadaForte, apChega, tipo, pct24, bottom, top, btcVar } = x;
@@ -4380,8 +4380,8 @@ async function checarAgenda(SB: any) {
 // ─── V55: PAINEL DO DIA (substitui os resumos soltos) ────────────────────────────────────────────────
 // UMA mensagem por ciclo de 24h (das RESUMO_NOITE_H — padrão 21h — até as 21h do dia seguinte, = virada da vela
 // diária em UTC-3), EDITADA no lugar a cada PAINEL_MIN min. Nada de mensagem nova a cada hora.
-//  • mostra BTC (subindo/caindo), comparação "desde as 21h" e "desde as 8h", janelas fortes, agenda das próximas
-//    24h e o placar do ciclo (alertas + seu resultado real)
+//  • mostra BTC (subindo/caindo), posições, comparação "desde as 21h" e "desde as 8h", janelas fortes e agenda das
+//    próximas 24h; o placar do ciclo (alertas + seu resultado real) só aparece no fechamento (🏁 FIM DO RESUMO DO DIA)
 //  • na virada das 21h o painel vira "🏁 FIM DO RESUMO DO DIA" (congelado, desafixado) e o próximo começa
 // Env: RESUMO_NOITE_H=21 (começo do ciclo) · RESUMO_MANHA_H=8 (2ª referência) · PAINEL_MIN=60 · PAINEL_PIN=1 · PAINEL_BTC_PCT=0.3
 const PAINEL_MIN = numEnv("PAINEL_MIN", "60");
@@ -4440,12 +4440,14 @@ async function painelJanelas(): Promise<string> {
   return `🔥 <b>Janelas fortes</b> (${perfil.tipo}, UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}): ${js.length ? js.map((j) => `${xHH(j.ini)}–${xHH(j.fim)}`).join(" · ") : "nenhuma bem definida"}\n\n`;
 }
 async function montarPainel(SB: any, chat: string | number, est: Pick<PainelEstado, "base" | "base8" | "inicio">, snap: PainelSnap | null, fim: boolean): Promise<string> {
-  const [janelas, agenda, placarBruto, pos] = await Promise.all([painelJanelas().catch(() => ""), agBlocoProximas(SB), montarResumoNoite(SB, chat, est.inicio), agPosicoes(chat)]);
+  const [janelas, agenda, placarBruto, pos] = await Promise.all([painelJanelas().catch(() => ""), agBlocoProximas(SB), fim ? montarResumoNoite(SB, chat, est.inicio) : Promise.resolve(""), agPosicoes(chat)]); // placar (alertas + resultado real) só no fechamento das 21h
   const linhaPos = pos === null ? "" : pos.lista.length ? `💼 <b>Posições abertas (${pos.lista.length})</b>: ${pos.lista.join(" · ")}\nTotal agora: ${pos.total >= 0 ? "➕" : "➖"}${Math.abs(pos.total).toFixed(2)} USDT\n\n` : `💼 Sem posição aberta.\n\n`;
-  const placar = placarBruto.replace(/^[^\n]*\n[^\n]*\n\n?/, ""); // tira o cabeçalho antigo ("BOA NOITE…" + divisor)
+  const placar = placarBruto
+    ? "\n" + placarBruto.replace(/^[^\n]*\n[^\n]*\n\n?/, "") // tira o cabeçalho antigo ("BOA NOITE…" + divisor)
+    : `\n<i>📊 O placar do dia (alertas e seu resultado real) chega no fechamento, às ${xHH(RESUMO_NOITE_H)}.</i>`;
   const titulo = fim ? "🏁 <b>FIM DO RESUMO DO DIA</b>" : "🌎 <b>PAINEL DO DIA</b>";
   const carimbo = fim ? `🔒 encerrado às ${horaLocal(Date.now())} · não atualiza mais` : `🕒 atualizado às ${horaLocal(Date.now())} · a cada ${PAINEL_MIN} min · ciclo desde ${horaLocal(est.inicio)}`;
-  return cortar(`${titulo}\n${carimbo}\n${DIVISOR}\n\n${painelBtcBloco(snap, est)}${linhaPos}${janelas}${agenda}\n${placar}`);
+  return cortar(`${titulo}\n${carimbo}\n${DIVISOR}\n\n${painelBtcBloco(snap, est)}${linhaPos}${janelas}${agenda}${placar}`);
 }
 
 // ── estado e envio ──
@@ -4648,7 +4650,7 @@ async function getPosicoes(chat: string | number): Promise<Pos[] | null> {
   return v;
 }
 const posDaMoeda = (lista: Pos[] | null, instId: string): Pos[] => (lista ? lista.filter((p) => p.instId === instId) : []);
-type Sugestao = { emoji: string; titulo: string; dica: string; contra: boolean };
+type Sugestao = { emoji: string; titulo: string; dica: string; contra: boolean; seta?: string }; // seta: "🟡→🟢" quando o estado da posição mudou (vai numa linha "Movimento:" própria)
 function sugestaoPosicao(p: Pos, info: IndicadorInfo & { adx?: number; rsi?: number; adxAntes?: number }, alvo?: "long" | "short"): Sugestao {
   const atual = ladoAtual(info);
   const adx = typeof info.adx === "number" ? info.adx : null;
@@ -4709,10 +4711,9 @@ function stopAlvoPosTxt(p: Pos, inf: { topo: number; fundo: number; atr?: number
   if (p.mark > 0 && (longP ? p.mark <= sa.stop : p.mark >= sa.stop)) {
     return `⚠️ Preço atual já passou do stop calculado pela sua entrada (${fmtPrice(sa.stop)}): não serve mais de referência, aperte o stop perto do preço.\n`;
   }
-  const mg = (pct: number) => (p.lev > 0 ? ` / ${(pct * p.lev).toFixed(0)}% da margem` : "");
+  const pctTxt = (pct: number, sinal: string) => (p.lev > 0 ? `${sinal}${(pct * p.lev).toFixed(0)}% margem` : `${sinal}${pct.toFixed(2)}%`);
   const batido = p.mark > 0 && (longP ? p.mark >= sa.alvo : p.mark <= sa.alvo);
-  const rot = porAtr ? `Pela sua entrada (linha já do outro lado; stop de reserva ${STOP_ATR_RESERVA}×ATR)` : "Pela sua entrada";
-  return `🎯 ${rot}: stop ${fmtPrice(sa.stop)} (-${sa.riscoPct.toFixed(2)}%${mg(sa.riscoPct)}) | alvo ${fmtPrice(sa.alvo)} (+${sa.retornoPct.toFixed(2)}%${mg(sa.retornoPct)}, RR ${ALVO_RR}:1)${batido ? " — alvo já atingido, considere realizar/subir o stop" : ""}\n`;
+  return `🎯 Stop ${fmtPrice(sa.stop)} (${pctTxt(sa.riscoPct, "-")}) · Alvo ${fmtPrice(sa.alvo)} (${pctTxt(sa.retornoPct, "+")}) · RR ${ALVO_RR}:1${porAtr ? ` · stop de reserva ${STOP_ATR_RESERVA}×ATR` : ""}${batido ? " — alvo já atingido, considere realizar/subir o stop" : ""}\n`;
 }
 async function blocoPosicao(SB: any, chatId: number | string, ps: Pos[], info: IndicadorInfo, alvo?: "long" | "short"): Promise<string> {
   if (!ps.length) return "";
@@ -4721,7 +4722,7 @@ async function blocoPosicao(SB: any, chatId: number | string, ps: Pos[], info: I
   let out = `\n\n${DIVISOR}`;
   for (const p of ps) {
     const s = await sugestaoPosicaoComSeta(SB, chatId, p, inf, alvo);
-    out += `\n📌 <b>Você já está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.dica}\n` + (trailingTxt(p, typeof inf.atr === "number" ? inf.atr : 0) || stopAlvoPosTxt(p, inf));
+    out += `\n📌 <b>Você já está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.seta ? `Movimento: ${s.seta}\n` : ""}${s.dica}\n` + (trailingTxt(p, typeof inf.atr === "number" ? inf.atr : 0) || stopAlvoPosTxt(p, inf));
   }
   return out + `<i>Sugestão automática (Indicador + ADX + RSI), não é ordem.</i>`;
 }
@@ -4878,7 +4879,7 @@ async function checarEnfraquecimento(SB: any, posMap: Map<string, Pos[] | null>)
         } else if (n > prevN || (n === prevN && agora - prevT >= FRACO_COOLDOWN_MIN * 60000)) {
           const ladoTxt = p.lado === "long" ? "LONG" : "SHORT";
           const cab = `entrada ${fmtPrice(p.entrada)} | agora ${fmtPrice(p.mark)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)`;
-          const msg = `${sug.emoji} <b>${p.instId}</b> ${ladoTxt} — ${sug.titulo}\n${DIVISOR}\n\n${cab}\n\n${sug.dica}\n` +
+          const msg = `${sug.emoji} <b>${p.instId}</b> ${ladoTxt} — ${sug.titulo}\n${sug.seta ? `Movimento: ${sug.seta}\n` : ""}${DIVISOR}\n\n${cab}\n\n${sug.dica}\n` +
             (p.pnl > 0 ? trailingTxt(p, info.atr) : "") +
             `\n<i>Aviso automático: o sinal desta moeda enfraqueceu com a posição aberta. Sugestão, não é ordem.</i>`;
           const id = await enviarAlertaMoeda(SB, chat, `FRACO_${p.instId}`, cortar(msg), botaoAnalisar(p.instId));
@@ -5224,7 +5225,7 @@ async function runRobo(chatId: number | string) {
       const pp = paraPos(p), inf = infosRobo[idx];
       if (pp && inf) {
         const sug = await sugestaoPosicaoComSeta(SBrobo, chatId, pp, inf);
-        msg += `   ${sug.emoji} <b>${sug.titulo}</b>\n`;
+        msg += `   ${sug.emoji} <b>${sug.titulo}</b>\n${sug.seta ? `   Movimento: ${sug.seta}\n` : ""}`;
         if (mostrar.length <= 5) msg += `   <i>${sug.dica}</i>\n`;
         const trl = trailingTxt(pp, typeof inf.atr === "number" ? inf.atr : 0);
         if (trl) msg += `   ${trl}`;
@@ -5323,7 +5324,7 @@ function textoAjuda(chatId: number | string, modoAtual: Modo, remetente: number 
   t += `\n${MINI_DIVISOR}\n<b>📊 Resultados</b>\n`;
   t += c
     ? `📊 /placar 7 · 🧾 /meuplacar 7 · 🌅 /resumo · 📅 /agenda\n`
-    : "📊 /placar 7 — taxa de acerto dos alertas (1h, 4h, 24h)\n🧾 /meuplacar 7 — seus trades reais x alertas do bot (precisa da chave BloFin)\n🌅 /resumo — painel do dia (21h a 21h): BTC, comparação desde as 21h e 8h, agenda e placar; atualiza sozinho a cada hora\n📅 /agenda — dados econômicos importantes de hoje e amanhã (avisa 60 e 15 min antes, pra você evitar operar)\n";
+    : "📊 /placar 7 — taxa de acerto dos alertas (1h, 4h, 24h)\n🧾 /meuplacar 7 — seus trades reais x alertas do bot (precisa da chave BloFin)\n🌅 /resumo — painel do dia (21h a 21h): BTC, comparação desde as 21h e 8h, posições e agenda (a cada hora); o placar do dia vem no fechamento, às 21h\n📅 /agenda — dados econômicos importantes de hoje e amanhã (avisa 60 e 15 min antes, pra você evitar operar)\n";
 
   t += `\n${MINI_DIVISOR}\n<b>🤖 Sua conta BloFin</b>\n`;
   t += c
