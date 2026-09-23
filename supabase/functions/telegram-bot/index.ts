@@ -1,21 +1,13 @@
-// telegram-bot V46 (V45 + upsertLinha agora usa upsert() nativo do Postgres (INSERT ... ON CONFLICT DO UPDATE)
-// em vez de select→insert/update em 2 chamadas — mesma corrida "ler→checar→escrever" que o V45 já tinha
-// corrigido especificamente pro lock do cron, só que essa função é usada em dezenas de outros lugares
-// (_FUNDO_, _MSG_, _MODO_, _PAUSA_, autoapagar...) que também podem receber chamadas concorrentes vindas de
-// callbacks do Telegram; FUNDO_PTS_MAX virou derivado de REPIQUE_BONUS em vez de número fixo calculado na
-// mão, pra nunca ficar desatualizado sozinho se REPIQUE_BONUS mudar pela env; correção da escala de confiança
-// — CONFIANCA_TOTAL_MIN/MAX ajustados de -31/+24 pra -30/+23 (o cálculo original tinha somado 2 pontos de
-// confiabInst quando CONFIAB_PTS = 1, e contado "cruzamento muito velho" e squeeze como se pudessem coexistir
-// no mesmo pontuar(), quando na prática nunca coexistem)) (V45 = V44 + trava do cron virou compare-and-swap de
-// verdade num UPDATE só, sem a janela teórica de corrida da versão anterior (ler→checar→escrever em 2
-// chamadas); autoconferência da escala de confiança — avisa no log se o total de pontuar() escapar de
-// CONFIANCA_TOTAL_MIN/MAX, pra pegar deriva se algum peso mudar sem recalcular as constantes; ANTEC_CALIB_MIN
-// e a janela de amostras do confiabilidadeMoeda (CONFIAB_JANELA_N) agora são env var, como os outros limites
-// de calibração; registrarAntecipacao deduplica por moeda+lado, não só por moeda) (V44 = V43 + espelho do repique: LONG que já devolveu o dia positivo (fundo) e SHORT que já devolveu
+// telegram-bot V45 (V44 + trava do cron virou compare-and-swap de verdade num UPDATE só, sem a janela teórica de
+// corrida da versão anterior (ler→checar→escrever em 2 chamadas); autoconferência da escala de confiança —
+// avisa no log se o total de pontuar() escapar de CONFIANCA_TOTAL_MIN/MAX, pra pegar deriva se algum peso mudar
+// sem recalcular as constantes; ANTEC_CALIB_MIN e a janela de amostras do confiabilidadeMoeda (CONFIAB_JANELA_N)
+// agora são env var, como os outros limites de calibração; registrarAntecipacao deduplica por moeda+lado, não
+// só por moeda) (V44 = V43 + espelho do repique: LONG que já devolveu o dia positivo (fundo) e SHORT que já devolveu
 // o dia negativo (topo) agora classificam tipo "oportunidade" em vez de sempre "reversao", mesma regra do
 // tipoDoLado) (V43 = V42 + zona morta REPIQUE_PCT_ZONA (±2%, padrão) em torno de pct≈0 pra classificar o tipo do
 // repique — sem ela, ruído de rodada cruzava o zero e trocava oportunidade↔reversão à toa (mudava a confiança
-// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-30 a +23, o
+// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-31 a +24, o
 // piso e o teto reais de `total` em pontuar() somando todos os add() possíveis) substituem a faixa antiga de -3
 // a +8, que era estreita demais e estourava/travava em 10 ou 0 com qualquer sinal decente; CONF_MIN_OPORT e
 // CONF_AMARELO subiram de 5 pra 6 pra exigir aproximadamente os mesmos pontos brutos de antes na escala nova)
@@ -80,9 +72,15 @@ let FILTRO_RSI_MAX = numEnv("FILTRO_RSI_MAX", "85");
 let FILTRO_RSI_MIN = numEnv("FILTRO_RSI_MIN", "15");
 let FILTRO_DIST_MAX_PCT = numEnv("FILTRO_DIST_MAX_PCT", "2");
 // Lista negra manual: instId separados por vírgula (ex.: "BTC-USDT,ETH-USDT,META-USDT") pra tirar
-// moedas mais consolidadas/paradas da lista, independente de volume ou volatilidade.
+// moedas mais consolidadas/paradas da lista, independente de volume ou volatilidade. Default abaixo
+// cobre as blue-chips de maior market cap/liquidez do mercado de perp (as que lideram/puxam o resto,
+// em vez de serem puxadas por ele) — o robô é feito pra pegar pump/dump em altcoins menores, então
+// deixar BTC/ETH e afins de fora evita gastar vaga do radar e do LIMITE_LADO com moedas que raramente
+// dão o movimento explosivo que a estratégia procura. Ajuste via env var BLACKLIST_MOEDAS sem precisar
+// editar o código (passe "" pra zerar e voltar a avaliar todo mundo).
 const BLACKLIST_MOEDAS = new Set(
-  (Deno.env.get("BLACKLIST_MOEDAS") || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean)
+  (Deno.env.get("BLACKLIST_MOEDAS") ?? "BTC-USDT,ETH-USDT,BNB-USDT,SOL-USDT,XRP-USDT")
+    .split(",").map((x) => x.trim().toUpperCase()).filter(Boolean)
 );
 // Amplitude mínima (%) pra uma moeda entrar no radar: usa o maior entre |variação 24h|, queda desde o
 // topo e alta desde o fundo. Serve pra empurrar pra fora as moedas "paradas" e priorizar as que estão
@@ -400,7 +398,17 @@ async function tgPost(path: string, body: any): Promise<any> {
   }
   return j;
 }
-async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes): Promise<number | null> {
+// Auditoria #14: sendTelegram registrava TODA mensagem enviada (id) na lista "_UI_{chat}" usada por uiLimpar
+// pra apagar a resposta anterior a cada novo comando "/". Isso incluía alertas proativos (radar de fundo/topo/
+// compressão, alerta principal, trailing, RSI esticado, posição fraca, risco — todos via enviarAlertaMoeda),
+// avisos de fonte de dados degradada, cron parado, auto-calibração pro dono e o resumo automático de manhã/
+// noite: qualquer um desses chegando entre dois comandos do usuário virava "lixo de UI" e sumia sozinho
+// (apagado do chat) assim que a pessoa mandasse o próximo /comando — mesmo sem ter lido. O texto do /menu
+// promete o oposto ("os alertas do robô só são substituídos por um novo da mesma moeda"), e alertas/risco já
+// têm seu próprio ciclo de vida (substituição por moeda via MSG_PREFIXO, autoapagar por tempo). Fix: só entra
+// na lista de limpeza quem é de fato resposta de comando (default); sites de envio proativo/broadcast passam
+// semUi:true pra não entrar nessa lista.
+async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes, opts?: { semUi?: boolean }): Promise<number | null> {
   if (await getModo(chatId) === "experiente") text = compactarExperiente(text);
   // texto grande: o botão "⬆️ Ir ao topo" já vai na própria mensagem (teclado inline, 1 chamada só).
   // O teclado fixo do rodapé continua valendo: o Telegram não o remove quando chega uma mensagem com botões inline.
@@ -416,7 +424,7 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
       id = j2?.result?.message_id ?? null;
     } else id = j?.result?.message_id ?? null;
   } catch (e) { console.log("Erro sendTelegram", e); }
-  if (id && typeof chatId === "number") await uiRegistrar(chatId, id).catch(() => {});
+  if (id && typeof chatId === "number" && !opts?.semUi) await uiRegistrar(chatId, id).catch(() => {});
   return id;
 }
 // V47: avisos de deriva das escalas (confFundo/pontuar) e de outros erros "silenciosos" só iam pro
@@ -427,7 +435,7 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
 // avisarAdmin falhar). Sem ADMIN_CHAT_ID configurado, não faz nada (mesmo comportamento de hoje).
 async function avisarAdmin(texto: string): Promise<void> {
   if (!ADMIN_CHAT_ID) return;
-  try { await sendTelegram(ADMIN_CHAT_ID, texto); } catch (e) { console.log("⚠️ avisarAdmin falhou", e); }
+  try { await sendTelegram(ADMIN_CHAT_ID, texto, undefined, { semUi: true }); } catch (e) { console.log("⚠️ avisarAdmin falhou", e); }
 }
 // V39: edita uma mensagem já mandada (usado nos minutos finais da vela, pra atualizar a MESMA mensagem —
 // distância/tempo restando — em vez de mandar uma nova a cada rodada do cron). Se a edição falhar (mensagem
@@ -796,10 +804,10 @@ function rsiSerie(closes: number[], period = 14): number[] {
   }
   return out;
 }
-function confFundo(total: number, caindoFaca: boolean, teto = FUNDO_CONF_MIN): number {
+function confFundo(total: number, caindoFaca: boolean): number {
   checarDerivaFundo(total);
   const c = Math.max(0, Math.min(10, Math.round((total * 10) / FUNDO_PTS_MAX)));
-  return caindoFaca ? Math.min(c, Math.max(0, teto - 1)) : c;
+  return caindoFaca ? Math.min(c, Math.max(0, FUNDO_CONF_MIN - 1)) : c;
 }
 function calcFundoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, adxAntes: number): FundoRes | null {
   const n = d.c.length;
@@ -975,19 +983,26 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     const inst = c.info.instId;
     const row = rowsMap.get("_FUNDO_" + inst);
     if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < (ehRep ? REPIQUE_COOLDOWN_MIN : FUNDO_COOLDOWN_MIN) * 60000) continue;
+    // Auditoria (achado #18, mesmo em radarTopo/radarCompressao): _fundoAvaliado marcava a moeda como "já
+    // avaliada nesta vela" ANTES de saber se o envio ia ser confirmado — undermineava o "não vou queimar o
+    // cooldown" logo abaixo: o cooldown ficava livre pra tentar de novo, mas esse guard de "1x por vela"
+    // bloqueava os próximos ciclos do cron mesmo assim (só destravava na troca de vela, até ~15 min depois).
+    // Corrigido: só marca quando não vai reavaliar mesmo (confiança insuficiente) ou quando o envio confirma;
+    // no caso de falha de envio, não marca, pra tentar de novo no próximo ciclo.
     if (_fundoAvaliado.get(inst) === ckVela) continue;
-    _fundoAvaliado.set(inst, ckVela);
     const [fin, vivo] = await Promise.all([fundoFinal(c.info.bottom!, inst), precoAoVivo(inst)]);
     const minConf = fin.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : FUNDO_CONF_MIN;
-    if (fin.conf < minConf) { console.log(`🟢 radar: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "faca caindo" : "sinais insuficientes"})`); continue; }
+    if (fin.conf < minConf) { _fundoAvaliado.set(inst, ckVela); console.log(`🟢 radar: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "faca caindo" : "sinais insuficientes"})`); continue; }
     const msg = msgFundo(c.info, c.pct, c.queda, fin, vivo);
-    await Promise.all(ativos.map(async (ch) => {
+    const ids = await Promise.all(ativos.map(async (ch) => {
       let extra = "";
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst).filter((x) => x.lado === "short")) {
         extra += `\n\n📌 <b>Você está SHORT em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nSinais de fundo aparecendo: considere realizar parte do lucro e subir o stop pro preço de entrada.`;
       }
-      await enviarAlertaMoeda(SB, ch, inst, cortar(msg + extra), botaoAnalisar(inst));
+      return await enviarAlertaMoeda(SB, ch, `FUNDO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
     }));
+    if (!ids.some(Boolean)) { console.log(`⚠️ radar de fundo: ${inst} — nenhum envio confirmado, não vou queimar o cooldown`); continue; }
+    _fundoAvaliado.set(inst, ckVela);
     await registrarAlertaFundo(SB, c.info, c.pct, fin.conf, !!fin.repique);
     await upsertLinha(SB, "_FUNDO_" + inst, { last_status: `${fin.conf}/10`, last_alert_at: new Date().toISOString() });
     if (ehRep) enviadosRep++; else enviados++;
@@ -1087,7 +1102,7 @@ function calcTopoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, a
   repique = repique && !subindoFoguete;
   if (repique && REPIQUE_BONUS > 0) add(REPIQUE_BONUS, "⭐ repique rejeitado na faixa: virada LONG → SHORT a favor da queda anterior (prioridade)");
   const pts = motivos.reduce((s, m) => s + m.pts, 0);
-  return { pts, conf: confFundo(pts, subindoFoguete, TOPO_CONF_MIN), motivos, caindoFaca: subindoFoguete, minimo: maxH, dAtr, repique };
+  return { pts, conf: confFundo(pts, subindoFoguete), motivos, caindoFaca: subindoFoguete, minimo: maxH, dAtr, repique };
 }
 async function topoFinal(pre: FundoRes, instId: string, foPre?: FoInfo | null): Promise<FundoFinal> {
   const [fo, btc] = await Promise.all([
@@ -1109,7 +1124,7 @@ async function topoFinal(pre: FundoRes, instId: string, foPre?: FoInfo | null): 
     else if (btc <= -0.5) add(1, `BTC caindo ${btc.toFixed(1)}% na última hora`);
   }
   const pts = motivos.reduce((s, m) => s + m.pts, 0);
-  return { ...pre, motivos, pts, conf: confFundo(pts, pre.caindoFaca, TOPO_CONF_MIN), fo: fo ?? null, btc };
+  return { ...pre, motivos, pts, conf: confFundo(pts, pre.caindoFaca), fo: fo ?? null, btc };
 }
 function topoTxt(r: { motivos: Motivo[]; conf: number }, maxPos = 5, maxNeg = 3): string {
   return fundoTxt(r, maxPos, maxNeg).replace("Sinal de fundo", "Sinal de topo");
@@ -1172,19 +1187,21 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
     const inst = c.info.instId;
     const row = rowsMap.get("_TOPO_" + inst);
     if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < (ehRep ? REPIQUE_COOLDOWN_MIN : TOPO_COOLDOWN_MIN) * 60000) continue;
+    // Auditoria (achado #18, mesmo bug em radarFundo/radarCompressao): ver comentário lá.
     if (_fundoAvaliado.get("topo|" + inst) === ckVela) continue;
-    _fundoAvaliado.set("topo|" + inst, ckVela);
     const [fin, vivo] = await Promise.all([topoFinal(c.info.top!, inst), precoAoVivo(inst)]);
     const minConf = fin.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : TOPO_CONF_MIN;
-    if (fin.conf < minConf) { console.log(`🔴 radar de topo: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "foguete" : "sinais insuficientes"})`); continue; }
+    if (fin.conf < minConf) { _fundoAvaliado.set("topo|" + inst, ckVela); console.log(`🔴 radar de topo: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "foguete" : "sinais insuficientes"})`); continue; }
     const msg = msgTopo(c.info, c.pct, c.alta, fin, vivo);
-    await Promise.all(ativos.map(async (ch) => {
+    const ids = await Promise.all(ativos.map(async (ch) => {
       let extra = "";
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst).filter((x) => x.lado === "long")) {
         extra += `\n\n📌 <b>Você está LONG em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nSinais de topo aparecendo: considere realizar parte do lucro e subir o stop pro preço de entrada.`;
       }
-      await enviarAlertaMoeda(SB, ch, inst, cortar(msg + extra), botaoAnalisar(inst));
+      return await enviarAlertaMoeda(SB, ch, `TOPO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
     }));
+    if (!ids.some(Boolean)) { console.log(`⚠️ radar de topo: ${inst} — nenhum envio confirmado, não vou queimar o cooldown`); continue; }
+    _fundoAvaliado.set("topo|" + inst, ckVela);
     await registrarAlertaTopo(SB, c.info, c.pct, fin.conf, !!fin.repique);
     await upsertLinha(SB, "_TOPO_" + inst, { last_status: `${fin.conf}/10`, last_alert_at: new Date().toISOString() });
     if (ehRep) enviadosRep++; else enviados++;
@@ -1331,17 +1348,19 @@ async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: st
     const inst = c.info.instId;
     const row = rowsMap.get("_COMP_" + inst);
     if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < COMPRESS_COOLDOWN_MIN * 60000) continue;
+    // Auditoria (achado #18, mesmo bug em radarFundo/radarTopo): ver comentário lá.
     if (_fundoAvaliado.get("comp|" + inst) === ckVela) continue;
-    _fundoAvaliado.set("comp|" + inst, ckVela);
     const vivo = await precoAoVivo(inst);
     const msg = msgCompressao(c.info, c.res, vivo);
-    await Promise.all(ativos.map(async (ch) => {
+    const ids = await Promise.all(ativos.map(async (ch) => {
       let extra = "";
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst)) {
         extra += `\n\n📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"} em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nO rompimento pode vir pros dois lados: confira o stop antes.`;
       }
-      await enviarAlertaMoeda(SB, ch, inst, cortar(msg + extra), botaoAnalisar(inst));
+      return await enviarAlertaMoeda(SB, ch, `COMPRESSAO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
     }));
+    if (!ids.some(Boolean)) { console.log(`⚠️ radar de compressão: ${inst} — nenhum envio confirmado, não vou queimar o cooldown`); continue; }
+    _fundoAvaliado.set("comp|" + inst, ckVela);
     await registrarAlertaCompressao(SB, c.info, c.pct, c.res.conf);
     await upsertLinha(SB, "_COMP_" + inst, { last_status: `${c.res.conf}/10`, last_alert_at: new Date().toISOString() });
     enviados++;
@@ -1637,8 +1656,8 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     `${indicadorTxt(info)}\n` +
     `preço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
     await Promise.all(dest.map(async (ch) => {
-      await enviarAlertaMoeda(SB, ch, info!.instId, cortar(msg + (await blocoPosicao(psDe(ch), info!))), botaoAnalisar(info!.instId));
-      _watchEnviado.add(kw(ch));
+      const id = await enviarAlertaMoeda(SB, ch, `ACOMP_${info!.instId}`, cortar(msg + (await blocoPosicao(psDe(ch), info!))), botaoAnalisar(info!.instId));
+      if (id) _watchEnviado.add(kw(ch));
     }));
     if (!ALERT_CHAT_IDS.every((ch) => _watchEnviado.has(kw(ch)))) return;
     ALERT_CHAT_IDS.forEach((ch) => _watchEnviado.delete(kw(ch)));
@@ -1721,7 +1740,7 @@ async function enviarOuEditarFinal(SB: any, pend: FinalPend | undefined, chats: 
     const msg = cortar(await msgPorChat(ch));
     const existente = pend?.msgIds?.[ch];
     if (existente && (await editarTelegram(ch, existente, msg, botoes))) return;
-    const novo = await enviarAlertaMoeda(SB, ch, inst, msg, botoes);
+    const novo = await enviarAlertaMoeda(SB, ch, `FINAL_${inst}`, msg, botoes);
     if (novo) ids[ch] = novo; else delete ids[ch];
   }));
   return ids;
@@ -1801,18 +1820,17 @@ async function resolverFinais(SB: any, ck: number) {
     if (!d || i < 100) continue;
     const fech = calcIndicadorDeCloses(p.inst, d.c.slice(0, i + 1));
     if (!fech) continue;
-    _finalPend.delete(k);
     const nome = p.lado === "long" ? "LONG" : "SHORT";
     const cruzou = ladoAtual(fech) === p.lado;
     const linhaPreco = `preço fech. ${fmtPrice(fech.preco)} | topo ${fmtPrice(fech.topo)} | fundo ${fmtPrice(fech.fundo)}`;
     let msg: string;
     if (cruzou) {
       // quem recebeu só o PREPARE: o alerta normal de cruzamento sai em seguida, não repete aqui
-      if (p.tipo === "prepare") { console.log(`⏱ prepare ${p.inst} ${p.lado}: cruzou no fechamento (alerta normal cobre)`); continue; }
+      if (p.tipo === "prepare") { console.log(`⏱ prepare ${p.inst} ${p.lado}: cruzou no fechamento (alerta normal cobre)`); _finalPend.delete(k); continue; }
       msg = `✅ <b>${p.inst}</b> — FECHOU CRUZADO pra <b>${nome}</b>\n${DIVISOR}\n\nO aviso dos minutos finais se confirmou: a vela de ${TIMEFRAME} fechou ${p.lado === "long" ? "acima" : "abaixo"} da linha (${fech.distAbs.toFixed(3)}% além). O robô entra no fechamento.\n${linhaPreco}`;
     } else {
       const prox = proximaVela(p.inst, d.c, i, p.lado);
-      if (p.tipo === "prepare" && !prox) { console.log(`⏱ prepare ${p.inst} ${p.lado}: fechou sem cruzar e sem seguir perto (sem aviso)`); continue; }
+      if (p.tipo === "prepare" && !prox) { console.log(`⏱ prepare ${p.inst} ${p.lado}: fechou sem cruzar e sem seguir perto (sem aviso)`); _finalPend.delete(k); continue; }
       const seguePerto = prox
         ? `\n🔜 <b>Mas segue perto</b>: fechou a ${prox.dNow.toFixed(2)}% da linha de ${nome} (na vela anterior era ${prox.dPrev.toFixed(2)}%) e ainda está chegando. A chance passa pra próxima vela: se quiser, pode deixar o robô ligado; eu aviso de novo nos minutos finais.`
         : "";
@@ -1822,11 +1840,14 @@ async function resolverFinais(SB: any, ck: number) {
     }
     console.log(`⏱ final ${p.inst} ${p.lado} (${p.tipo}): ${cruzou ? "confirmou" : "não confirmou"} no fechamento`);
     // V39: fecha editando a mesma mensagem (se ainda tiver o id); sem id (estado antigo, ou chat novo), manda nova.
-    await Promise.all(p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
+    const destinos = p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch));
+    const ok = await Promise.all(destinos.map(async (ch) => {
       const id = p.msgIds?.[ch];
-      if (id && (await editarTelegram(ch, id, cortar(msg), botaoAnalisar(p.inst)))) return;
-      await enviarAlertaMoeda(SB, ch, p.inst, cortar(msg), botaoAnalisar(p.inst));
+      if (id && (await editarTelegram(ch, id, cortar(msg), botaoAnalisar(p.inst)))) return true;
+      return !!(await enviarAlertaMoeda(SB, ch, `FINAL_${p.inst}`, cortar(msg), botaoAnalisar(p.inst)));
     }));
+    if (ok.some(Boolean) || !destinos.length) _finalPend.delete(k);
+    else console.log(`⚠️ final ${p.inst} ${p.lado}: nenhum envio do veredito confirmado, deixando pendente pra tentar de novo (a limpeza por idade cobre se continuar falhando)`);
   }
 }
 async function acompanharFinais(SB: any, ck: number, lastMap: Map<string, number>) {
@@ -1838,15 +1859,17 @@ async function acompanharFinais(SB: any, ck: number, lastMap: Map<string, number
     // histerese: entrou com o preço além da linha; só cancela se recuar de verdade pra dentro (margem em % ou em ATR)
     const margem = Math.max(FINAL_CANCELA_PCT, FINAL_CANCELA_ATR * p.atrPct);
     if (alem > -margem) continue;
-    p.estado = "cancelado";
     const nome = p.lado === "long" ? "LONG" : "SHORT";
     console.log(`⏱ final ${p.inst} ${p.lado}: cancelado (preço ${fmtPrice(vivo)}, ${alem.toFixed(3)}% da linha, margem ${margem.toFixed(3)}%)`);
     const msgCancel = `🛑 <b>${p.inst}</b> — RECUOU antes do fechamento\n${DIVISOR}\n\nO aviso "vai fechar cruzado (${nome})" não vale mais: o preço voltou pra dentro da linha (${Math.abs(alem).toFixed(2)}% do lado de dentro). <b>Pode desligar o robô</b> se ligou por causa dele.\nFaltam ~${finalRestMin()} min pra vela fechar; se ela fechar cruzada mesmo assim, o alerta normal de cruzamento sai em seguida.\npreço agora ${fmtPrice(vivo)} | linha ${fmtPrice(p.linha)}`;
-    await Promise.all(p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
+    const destinos = p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch));
+    const ok = await Promise.all(destinos.map(async (ch) => {
       const id = p.msgIds?.[ch];
-      if (id && (await editarTelegram(ch, id, cortar(msgCancel), botaoAnalisar(p.inst)))) return;
-      await enviarAlertaMoeda(SB, ch, p.inst, cortar(msgCancel), botaoAnalisar(p.inst));
+      if (id && (await editarTelegram(ch, id, cortar(msgCancel), botaoAnalisar(p.inst)))) return true;
+      return !!(await enviarAlertaMoeda(SB, ch, `FINAL_${p.inst}`, cortar(msgCancel), botaoAnalisar(p.inst)));
     }));
+    if (ok.some(Boolean) || !destinos.length) p.estado = "cancelado";
+    else console.log(`⚠️ final ${p.inst} ${p.lado}: cancelamento não confirmado, tentando de novo na próxima rodada`);
   }
 }
 async function checarAlertaFinal(
@@ -1972,9 +1995,14 @@ async function checarAlertaFinal(
       console.log(`₿ final ${inst} SHORT de reversão barrado: BTC +${confRes.btcVar.toFixed(1)}%/h (limite ${BTC_BLOQ_REV_PCT}%)`);
       continue;
     }
+    if (BTC_BLOQ_REV_PCT > 0 && s.tipo === "reversao" && lado === "long" && confRes?.btcVar != null && confRes.btcVar <= -BTC_BLOQ_REV_PCT) {
+      if (modo === "aviso") _confBarrada.set(inst + lado, ck);
+      console.log(`₿ final ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}%/h (limite -${BTC_BLOQ_REV_PCT}%)`);
+      continue;
+    }
     const tipoTxt = tipoTxtDe(s.tipo, s.lado);
     const ladoTxt = lado === "long" ? "LONG (compra)" : "SHORT (venda)";
-    const pctTxt = `${s.pct >= 0 ? "📈 subiu +" : "📉 caiu "}${s.pct.toFixed(2)}% em 24h\n`;
+    const pctTxt = `${s.pct >= 0 ? "📈 subiu +" : "📉 caiu "}${(s.pct >= 0 ? s.pct : -s.pct).toFixed(2)}% em 24h\n`;
     const linhas = `preço agora ${fmtPrice(vivo)} | topo ${fmtPrice(hip.topo)} | fundo ${fmtPrice(hip.fundo)} (linhas projetadas pro fechamento)`;
     const foTxt = confRes?.fo ? fundingOiTxt(confRes.fo) : "";
     const linhaFo = confRes ? (foTxt ? `\n💸 ${foTxt}` : "") : await linhaFundingOI(inst);
@@ -2002,6 +2030,15 @@ async function checarAlertaFinal(
     const botaoLiguei: Botoes = modo === "aviso" ? [[{ text: "🔔 Já liguei", callback_data: `liguei:${inst}:${lado}:${ck}` }]] : [];
     const msgIds = await enviarOuEditarFinal(SB, pendAntes, destinos, inst, async (ch) =>
       msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, lado) + (modo === "aviso" ? await blocoPosicao(posDe(ch, inst), hip, lado) : ""), botaoLiguei);
+    // Auditoria #15: mesma família dos achados 4–11, aqui no pipeline paralelo do "alerta dos minutos finais".
+    // `_finalPend`/`registrarAlertaFinal`/`enviados` eram todos gravados incondicionalmente, mesmo que TODOS os
+    // envios/edições falhassem (Telegram fora do ar etc.) — ou seja: ninguém recebia o "LIGUE O ROBÔ AGORA", mas
+    // o bot já marcava a moeda como "avisada" (_finalPend "ativo"), o que trava o loop principal de tentar de
+    // novo nesta vela (linha ~2156: "já coberto pelo alerta dos minutos finais") e ainda registra acerto/erro no
+    // placar (/placar) de um alerta que nunca chegou. `entregouAlgum` confere se pelo menos 1 dos chats de
+    // `destinos` desta rodada terminou com id de mensagem viva (novo envio ou edição confirmada).
+    const entregouAlgum = destinos.some((ch) => !!msgIds[ch]);
+    if (!entregouAlgum) { console.log(`⚠️ final ${inst} ${lado} (${modo}): nenhum envio/edição confirmado, não vou marcar como avisado nem contar na cota`); continue; }
     _finalPend.set(finalKey(inst, lado, ck), {
       inst, lado, ck, linha: lado === "long" ? hip.topo : hip.fundo,
       atrPct: hip.preco > 0 ? (hip.atr / hip.preco) * 100 : 0, chats: destinos, estado: "ativo", tipo: modo,
@@ -2041,16 +2078,7 @@ async function travarCron(SB: any): Promise<boolean> {
     if (!eIns) return true;
     if (/duplicate|already exists|23505/i.test(String(eIns.message || eIns.code || ""))) return false;
     throw eIns;
-  } catch (e) {
-    // Fail-open deliberado: se o Supabase falhar bem aqui (rede/timeout), a rodada segue sem trava em vez
-    // de não rodar. Pra um bot de alerta, ficar mudo numa falha transitória do Supabase é pior que o risco
-    // de 2 rodadas raras se sobrepondo (que na pior hipótese manda um alerta duplicado — chato, não perigoso;
-    // o próprio upsertLinha usado pra gravar estado já é atômico via upsert() nativo, então não corrompe
-    // dado mesmo se colidir). Se algum dia isso virar problema de verdade (ex.: alerta duplicado causando
-    // ação real do usuário), trocar `return true` por `return false` aqui vira fail-safe (pula a rodada).
-    console.log("⚠️ erro travando cron (seguindo sem trava)", e);
-    return true;
-  }
+  } catch (e) { console.log("⚠️ erro travando cron (seguindo sem trava)", e); return true; }
 }
 async function destravarCron(SB: any) {
   try { await upsertLinha(SB, CRON_LOCK_ROW, { last_status: "0" }); } catch (e) { console.log("⚠️ erro destravando cron", e); }
@@ -2182,6 +2210,11 @@ async function runAlertaProativo() {
       console.log(`₿ ${inst} SHORT de reversão barrado: BTC +${confRes.btcVar.toFixed(1)}% na última hora (limite ${BTC_BLOQ_REV_PCT}%)`);
       continue;
     }
+    if (BTC_BLOQ_REV_PCT > 0 && c.tipo === "reversao" && c.lado === "long" && confRes?.btcVar != null && confRes.btcVar <= -BTC_BLOQ_REV_PCT) {
+      _confBarrada.set(inst + c.lado, ckVela);
+      console.log(`₿ ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}% na última hora (limite -${BTC_BLOQ_REV_PCT}%)`);
+      continue;
+    }
     const ligarTxt = c.aprox
       ? (c.ligue
         ? `🚨 <b>LIGUE O ROBÔ AGORA</b> — ${c.ligue.alem ? `o preço já está ${c.lado === "long" ? "acima" : "abaixo"} da linha; a vela fecha em ~${c.ligue.restMin} min (o robô entra no fechamento)` : `chega na linha em ~${Math.max(1, Math.round(c.aprox.etaCandles * TF_MIN))} min, dá tempo de ligar`}\n`
@@ -2191,7 +2224,7 @@ async function runAlertaProativo() {
     const stopAlvoAl = typeof infoAtr === "number" ? stopAlvoTxt(c.lado, vivo ?? c.info.preco, c.info.topo, c.info.fundo, infoAtr, vivo !== null).replace(/^🎯 /, "") : "";
     const msg =
     `🔔 <b>${c.info.instId}</b> — ${c.status}${c.fresco ? " 🆕" : ""}\n${DIVISOR}\n\n` +
-    `${tipoTxt} · ${c.pct >= 0 ? "📈 subiu +" : "📉 caiu "}${c.pct.toFixed(2)}% em 24h\n` +
+    `${tipoTxt} · ${c.pct >= 0 ? "📈 subiu +" : "📉 caiu "}${(c.pct >= 0 ? c.pct : -c.pct).toFixed(2)}% em 24h\n` +
     `Robô abriria: <b>${ladoTxt}</b>\n` +
     (ligarTxt ? subTitulo("🔌 Ligar o robô?") + ligarTxt : "") +
     subTitulo("📍 Onde está") +
@@ -2202,9 +2235,11 @@ async function runAlertaProativo() {
     const linhaFo = confRes ? (foTxt ? `\n💸 ${foTxt}` : "") : await linhaFundingOI(inst);
     const prio = !!c.aprox && chegadaEmJanelaForte(c.aprox, perfilAlerta);
     const linhaConf = "\n" + (prio ? "⚡ <b>PRIORIDADE</b> — chegada prevista dentro de janela forte de movimento\n" : "") + (confRes ? confLinha(confRes) : "");
-    await Promise.all(destinos.map(async (ch) => enviarAlertaMoeda(SB, ch, inst, cortar(msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, c.lado) + (await blocoPosicao(posDe(ch, inst), c.info, c.lado))), botaoAnalisar(inst))));
+    const entregasOk = await Promise.all(destinos.map(async (ch) => !!(await enviarAlertaMoeda(SB, ch, `CRUZ_${inst}`, cortar(msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, c.lado) + (await blocoPosicao(posDe(ch, inst), c.info, c.lado))), botaoAnalisar(inst)))));
+    const entregues = destinos.filter((_, idx) => entregasOk[idx]);
+    if (!entregues.length) { console.log(`⚠️ ${inst} ${c.lado}: nenhum envio confirmado, não vou queimar cooldown/cota desta rodada`); continue; }
     await registrarAlerta(SB, c, confRes?.conf ?? null);
-    if (c.aprox && c.info.idadeCandles === null) await registrarAntecipacao(SB, c, destinos.filter((ch) => !silChat(ch)));
+    if (c.aprox && c.info.idadeCandles === null) await registrarAntecipacao(SB, c, entregues.filter((ch) => !silChat(ch)));
     enviados++;
     const registro = {
       last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : ""),
@@ -2830,7 +2865,7 @@ function ligarRoboTxt(x: { info: IndicadorInfo; lado: "long" | "short"; vivo: nu
   if (info.idadeCandles !== null) {
     t += `⌛ <b>Já cruzou</b> pra ${nome(lado)} há ~${info.idadeCandles * TF_MIN} min: a entrada do robô foi no fechamento daquela vela${entradaRobo ? ` (≈${fmtPrice(entradaRobo)})` : ""}. Já não é caso de ligar antes do cruzamento.\n`;
     if (conf >= CONF_AMARELO && info.idadeCandles <= ANTEC_LIGUE_ETA_CANDLES) {
-      t += `💡 Perdeu a entrada? Sinal bom, entre no manual e ative o robô.\n`;
+      t += `💡 Perdeu a entrada? Sinal bom, entre pelo manual se estiver muito próximo do indicador.\n`;
     }
   } else if (apChega) {
     const dViva = vivo !== null ? distLinha(apChega.alvo, vivo, info.topo, info.fundo) : apChega.dist;
@@ -2930,10 +2965,17 @@ async function runAgora(chatId: number | string, entrada: string) {
   // no radar, pra exatamente a mesma distância.
   const infoAtr = { ...info, atr };
   const apChega = chegandoNaLinha(infoAtr);
+  // V52: mesma família dos bugs V47/V48 (chegandoNaLinha sem atr) — aqui bottom/top vinham hardcoded null,
+  // então o bloco de bônus/penalidade de fundo em pontuar() (linha ~3290) sempre caía no "else add(-3, fora
+  // da estratégia)" pra qualquer LONG de reversão, mesmo com sinais reais de fundo e FUNDO_LIBERA_LONG ligado
+  // — e o lado SHORT nunca pegava o bônus de +2 de topoOk. O /analise já calculava isso certo (bottomA/topA);
+  // o /agora ficou divergente, mostrando confiança mais pessimista que o radar automático pra mesma moeda.
+  const bottomA = FUNDO_ON ? calcFundoPre(d15, info, atr, adx, adxAntes) : null;
+  const topA = TOPO_ON ? calcTopoPre(d15, info, atr, adx, adxAntes) : null;
   const { conf } = pontuar({
     info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1,
     btcAdx: btc ? btc.adx : null, perfil: null, fo, volRatio, chegadaForte: false, apChega,
-    tipo: tipoDoLado(lado, pct), pct24: pct, bottom: null, top: null, btcVar: btcV,
+    tipo: tipoDoLado(lado, pct), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
   });
   const nome = (l: "long" | "short") => (l === "long" ? "LONG" : "SHORT");
   let t = `📸 <b>${instId}</b> — agora\n${DIVISOR}\n\n`;
@@ -3098,21 +3140,22 @@ type CtxPontos = {
 // V43: CONFIANCA_TOTAL_MIN/MAX são o piso e o teto reais de `total` em pontuar(), somando TODOS os add()
 // possíveis (1H, ADX, RSI, volume, idade do cruzamento, velocidade, chegada em janela forte, squeeze,
 // inclinação, distância, trocas, BTC/ETH, perfil de janela, funding×2, OI, histórico da moeda, bônus de
-// fundo/topo). O teto real é +23 (SHORT em reversão com funding subindo rápido a favor + sinais de topo com
-// repique + chegada em janela forte) e o piso é -30 (LONG em reversão com tudo contra, incluindo o bônus de
-// fundo indo a -3). A fórmula antiga assumia -3 a +8 — qualquer sinal decente já estourava e travava em
-// 10/10 (ou em 0/10 do lado ruim), achatando a escala bem mais que o caso do FUNDO_PTS_MAX. CONF_MIN_OPORT e
-// CONF_AMARELO subiram de 5 pra 6 pra continuar exigindo (aproximadamente) os mesmos pontos brutos de antes —
-// a escala de 0-10 ficou ~5x mais "grossa" por ponto (53 pontos brutos / 10, contra 11/10 antes), então não
-// dá pra preservar o corte exato ponto a ponto; onde não deu pra bater exato, o ajuste ficou do lado mais
-// permissivo (nunca mais rígido) pra não atrasar alerta que já disparava. CONF_MIN_FUNDO_LONG e
-// CONF_MIN_REVERSAO ficaram com os mesmos números (6 e 7), mas por causa da escala mais larga eles passam a
-// disparar um pouco mais cedo (mais sensível, não menos).
-// V45: piso/teto corrigidos de -31/+24 pra -30/+23 — o cálculo original somou 2 pontos de confiabInst
-// (histórico da moeda), mas CONFIAB_PTS = 1 (linha ~3612), soma no máximo 1; e o -2 de "cruzamento muito
-// velho" nunca coexiste com o -1 do squeeze no mesmo pontuar() (o bloco do squeeze só roda se
-// idade === null || idade <= ALERT_FRESCO_CANDLES, e um cruzamento "muito velho" nunca satisfaz isso), então
-// esses dois não somam juntos no pior caso.
+// fundo/topo), respeitando as exclusões mútuas entre blocos (ex.: ADX forte x squeeze-com-ADX-subindo; ou
+// idade "cruzamento muito velho" x squeeze, que só dispara com idade nula/fresca). O teto real é +23 (SHORT
+// em reversão com funding subindo rápido a favor + sinais de topo com repique + chegada em janela forte;
+// CONFIAB_PTS=1, não 2) e o piso é -30 (LONG em reversão com tudo contra, incluindo o bônus de fundo indo a
+// -3; sem contar o -1 do squeeze, que não pode coexistir com o -2 de "cruzamento muito velho"). [Auditoria:
+// os valores anteriores, -31/+24, foram recalculados — o teto tinha 1 ponto a mais do que CONFIAB_PTS=1
+// permite (talvez datando de quando esse peso era 2), e o piso tinha 1 ponto a mais por somar duas condições
+// mutuamente exclusivas. Isso nunca disparava o aviso de deriva do V45 abaixo, porque o erro deixava a
+// margem mais larga que a real, não mais estreita — nenhum total observado escapava dela.] A fórmula antiga
+// assumia -3 a +8 — qualquer sinal decente já estourava e travava em 10/10 (ou em 0/10 do lado ruim),
+// achatando a escala bem mais que o caso do FUNDO_PTS_MAX. CONF_MIN_OPORT e CONF_AMARELO subiram de 5 pra 6
+// pra continuar exigindo (aproximadamente) os mesmos pontos brutos de antes — a escala de 0-10 ficou ~5x
+// mais "grossa" por ponto, então não dá pra preservar o corte exato ponto a ponto; onde não deu pra bater
+// exato, o ajuste ficou do lado mais permissivo (nunca mais rígido) pra não atrasar alerta que já disparava.
+// CONF_MIN_FUNDO_LONG e CONF_MIN_REVERSAO ficaram com os mesmos números (6 e 7), mas por causa da escala mais
+// larga eles passam a disparar um pouco mais cedo (mais sensível, não menos).
 const CONFIANCA_TOTAL_MIN = -30;
 const CONFIANCA_TOTAL_MAX = 23;
 const confiancaDe = (total: number) =>
@@ -3359,6 +3402,15 @@ async function checarAntecipacoes(SB: any, poolInfoMap: Map<string, IndicadorInf
     }
     if (!resultado) return;
     const realMin = resultado === "cruzou" ? Math.max(0, Math.round(decorrido - (info.idadeCandles ?? 0) * TF_MIN)) : null;
+    // Auditoria: aqui o update() com .is("resultado", null) é ao mesmo tempo "salva o resultado" E o trava de
+    // concorrência (compare-and-swap) que evita duas rodadas do emLotes processarem a mesma previsão duas vezes.
+    // Consequência aceita: se o enviarAlertaMoeda abaixo falhar (Telegram fora do ar etc.), a previsão já saiu
+    // da lista de pendentes e não tem retry — a pessoa não fica sabendo se "chegando na linha" cruzou/foi
+    // contra/recuou/expirou. Diferente do bug do Achado #3 (cooldown/estado de alerta principal, watchlist,
+    // posições): aqui é só o rodapé informativo da calibração de /calibracao, então a perda é rara e de baixo
+    // impacto. Um fix "correto" pediria trocar o CAS direto por um esquema de reivindicação com prazo de
+    // validade (peça nova de estado, com sua própria limpeza de reivindicações expiradas) — decisão consciente
+    // de não fazer essa troca aqui pra não trocar um bug pequeno por uma peça nova que pode falhar de outro jeito.
     const { data: ok } = await SB.from(ANTEC_TABELA).update({ resultado, real_min: realMin, resolvido_em: new Date().toISOString() }).eq("id", r.id).is("resultado", null).select("id");
     if (!ok || !ok.length) return;
     console.log(`🎯 previsão ${inst} ${lado}: ${resultado} (previsto ${r.eta_prev_min} min, decorrido ${Math.round(decorrido)} min)`);
@@ -3375,12 +3427,16 @@ async function checarAntecipacoes(SB: any, poolInfoMap: Map<string, IndicadorInf
       msg = `⌛ <b>${inst}</b> — passou do prazo sem cruzar\n${DIVISOR}\n\nO aviso "chegando na linha de ${nome}" previa ~${r.eta_prev_min} min e já se passaram ${Math.round(decorrido)} min. <b>Pode desligar o robô</b> se ligou por causa dele.\nDistância até a linha: era ${distPrev.toFixed(2)}% → agora ${dAlvo.toFixed(2)}%\n${indicadorTxt(info)}\npreço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
     }
     const chats = String(r.chats || "").split(",").map((s) => s.trim()).filter((ch) => ch && ALERT_CHAT_IDS.includes(ch) && !silChat(ch));
-    await Promise.all(chats.map((ch) => enviarAlertaMoeda(SB, ch, inst, cortar(msg), botaoAnalisar(inst))));
+    await Promise.all(chats.map((ch) => enviarAlertaMoeda(SB, ch, `ANTEC_${inst}`, cortar(msg), botaoAnalisar(inst))));
   });
 }
 async function montarCalibracao(SB: any, dias: number): Promise<string> {
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
   const { data, error } = await SB.from(ANTEC_TABELA).select("*").gt("criado_em", desde).not("resultado", "is", null).order("criado_em", { ascending: false }).limit(2000);
+  // Auditoria (varredura de não usadas): "error" era lido do Supabase e descartado — se a consulta falhasse,
+  // "rows" virava null e o primeiro rows.filter(...) abaixo estourava; o /placar chama isto com
+  // .catch(() => "") então o erro sumia em silêncio (a seção de calibração só desaparecia da mensagem, sem log).
+  if (error) { console.log("⚠️ montarCalibracao:", error.message); return ""; }
   const rows = data as any[];
   const conta = (res: string) => rows.filter((r) => r.resultado === res).length;
   const cruzou = rows.filter((r) => r.resultado === "cruzou");
@@ -3509,7 +3565,7 @@ async function autoCalibrarAntecipacao(SB: any) {
           `ANTEC_ETA_MAX_CANDLES: ${antes.eta} → <b>${ANTEC_ETA_MAX_CANDLES}</b> velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min)\n` +
           `ANTEC_DIST_MAX_PCT: ${antes.dist}% → <b>${ANTEC_DIST_MAX_PCT}%</b>` +
           (antes.atr !== ANTEC_DIST_MAX_ATR ? `\nANTEC_DIST_MAX_ATR: ${antes.atr} → <b>${ANTEC_DIST_MAX_ATR}</b> (${comAtr.length} amostras com ATR)` : "");
-        await sendTelegram(DONO_CHAT, msg).catch(() => {});
+        await sendTelegram(DONO_CHAT, msg, undefined, { semUi: true }).catch(() => {});
       }
     }
   } catch (e) { console.log("⚠️ autoCalibrarAntecipacao falhou", e); }
@@ -3612,10 +3668,10 @@ const _fundingHist = new Map<string, { funding: number; t: number }>();
 async function fundingTendencia(instId: string, fo: { funding: number | null; oiChg: number | null }): Promise<FundingTend> {
   if (!fo || fo.funding === null) return null;
   const prev = _fundingHist.get(instId);
-  _fundingHist.set(instId, { funding: fo.funding, t: Date.now() });
-  if (!prev) return null;
+  if (!prev) { _fundingHist.set(instId, { funding: fo.funding, t: Date.now() }); return null; }
   const horas = (Date.now() - prev.t) / 3600000;
-  if (horas < 0.25) return null; // rodadas muito próximas: medida instável
+  if (horas < 0.25) return null; // rodadas muito próximas: medida instável — mantém o baseline antigo, não atualiza ainda
+  _fundingHist.set(instId, { funding: fo.funding, t: Date.now() }); // só atualiza o baseline quando o gate já foi cumprido
   const jaExtremo = Math.abs(prev.funding) >= FUNDING_ALTO_PCT;
   const aindaExtremo = Math.abs(fo.funding) >= FUNDING_ALTO_PCT;
   const mesmoLado = Math.sign(fo.funding) === Math.sign(prev.funding) || prev.funding === 0;
@@ -3745,9 +3801,12 @@ async function checarSeguidas(SB: any) {
     if (aviso) {
       aviso += `${idadeTxt(info.idadeCandles)}\n${indicadorTxt(info)}\nADX ${info.adx.toFixed(1)} | RSI ${info.rsi.toFixed(0)}\npreço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
       aviso += await blocoPosicao(posDaMoeda(await getPosicoes(sg.chat), inst), info, ladoAtual(info) ?? chegandoNaLinha(info)?.alvo);
-      await enviarAlertaMoeda(SB, sg.chat, inst, cortar(aviso), botaoSeguida(inst));
+      const id = await enviarAlertaMoeda(SB, sg.chat, `SEG_${inst}`, cortar(aviso), botaoSeguida(inst));
+      if (!id) { console.log(`⚠️ seguidas: ${inst} — envio não confirmado, não vou consumir o cruzamento/cooldown`); return; }
+      await SB.from(TAB).update({ last_status: atual, last_alert_at: new Date().toISOString() }).eq("instid", r.instid);
+    } else {
+      await SB.from(TAB).update({ last_status: atual }).eq("instid", r.instid);
     }
-    await SB.from(TAB).update({ last_status: atual, last_alert_at: aviso ? new Date().toISOString() : r.last_alert_at }).eq("instid", r.instid);
   });
 }
 const RESUMO_ON = (Deno.env.get("RESUMO") || "1") !== "0";
@@ -3836,9 +3895,17 @@ async function checarResumos(SB: any) {
     if (_ultimoResumo[tag] === chave) continue;
     const { data: row } = await SB.from(TAB).select("last_status").eq("instid", "_RESUMO_" + tag).maybeSingle();
     if (row?.last_status === chave) { _ultimoResumo[tag] = chave; continue; }
+    // Auditoria (achado #17): _ultimoResumo[tag] e o upsertLinha (marca "resumo de hoje já mandado") eram
+    // gravados ANTES de sequer tentar enviar — pior que os achados #4-#11 (lá era incondicional ao resultado
+    // do envio; aqui nem esperava o resultado). Se todos os sendTelegram falhassem, o resumo do dia ficava
+    // marcado como entregue e nunca mais era tentado de novo (a janela H a H+3 passava em silêncio).
+    // Corrigido: monta e envia primeiro; só marca "enviado" (memória + Supabase) se pelo menos um chat confirmar.
+    const destinosResumo = ALERT_CHAT_IDS.filter((c) => !silChat(c));
+    if (!destinosResumo.length) continue;
+    const idsResumo = await Promise.all(destinosResumo.map(async (ch) => sendTelegram(ch, await montar(SB, ch), undefined, { semUi: true })));
+    if (!idsResumo.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo no próximo ciclo (ainda dentro da janela H–H+3)
     _ultimoResumo[tag] = chave;
     await upsertLinha(SB, "_RESUMO_" + tag, { last_status: chave, last_alert_at: new Date().toISOString() });
-    await Promise.all(ALERT_CHAT_IDS.filter((c) => !silChat(c)).map(async (ch) => sendTelegram(ch, await montar(SB, ch))));
     console.log(`🗓️ resumo ${tag} enviado (${chave})`);
   }
 }
@@ -3912,7 +3979,7 @@ async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: str
     const n = Number(data?.last_status);
     if (isFinite(n) && n > 0) antigo = n;
   } catch { }
-  const novo = await sendTelegram(chat, ALERTA_MARCA + msg, botoes);
+  const novo = await sendTelegram(chat, ALERTA_MARCA + msg, botoes, { semUi: true });
   if (novo) {
     if (antigo) await apagarMsg(chat, antigo);
     try { await upsertLinha(SB, chave, { last_status: String(novo) }); } catch (e) { console.log("⚠️ não salvei id da mensagem", e); }
@@ -3984,7 +4051,12 @@ function sugestaoPosicao(p: Pos, info: IndicadorInfo & { adx?: number; rsi?: num
   const oposto = longP ? "SHORT" : "LONG";
   const fraco = adx !== null && adx < FILTRO_ADX_MIN;
   const forte = adx !== null && adx >= ADX_REF;
-  const esticado = rsi !== null && (longP ? rsi > FILTRO_RSI_MAX - 10 : rsi < FILTRO_RSI_MIN + 10);
+  // V49: usava FILTRO_RSI_MAX-10/FILTRO_RSI_MIN+10 (75/25) só aqui — divergia do limiar ESTICADO_RSI (80/20)
+  // usado por guiaDentro (mesma seção do /analise, mas sem posição real), pelo alerta automático real de
+  // checarProtecaoLucro e pelo texto do /menu. Resultado: com RSI=77 numa LONG real, /analise dizia "esticado,
+  // realize parte" mas o alerta automático da proteção de lucro (a mesma posição) não teria disparado ainda.
+  const limEstic = longP ? ESTICADO_RSI : 100 - ESTICADO_RSI;
+  const esticado = rsi !== null && (longP ? rsi >= limEstic : rsi <= limEstic);
   const perdendoForca = !fraco && adx !== null && adxAntes !== null && (adx - adxAntes) <= -3;
   const lucroGrande = p.pnl > 0 && p.pnlPct >= 15;
   const forca = [adx !== null ? `ADX ${adx.toFixed(0)}` : "", rsi !== null ? `RSI ${rsi.toFixed(0)}` : ""].filter(Boolean).join(", ");
@@ -4053,22 +4125,25 @@ async function checarPosicoesChat(SB: any, chat: string, posList: Pos[] | null) 
   const { data: row } = await SB.from(TAB).select("last_status").eq("instid", POS_ROW_CHAT).maybeSingle();
   let antes: Record<string, { e: number; p: number }> | null = null;
   if (row?.last_status) { try { antes = JSON.parse(row.last_status); } catch { antes = null; } }
+  const salvar: Record<string, { e: number; p: number }> = { ...atual };
   if (antes) {
     for (const k of Object.keys(atual)) {
       if (antes[k]) continue;
       const p = posList.find((x) => `${x.instId}|${x.lado}` === k)!;
       const info = await calcIndicadorFiltro(p.instId).catch(() => null);
       const msg = `🟢 <b>${p.instId}</b> — posição ABERTA (${p.lado === "long" ? "LONG" : "SHORT"})\n${DIVISOR}\n\nentrada ${fmtPrice(p.entrada)}${p.lev ? ` | ${p.lev}x` : ""}` + (info ? await blocoPosicao([p], info) : "");
-      await enviarAlertaMoeda(SB, chat, p.instId, cortar(msg), botaoAnalisar(p.instId));
+      const id = await enviarAlertaMoeda(SB, chat, `POSCHAT_${p.instId}`, cortar(msg), botaoAnalisar(p.instId));
+      if (!id) delete salvar[k]; // não confirmou: tira do snapshot pra detectar "abriu" de novo na próxima rodada
     }
     for (const k of Object.keys(antes)) {
       if (atual[k]) continue;
       const [inst, lado] = k.split("|");
       const msg = `⚪ <b>${inst}</b> — posição FECHADA (${lado === "long" ? "LONG" : "SHORT"})\n${DIVISOR}\n\nÚltimo PnL aberto visto: ${sgn(antes[k].p)} USDT (estimativa; o resultado real está no /robo).`;
-      await enviarAlertaMoeda(SB, chat, inst, msg, botaoAnalisar(inst));
+      const id = await enviarAlertaMoeda(SB, chat, `POSCHAT_${inst}`, msg, botaoAnalisar(inst));
+      if (!id) salvar[k] = antes[k]; // não confirmou: mantém no snapshot pra detectar "fechou" de novo na próxima rodada
     }
   }
-  await upsertLinha(SB, POS_ROW_CHAT, { last_status: JSON.stringify(atual), last_alert_at: new Date().toISOString() });
+  await upsertLinha(SB, POS_ROW_CHAT, { last_status: JSON.stringify(salvar), last_alert_at: new Date().toISOString() });
 }
 
 const PROT_LUCRO_ON = (Deno.env.get("PROT_LUCRO") || "1") !== "0";
@@ -4178,7 +4253,7 @@ async function checarEnfraquecimento(SB: any, posMap: Map<string, Pos[] | null>)
         let salvo = ant ?? { n: 0, t: 0 };
         if (n === 0) {
           if (prevN !== 0) salvo = { n: 0, t: agora };
-        } else if (n > prevN || (prevN === 0 && agora - prevT >= FRACO_COOLDOWN_MIN * 60000)) {
+        } else if (n > prevN || (n === prevN && agora - prevT >= FRACO_COOLDOWN_MIN * 60000)) {
           const ladoTxt = p.lado === "long" ? "LONG" : "SHORT";
           const cab = `entrada ${fmtPrice(p.entrada)} | agora ${fmtPrice(p.mark)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)`;
           const msg = `${sug.emoji} <b>${p.instId}</b> ${ladoTxt} — ${sug.titulo}\n${DIVISOR}\n\n${cab}\n\n${sug.dica}\n` +
@@ -4197,6 +4272,7 @@ async function checarEnfraquecimento(SB: any, posMap: Map<string, Pos[] | null>)
 }
 const FONTE_FALLBACK_PCT = numEnv("FONTE_FALLBACK_PCT", "30");
 const FONTE_MIN_CHAMADAS = 10;
+const FONTE_AUTOAPAGAR_MIN = numEnv("FONTE_AUTOAPAGAR_MIN", "2");
 async function avisarFonteDados(SB: any) {
   const blofin = _fonte["BloFin"] ?? 0, falhas = _fonte["FALHA"] ?? 0;
   const alt = Object.entries(_fonte).filter(([k]) => k !== "BloFin" && k !== "FALHA");
@@ -4215,11 +4291,24 @@ async function avisarFonteDados(SB: any) {
   const transicao = degradado !== estavaDeg;
   const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
   if (transicao && !ativos.length) return;
+  // Auditoria (achado #16): a mudança de estado (e/t) era gravada incondicionalmente ao envio — se TODOS os
+  // sendTelegram falhassem no ciclo da transição, o aviso "único" se perdia pra sempre (próximo ciclo já via
+  // estavaDeg === degradado e nunca mais tentava). Mesma família dos achados #4-#11. Corrigido: só marca a
+  // transição (e salva) se pelo menos um chat confirmar o envio; senão retorna sem gravar, pra tentar de novo
+  // no próximo ciclo do cron.
   if (transicao) {
-    const msg = degradado
+    const msg = cortar(degradado
       ? `📡 <b>Dados de mercado em modo reserva</b>\n${DIVISOR}\n\nA BloFin não respondeu direito neste ciclo: <b>${pctRuim.toFixed(0)}%</b> das consultas vieram de ${nomes}${falhas ? ` ou falharam (${falhas})` : ""} (${fb + falhas} de ${total}).\n⚠️ Preços e velas dessas fontes podem diferir um pouco da BloFin, onde você opera. Confira o preço na corretora antes de entrar.\n<i>Aviso único: você recebe outro quando normalizar.</i>`
-      : `📡 <b>Dados de mercado normalizados</b> — voltaram a vir da BloFin.`;
-    for (const ch of ativos) await sendTelegram(ch, msg);
+      : `📡 <b>Dados de mercado normalizados</b> — voltaram a vir da BloFin.`);
+    const idsFonte = await Promise.all(ativos.map((ch) => sendTelegram(ch, msg, undefined, { semUi: true })));
+    const entregouFonte = idsFonte.some((id) => !!id);
+    if (!entregouFonte) return; // nenhum chat confirmou: mantém o estado anterior e tenta de novo no próximo ciclo
+    if (FONTE_AUTOAPAGAR_MIN > 0) {
+      await Promise.all(ativos.map((ch, i) => {
+        const id = idsFonte[i];
+        return id ? agendarAutoApagar(SB, ch, id, FONTE_AUTOAPAGAR_MIN * 60000).catch(() => {}) : Promise.resolve();
+      }));
+    }
     console.log(`📡 fonte de dados: ${degradado ? "DEGRADADA" : "normalizada"} (${pctRuim.toFixed(0)}% fora da BloFin, ${total} consultas)`);
   }
   await upsertLinha(SB, "_FONTE_", { last_status: JSON.stringify({ e: degradado ? "deg" : "ok", t: transicao ? Date.now() : (prev.t ?? Date.now()), p: Math.round(pctRuim), f: nomes }), last_alert_at: new Date().toISOString() });
@@ -4288,7 +4377,14 @@ async function buscarFills(cred: Cred, desdeMs: number, maxPag = 12): Promise<{ 
     if (lote.length < 100) break;
     apos = String(lote[lote.length - 1].tradeId ?? "");
     if (!apos) break;
-    if (p === maxPag - 1) cortado = true;
+    if (p === maxPag - 1) {
+      // última página do laço veio cheia (100): confirma com 1 chamada leve (limit=1) se há mais dados
+      // antes de marcar "cortado", pra não avisar falso limite quando aquela era, por coincidência, a página final.
+      try {
+        const probe = await blofinPrivado(`/api/v1/trade/fills-history?begin=${desdeMs}&end=${Date.now()}&limit=1&after=${apos}`, cred);
+        cortado = probe.length > 0;
+      } catch { cortado = true; } // se a checagem falhar, assume o pior (comportamento anterior)
+    }
   }
   return { fills: out, cortado };
 }
@@ -4306,6 +4402,10 @@ async function runMeuPlacar(chatId: number | string, dias: number) {
   const { data, error } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(desdeMs).toISOString()).order("criado_em", { ascending: true }).limit(2000);
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas: ${String(error.message || error).replace(/[<>&]/g, "").slice(0, 160)}`); return; }
   const alertas = ((data || []) as any[]).filter((r) => !ehFinalLog(r));
+  // fills-history da BloFin não traz reduceOnly/orderCategory (só existe em order-history);
+  // fillPnl===0 é o único sinal disponível aqui pra identificar abertura, e por isso classificaria
+  // errado um fechamento que, por coincidência, saiu no mesmo preço de entrada (pnl exato 0) —
+  // caso extremamente raro em cripto e não vale o custo de 1 chamada extra de API por fill pra descartar.
   const aberturas = fills.filter((f) => numOr0(f.fillPnl) === 0).map((f) => ({
     inst: String(f.instId), ts: numOr0(f.ts),
     dir: (f.positionSide === "long" || f.positionSide === "short") ? f.positionSide as string : (f.side === "buy" ? "long" : "short"),
@@ -4361,7 +4461,7 @@ async function avisarCronParado(SB: any) {
     const min = Math.round((Date.now() - new Date(r.last_alert_at).getTime()) / 60000);
     if (min <= CRON_AVISO_MIN) return;
     const msg = `⚠️ <b>Cron estava parado</b> — ficou ~${min} min sem rodar, voltando agora.\n<i>Nesse período os alertas automáticos e a proteção de posições não rodaram.</i>`;
-    await Promise.all(ALERT_CHAT_IDS.map((ch) => sendTelegram(ch, msg)));
+    await Promise.all(ALERT_CHAT_IDS.map((ch) => sendTelegram(ch, msg, undefined, { semUi: true })));
     console.log(`⚠️ cron tinha parado por ${min} min - aviso enviado`);
   } catch (e) { console.log("⚠️ erro checando cron parado", e); }
 }
@@ -4531,7 +4631,7 @@ function montarConfig(): string {
   m += `💸 <b>Taxa no placar</b>: ${TAXA_IDA_VOLTA_PCT.toFixed(3)}% ida e volta (taker ${TAXA_TAKER_PCT}% × 2; ajuste com TAXA_TAKER_PCT ou TAXA_IDA_VOLTA_PCT)\n`;
   m += `📏 <b>Placar</b>: entrada pelo fechamento da vela do cruzamento ${on(PLACAR_ENTRADA_ON && _placarTemEntrada)}${PLACAR_ENTRADA_ON && !_placarTemEntrada ? " (faltam as colunas: rode o ALTER TABLE V30)" : ""} · cruzamento vale até ${ENTRADA_MAX_CANDLES} velas (${ENTRADA_MAX_CANDLES * TF_MIN} min) depois do aviso\n\n`;
   m += `⏱ <b>V32 · alerta dos minutos finais</b> (${on(FINAL_ON)})\n• 🚨 janela: de ${FINAL_JANELA_MAX_MIN} a ${FINAL_JANELA_MIN_MIN} min antes do fechamento da vela ${TIMEFRAME} (cron a cada 1–2 min)\n• avisa se o preço já está ${FINAL_ENTRADA_PCT}%+ além da linha projetada · cancela só se recuar ${FINAL_CANCELA_PCT}% (ou ${FINAL_CANCELA_ATR}×ATR) pra dentro (histerese)\n• 🕒 PREPARE: de ${FINAL_PREPARE_MAX_MIN} a ${FINAL_JANELA_MAX_MIN} min antes, moeda a ≤ ${FINAL_PREPARE_DIST_PCT}% da linha e chegando (máx ${FINAL_PREPARE_MAX} por rodada, confiança mín. −${FINAL_PREPARE_FOLGA_CONF})\n• 🔜 se a vela fechar sem cruzar mas seguir a ≤ ${FINAL_PROXIMA_DIST_PCT}% da linha e chegando, avisa que a chance passa pra próxima vela\n• ⚡ janela forte de horário no fechamento · placar próprio no /placar (${on(FINAL_PLACAR_ON)})\n• pré-filtro ${FINAL_PREFILTRO_PCT}% da linha · máx ${FINAL_MAX_POR_RODADA} por rodada · confirma ✅/❌ no fechamento\n\n`;
-  m += `🛡️ <b>V29</b>\n• filtro BTC: ${on(BTC_DIR_ON)} (±${BTC_DIR_PCT}%/h pontua) · SHORT de reversão barrado com BTC ≥ +${BTC_BLOQ_REV_PCT}%/h${BTC_BLOQ_REV_PCT > 0 ? "" : " (desligado)"}\n• webhook: ${WEBHOOK_SECRET ? "com secret_token ✅" : "SEM secret_token ⚠️"} · cron: ${CRON_SO_HEADER ? "só por header ✅" : "aceita segredo na URL ⚠️"}\n• anti-repetição salva no Supabase\n\n`;
+  m += `🛡️ <b>V29</b>\n• filtro BTC: ${on(BTC_DIR_ON)} (±${BTC_DIR_PCT}%/h pontua) · reversão barrada contra BTC ≥ ±${BTC_BLOQ_REV_PCT}%/h (SHORT com BTC subindo · LONG com BTC caindo)${BTC_BLOQ_REV_PCT > 0 ? "" : " (desligado)"}\n• webhook: ${WEBHOOK_SECRET ? "com secret_token ✅" : "SEM secret_token ⚠️"} · cron: ${CRON_SO_HEADER ? "só por header ✅" : "aceita segredo na URL ⚠️"}\n• anti-repetição salva no Supabase\n\n`;
   m += `📐 <b>V36 · inclinação e compressão</b>\n• inclinação da faixa (${INCLINA_JAN} velas, em velas típicas por vela): forte ≥ ${INCLINA_FORTE} (−2 contra) · moderada ≥ ${INCLINA_MOD} (−1 contra, +1 a favor) · plana ≤ ${INCLINA_PLANA} · virada com sinais de fundo/topo: penalidade aliviada\n• 1º cruzamento em faixa comprimida sem volume ≥ ${VOL_ACEL_RATIO}×: −1\n• 🗜️ radar de compressão (${on(COMPRESS_ON)}): faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica (muito: ≤ ${Math.round(COMPRESS_REL * 100)}%) · volume ≥ ${COMPRESS_VOL_MIN}× · confiança ≥ ${COMPRESS_CONF_MIN}/10 · rodízio de ${COMPRESS_ROT_N} pares por rodada · cooldown ${COMPRESS_COOLDOWN_MIN} min · máx ${COMPRESS_MAX_POR_RODADA} por rodada · entra no /placar (lado do 1º fechamento fora da faixa, em até ${ENTRADA_MAX_CANDLES * TF_MIN} min)\n• ⭐ repique nos dois lados (SHORT no radar de topo · LONG no radar de fundo): bônus +${REPIQUE_BONUS} pt · confiança mín. ${REPIQUE_CONF_MIN}/10 (topo comum ${TOPO_CONF_MIN}) · cooldown ${REPIQUE_COOLDOWN_MIN} min · até ${REPIQUE_MAX_POR_RODADA} por rodada · placar separado por lado · tipo (oportunidade/reversão) só considera o dia virado fora de ±${REPIQUE_PCT_ZONA}% (zona morta contra ruído perto de 0%)\n• 📋 /oportunidade e /reversao: top ${LISTA_POOL_LADO} que mais subiram + top ${LISTA_POOL_LADO} que mais caíram, classificados pelo LADO da virada (igual ao alerta)\n\n`;
   m += `🔴 <b>V35 · radar de topo</b> (${on(TOPO_ON)})\n• alta ≥ ${TOPO_ALTA_MIN}% (em 24h ou desde a mínima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_ALTA} · rejeição na faixa após alta ≥ ${TOPO_TOQUE_VALE_MIN}% pontua · confiança ≥ ${TOPO_CONF_MIN}/10 · pré-filtro ≥ ${TOPO_PRE_MIN} pts · cooldown ${TOPO_COOLDOWN_MIN} min\n\n`;
   m += `🟢 <b>V28/V34 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% (em 24h ou desde a máxima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_RECUO} moedas que mais recuaram · toque na faixa após recuo ≥ ${FUNDO_TOQUE_PICO_MIN}% pontua · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n\n`;
@@ -4721,15 +4821,29 @@ Deno.serve(async (req) => {
       await comAguarde("🔍 Procurando reversões (viradas contra o dia) perto do Indicador, aguarde...", () => runCruzado(chatId, "reversao"));
       return new Response("ok");
     }
+    // V51: com FUNDO_RADAR=0 (ou TOPO_RADAR=0), calcIndicadorFiltro nunca preenche info.bottom/info.top
+    // (ver "if (FUNDO_ON) { ... bottom = calcFundoPre(...) }"), então runFundo/runTopo sempre terminavam
+    // com a lista vazia e mandavam "nenhuma moeda com queda/alta, liquidez e sinais mínimos agora" — parecia
+    // que o mercado não tinha candidatos, mas na verdade o recurso estava desligado. Mesmo bug do /compressao
+    // (V50), só que mais enganoso porque dava resposta em vez de silêncio. Agora avisa "recurso desligado" em
+    // vez de rodar a busca. Isso não muda os alertas automáticos do cron: radarFundo/radarTopo já têm
+    // "if (!FUNDO_ON) return;"/"if (!TOPO_ON) return;" logo no início, então já ficavam mudos corretamente.
     if (text.startsWith("/fundo")) {
+      if (!FUNDO_ON) { await sendTelegram(chatId, "🟢 Radar de fundo desligado neste bot (FUNDO_RADAR=0)."); return new Response("ok"); }
       await comAguarde("🔍 Procurando moedas que despencaram e já mostram sinais de fundo, aguarde...", () => runFundo(chatId));
       return new Response("ok");
     }
     if (text.startsWith("/topo")) {
+      if (!TOPO_ON) { await sendTelegram(chatId, "🔴 Radar de topo desligado neste bot (TOPO_RADAR=0)."); return new Response("ok"); }
       await comAguarde("🔍 Procurando moedas que dispararam e já mostram sinais de topo, aguarde...", () => runTopo(chatId));
       return new Response("ok");
     }
-    if (COMPRESS_ON && text.startsWith("/compressao")) {
+    // V50: com COMPRESS_ON=0 essa condição não entrava e caía direto no "return new Response(ok)" do fim —
+    // o bot ficava mudo (nenhuma mensagem), mesmo com o botão "🗜 Compressão" sempre visível no teclado fixo
+    // (TECLADO_ITENS não filtra por COMPRESS_ON). Diferente de /fundo, /topo, /robo etc, que sempre respondem
+    // alguma coisa. Agora avisa que o recurso está desligado em vez de ficar em silêncio.
+    if (text.startsWith("/compressao")) {
+      if (!COMPRESS_ON) { await sendTelegram(chatId, "🗜️ Radar de compressão desligado neste bot (COMPRESS_ON=0)."); return new Response("ok"); }
       await comAguarde("🔍 Procurando moedas com a faixa comprimida e volume subindo, aguarde...", () => runCompressao(chatId));
       return new Response("ok");
     }
