@@ -1,4 +1,9 @@
-// telegram-bot V45 (V44 + trava do cron virou compare-and-swap de verdade num UPDATE só, sem a janela teórica de
+// telegram-bot V55 (V54 + painel do dia de 21h a 21h: 1 mensagem editada a cada hora, BTC subindo/caindo, comparação desde as 21h e desde as 8h, vira "FIM DO RESUMO DO DIA" na virada; agenda econômica: aviso 60 e 15 min antes de dado de alto impacto (CPI, payroll, FOMC...) pra evitar operar; bloco "agenda de hoje" no resumo da manhã e "amanhã" no da noite (sem mensagem extra, sem duplicar); /agenda; cache em memória + Supabase e aviso quando a fonte está fora)
+// telegram-bot V54 (V53 + /robo: emoji 🪙 no nome da moeda no lugar da bolinha 🟢/🔴 de PnL (colidia com o emoji de estado da linha de baixo); rótulo "LIGUE AGORA" único (os alertas diziam "LIGUE O ROBÔ AGORA" no corpo e "LIGUE AGORA" no título e no /help); linha de PnL própria com 😎 (ganhando) / 🤧 (perdendo) e liq em linha separada; nos outros lugares (/analise, /agora, alertas de posição e de proteção) o PnL da posição ganhou ➕/➖ na frente (não quebra mais no celular) e dica de stop alinhada ao trailing (não manda mais "stop na entrada" quando o trailing já manda travar ganho); coerência do repique, sem mudar o nome: limiares do marcador alinhados ao pool (FUNDO_TOQUE_PICO_MIN/
+// TOPO_TOQUE_VALE_MIN acompanham FUNDO_QUEDA_MIN/TOPO_ALTA_MIN); zona morta ±REPIQUE_PCT_ZONA única em tipoDoLado (só pra moeda que devolveu o movimento; o resto
+// fica como antes), usada pelo classificar(), pela lista e pelo /agora; +2 de "sinais de fundo" do LONG simétrico ao do SHORT em pontuar(); textos
+// dos alertas/motivos/ajuda dizem "retomada" (a favor do movimento anterior) em vez de "virada" pro repique; /help e as
+// mensagens de busca de /fundo e /topo descrevem o critério real (queda/alta desde a máxima/mínima recente, não só "no dia"); trava do cron ganhou dono: destravarCron só libera se a trava ainda for da própria rodada; /help do modo Novato passava de 4096 caracteres e não chegava — agora sai em 2 mensagens; /oportunidade e /reversao vazias dizem o motivo dos descartes) (V53 = V52 + seta de cor da confiança (🟢→🟡…) e /start e /help reorganizados por modo) (V52 = V51 + /agora passa bottom/top reais pra pontuar()) (V51 = /fundo e /topo avisam "recurso desligado") (V50 = /compressao avisa com COMPRESS_ON=0) (V49 = RSI de proteção alinhado ao ESTICADO_RSI) (V48 = classificar() do /analise recebe o atr) (V47 = avisarAdmin + atr no /agora e /analise) (V46 = FUNDO_PTS_MAX derivado do REPIQUE_BONUS; upsertLinha atômico) (V45 = V44 + trava do cron virou compare-and-swap de verdade num UPDATE só, sem a janela teórica de
 // corrida da versão anterior (ler→checar→escrever em 2 chamadas); autoconferência da escala de confiança —
 // avisa no log se o total de pontuar() escapar de CONFIANCA_TOTAL_MIN/MAX, pra pegar deriva se algum peso mudar
 // sem recalcular as constantes; ANTEC_CALIB_MIN e a janela de amostras do confiabilidadeMoeda (CONFIAB_JANELA_N)
@@ -7,7 +12,7 @@
 // o dia negativo (topo) agora classificam tipo "oportunidade" em vez de sempre "reversao", mesma regra do
 // tipoDoLado) (V43 = V42 + zona morta REPIQUE_PCT_ZONA (±2%, padrão) em torno de pct≈0 pra classificar o tipo do
 // repique — sem ela, ruído de rodada cruzava o zero e trocava oportunidade↔reversão à toa (mudava a confiança
-// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-31 a +24, o
+// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-31 a +24 na época; hoje -30 a +23 desde o V45, o
 // piso e o teto reais de `total` em pontuar() somando todos os add() possíveis) substituem a faixa antiga de -3
 // a +8, que era estreita demais e estourava/travava em 10 ou 0 com qualquer sinal decente; CONF_MIN_OPORT e
 // CONF_AMARELO subiram de 5 pra 6 pra exigir aproximadamente os mesmos pontos brutos de antes na escala nova)
@@ -64,6 +69,7 @@ const ALERT_POOL = 40;
 const TIMEFRAME = "15m";
 const PESO_SUPREMA = 0.5;
 const TOP_N_CRUZADO = 10;
+const CONF_LISTA_TOP = numEnv("CONF_LISTA_TOP", "5"); // V54: quantas moedas de /oportunidade e /reversao ganham a linha de confiança
 const OPORT_POOL = 40;
 const PAIRS_CACHE_MS = 30 * 60 * 1000;
 let FILTRO_VOL_MIN_USDT = numEnv("FILTRO_VOL_MIN_USDT", "1000000");
@@ -108,13 +114,16 @@ const _confBarrada = new Map<string, number>();
 const FUNDO_ON = (Deno.env.get("FUNDO_RADAR") || "1") !== "0";
 const FUNDO_QUEDA_MIN = numEnv("FUNDO_QUEDA_MIN", "10");
 const FUNDO_JAN_PICO = numEnv("FUNDO_JAN_PICO", "96");
-const FUNDO_TOQUE_PICO_MIN = numEnv("FUNDO_TOQUE_PICO_MIN", "6");
+// V54: o padrão acompanha FUNDO_QUEDA_MIN (antes 6 contra 10: a moeda era marcada ⭐ repique e ganhava +2/+1,
+// mas não entrava no pool nem no classificar(), que exigem FUNDO_QUEDA_MIN). Mesma medida (ddDoPico) nos dois.
+const FUNDO_TOQUE_PICO_MIN = numEnv("FUNDO_TOQUE_PICO_MIN", String(FUNDO_QUEDA_MIN));
 const ALERT_POOL_RECUO = numEnv("ALERT_POOL_RECUO", "15");
 const TOPO_ON = (Deno.env.get("TOPO_RADAR") || "1") !== "0";
 const TOPO_ALTA_MIN = numEnv("TOPO_ALTA_MIN", "10");
 const TOPO_CONF_MIN = numEnv("TOPO_CONF_MIN", "5");
 const TOPO_PRE_MIN = numEnv("TOPO_PRE_MIN", "5");
-const TOPO_TOQUE_VALE_MIN = numEnv("TOPO_TOQUE_VALE_MIN", "6");
+// V54: idem FUNDO_TOQUE_PICO_MIN — o padrão acompanha TOPO_ALTA_MIN (altaDoVale nos dois lados).
+const TOPO_TOQUE_VALE_MIN = numEnv("TOPO_TOQUE_VALE_MIN", String(TOPO_ALTA_MIN));
 const TOPO_COOLDOWN_MIN = numEnv("TOPO_COOLDOWN_MIN", "240");
 const TOPO_MAX_POR_RODADA = numEnv("TOPO_MAX_POR_RODADA", "2");
 const ALERT_POOL_ALTA = numEnv("ALERT_POOL_ALTA", "15");
@@ -135,7 +144,8 @@ const COMPRESS_ROT_N = numEnv("COMPRESS_ROT_N", "25");
 const COMPRESS_MANUAL_N = numEnv("COMPRESS_MANUAL_N", "60");
 const COMPRESS_PTS_MAX = 12;
 const LISTA_POOL_LADO = numEnv("LISTA_POOL_LADO", "30");
-// V36: prioridade do REPIQUE SHORT (moeda que despencou, repicou até a faixa e está sendo rejeitada = virada LONG → SHORT a favor da queda)
+// V36: prioridade do REPIQUE nos dois lados — SHORT = moeda que despencou, repicou até a faixa e está sendo rejeitada (retoma a queda);
+// LONG = moeda que disparou, recuou até a faixa e está segurando (retoma a alta). Nos dois casos é a favor do movimento anterior.
 const REPIQUE_BONUS = numEnv("REPIQUE_BONUS", "1");
 const REPIQUE_CONF_MIN = numEnv("REPIQUE_CONF_MIN", "4");
 const REPIQUE_COOLDOWN_MIN = numEnv("REPIQUE_COOLDOWN_MIN", "120");
@@ -162,6 +172,11 @@ const FUNDO_BTC_QUEDA_PCT = numEnv("FUNDO_BTC_QUEDA_PCT", "1.5");
 // desalinha em silêncio — o mesmo bug que o comentário V43 (CONFIANCA_TOTAL_MIN/MAX, acima) já corrigiu na
 // pontuar(). Aqui o teto vira derivado, então nunca fica desatualizado sozinho.
 const FUNDO_PTS_MAX = 16 + Math.max(0, REPIQUE_BONUS);
+// V54: com os padrões atuais (FUNDO_PTS_MAX=17, confiança = round(pts*10/17)), FUNDO/TOPO_CONF_MIN=5 exige >= 8 pontos
+// brutos e REPIQUE_CONF_MIN=4 exige >= 6; o pré-filtro exige 5 (repique: 4). O repique já traz +2 (toque) +1 (bônus)
+// dentro desses pontos, então na prática precisa de ~3 pontos de outras evidências contra ~8 do fundo/topo comum.
+// É uma vantagem grande e proposital (repique = a favor do movimento anterior, com a faixa como suporte/resistência);
+// se mudar REPIQUE_CONF_MIN/REPIQUE_BONUS, reconferir estas contas e validar no /placar (repique LONG/SHORT vs. comum).
 // piso teórico: caindoFaca (-2) + ADX acelerando (-1) no pré-filtro, + OI subindo (-1) + BTC contra (-2) no
 // final = -6. Não afeta a escala (confFundo trava em 0 com Math.max), só serve de referência pra auto-checagem abaixo.
 const FUNDO_PTS_MIN = -6;
@@ -263,7 +278,7 @@ type Botoes = Botao[][];
 const TECLADO_ITENS: [string, string][] = [
   ["🚀 Oportunidade", "/oportunidade"], ["🔄 Reversão", "/reversao"], ["🟢 Fundo", "/fundo"], ["🔴 Topo", "/topo"], ["🗜 Compressão", "/compressao"], ["📋 Lista", "/lista"],
   ["⭐ Seguidas", "/seguidas"], ["📊 Placar", "/placar"], ["🤖 Robô", "/robo"],
-  ["🌅 Resumo", "/resumo"], ["🧾 Meu placar", "/meuplacar"],
+  ["🌅 Resumo", "/resumo"], ["📅 Agenda", "/agenda"], ["🧾 Meu placar", "/meuplacar"],
   ["⏸ Pausar", "/pausar"],
 ];
 const TECLADO_CMD: Record<string, string> = Object.fromEntries(TECLADO_ITENS.map(([l, c]) => [l.toLowerCase(), c]));
@@ -728,6 +743,28 @@ async function getVariacoes24h(): Promise<VarInfo[]> {
   return variacoes;
 }
 const cortar = (msg: string) => (msg.length > 4000 ? msg.slice(0, 3990) + "\n...(cortado)" : msg);
+// V54: o Telegram recusa mensagem com mais de 4096 caracteres e o sendTelegram não divide — o /help do modo Novato
+// (~4.2k) simplesmente não chegava (a 1ª tentativa falha por tamanho e a 2ª, sem HTML, falha pelo mesmo motivo).
+// dividirTexto() quebra em partes <= max, de preferência numa linha divisória (DIVISOR/MINI_DIVISOR) ou em branco, sempre
+// entre linhas (as tags <b>/<i> do /help ficam todas dentro de uma linha, então cada parte continua HTML válido).
+function dividirTexto(texto: string, max = 3800): string[] {
+  if (texto.length <= max) return [texto];
+  const ehQuebra = (l: string) => l.trim() === "" || l === DIVISOR || l === MINI_DIVISOR;
+  const partes: string[] = [];
+  let cur: string[] = [];
+  const tam = (ls: string[]) => ls.join("\n").length;
+  for (const linha of texto.split("\n")) {
+    if (cur.length && tam([...cur, linha]) > max) {
+      let corte = cur.length;
+      for (let k = cur.length - 1; k > 0; k--) if (ehQuebra(cur[k])) { corte = k; break; }
+      partes.push(cur.slice(0, corte).join("\n"));
+      cur = cur.slice(corte).filter((l, i) => !(i === 0 && ehQuebra(l)));
+    }
+    cur.push(linha);
+  }
+  if (cur.length) partes.push(cur.join("\n"));
+  return partes.map((x) => x.replace(/^\n+|\n+$/g, "")).filter((x) => x.trim() !== "");
+}
 function calcRSI(closes: number[], period = 14): number {
   if (closes.length < period + 1) return 50;
   let ganho = 0, perda = 0;
@@ -865,7 +902,7 @@ function calcFundoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, 
   else if (adx - adxAntes >= 2) add(-1, `ADX subindo (${adxAntes.toFixed(0)} → ${adx.toFixed(0)}): a queda ainda acelera`);
   if (d.c[n - 1] > d.o[n - 1] && d.c[n - 1] > d.h[n - 2]) add(1, "última vela 15m verde e fechou acima da máxima da anterior");
   repique = repique && !caindoFaca;
-  if (repique && REPIQUE_BONUS > 0) add(REPIQUE_BONUS, "⭐ repique segurando na faixa: virada SHORT → LONG a favor da alta anterior (prioridade)");
+  if (repique && REPIQUE_BONUS > 0) add(REPIQUE_BONUS, "⭐ repique segurando na faixa: retomada da alta anterior, LONG a favor dela (prioridade)");
   const pts = motivos.reduce((s, m) => s + m.pts, 0);
   return { pts, conf: confFundo(pts, caindoFaca), motivos, caindoFaca, minimo: minL, dAtr, repique };
 }
@@ -935,7 +972,7 @@ function msgFundo(info: InfoFiltravel, pct: number, queda: number, fin: FundoFin
     : `🔌 <b>Ligar o robô?</b>\n⏳ <b>Ainda não</b> — preço ${info.distAbs.toFixed(2)}% abaixo da faixa; se o robô estiver ligado, está SHORT. Ele só vira LONG se uma vela 15m FECHAR acima de ${fmtPrice(info.topo)} (faltam ${Math.max(0, dTopo).toFixed(2)}%).\n`;
   return `${fin.repique ? "⭐🟢 <b>REPIQUE LONG — " : "🟢 <b>RADAR DE FUNDO — "}${info.instId}</b>\n${DIVISOR}\n\n` +
     `📉 ${quedaTxt(pct, queda)} · ${vivo !== null ? `preço agora ${fmtPrice(vivo)}` : `preço ${fmtPrice(info.preco)}`}\n` +
-    `<i>${fin.repique ? "Moeda que disparou, recuou até a faixa e está segurando nela: virada SHORT → LONG a favor da alta (prioridade)." : "Possível virada de queda pra alta."}</i> <b>Ainda não é entrada</b>: o robô só abre LONG quando fechar 15m acima do indicador.\n\n` +
+    `<i>${fin.repique ? "Moeda que disparou, recuou até a faixa e está segurando nela: retomada da alta, LONG a favor dela (prioridade)." : "Possível virada de queda pra alta."}</i> <b>Ainda não é entrada</b>: o robô só abre LONG quando fechar 15m acima do indicador.\n\n` +
     ligar + `\n` +
     `${fundoTxt(fin, 5, 3, seta)}\n` +
     (foTxt ? `💸 ${foTxt}\n` : "") +
@@ -997,9 +1034,10 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     const seta = setaTxt(row?.last_status, fin.conf);
     const msg = msgFundo(c.info, c.pct, c.queda, fin, vivo, seta);
     const ids = await Promise.all(ativos.map(async (ch) => {
+      const atrRadar = typeof (c.info as any).atr === "number" ? (c.info as any).atr : 0;
       let extra = "";
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst).filter((x) => x.lado === "short")) {
-        extra += `\n\n📌 <b>Você está SHORT em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nSinais de fundo aparecendo: considere realizar parte do lucro e subir o stop pro preço de entrada.`;
+        extra += `\n\n📌 <b>Você está SHORT em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${p.pnl > 0 ? `Sinais de fundo aparecendo: considere realizar parte do lucro e ${stopSugeridoTxt(p, atrRadar)}.` : `Sinais de fundo aparecendo contra a sua posição SHORT, que está no prejuízo: confira o stop antes.`}`;
       }
       return await enviarAlertaMoeda(SB, ch, `FUNDO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
     }));
@@ -1023,6 +1061,9 @@ async function runFundo(chatId: number | string) {
     const queda = quedaEfetiva(p.pct, Math.max(p.dd, info.ddPico ?? 0));
     if (queda < FUNDO_QUEDA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
     if (ladoAtual(info) === "long") return;
+    // V54: mesmo pré-filtro do radar automático e de /oportunidade + /reversao (pts mínimos de sinal). Antes o /fundo listava moeda com
+    // 0 pts de sinal, apesar do título ("+ sinais de exaustão") e da mensagem vazia ("sinais mínimos") prometerem o contrário.
+    if (info.bottom.pts < (info.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN)) return;
     cands.push({ info, pct: p.pct, queda });
   });
   cands.sort((a, b) => Number(!!b.info.bottom!.repique) - Number(!!a.info.bottom!.repique) || b.info.bottom!.pts - a.info.bottom!.pts);
@@ -1041,7 +1082,7 @@ async function runFundo(chatId: number | string) {
     if (neg.length) msg += `⚠️ ${neg.join(" · ")}\n`;
     msg += `preço ${fmtPrice(c.info.preco)} (${c.info.distAbs.toFixed(1)}% abaixo da faixa) | topo ${fmtPrice(c.info.topo)}\n\n`;
   });
-  msg += `<i>Aviso antecipado, não é entrada: o robô só abre LONG quando fechar 15m acima do indicador. O alerta automático sai com confiança ≥ ${FUNDO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
+  msg += `<i>⭐ repique = disparou, recuou até a faixa e segura nela (retomada da alta). Aviso antecipado, não é entrada: o robô só abre LONG quando fechar 15m acima do indicador. O alerta automático sai com confiança ≥ ${FUNDO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
   await sendTelegram(chatId, cortar(msg), itens.length ? botoesAnalisarLista(itens.map(({ c }) => c.info.instId)) : undefined);
 }
 
@@ -1102,7 +1143,7 @@ function calcTopoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, a
   else if (adx - adxAntes >= 2) add(-1, `ADX subindo (${adxAntes.toFixed(0)} → ${adx.toFixed(0)}): a alta ainda acelera`);
   if (d.c[n - 1] < d.o[n - 1] && d.c[n - 1] < d.l[n - 2]) add(1, "última vela 15m vermelha e fechou abaixo da mínima da anterior");
   repique = repique && !subindoFoguete;
-  if (repique && REPIQUE_BONUS > 0) add(REPIQUE_BONUS, "⭐ repique rejeitado na faixa: virada LONG → SHORT a favor da queda anterior (prioridade)");
+  if (repique && REPIQUE_BONUS > 0) add(REPIQUE_BONUS, "⭐ repique rejeitado na faixa: retomada da queda anterior, SHORT a favor dela (prioridade)");
   const pts = motivos.reduce((s, m) => s + m.pts, 0);
   return { pts, conf: confFundo(pts, subindoFoguete), motivos, caindoFaca: subindoFoguete, minimo: maxH, dAtr, repique };
 }
@@ -1141,7 +1182,7 @@ function msgTopo(info: InfoFiltravel, pct: number, alta: number, fin: FundoFinal
     : `🔌 <b>Ligar o robô?</b>\n⏳ <b>Ainda não</b> — preço ${info.distAbs.toFixed(2)}% acima da faixa; se o robô estiver ligado, está LONG. Ele só vira SHORT se uma vela 15m FECHAR abaixo de ${fmtPrice(info.fundo)} (faltam ${Math.max(0, dFundo).toFixed(2)}%).\n`;
   return `${fin.repique ? "⭐🔴 <b>REPIQUE SHORT — " : "🔴 <b>RADAR DE TOPO — "}${info.instId}</b>\n${DIVISOR}\n\n` +
     `📈 ${altaTxt(pct, alta)} · ${vivo !== null ? `preço agora ${fmtPrice(vivo)}` : `preço ${fmtPrice(info.preco)}`}\n` +
-    `<i>${fin.repique ? "Moeda que despencou, repicou até a faixa e está sendo rejeitada: virada LONG → SHORT a favor da queda (prioridade)." : "Possível virada de alta pra queda."}</i> <b>Ainda não é entrada</b>: o robô só abre SHORT quando fechar 15m abaixo do indicador.\n\n` +
+    `<i>${fin.repique ? "Moeda que despencou, repicou até a faixa e está sendo rejeitada: retomada da queda, SHORT a favor dela (prioridade)." : "Possível virada de alta pra queda."}</i> <b>Ainda não é entrada</b>: o robô só abre SHORT quando fechar 15m abaixo do indicador.\n\n` +
     ligar + `\n` +
     `${topoTxt(fin, 5, 3, seta)}\n` +
     (foTxt ? `💸 ${foTxt}\n` : "") +
@@ -1197,9 +1238,10 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
     const seta = setaTxt(row?.last_status, fin.conf);
     const msg = msgTopo(c.info, c.pct, c.alta, fin, vivo, seta);
     const ids = await Promise.all(ativos.map(async (ch) => {
+      const atrRadar = typeof (c.info as any).atr === "number" ? (c.info as any).atr : 0;
       let extra = "";
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst).filter((x) => x.lado === "long")) {
-        extra += `\n\n📌 <b>Você está LONG em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nSinais de topo aparecendo: considere realizar parte do lucro e subir o stop pro preço de entrada.`;
+        extra += `\n\n📌 <b>Você está LONG em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${p.pnl > 0 ? `Sinais de topo aparecendo: considere realizar parte do lucro e ${stopSugeridoTxt(p, atrRadar)}.` : `Sinais de topo aparecendo contra a sua posição LONG, que está no prejuízo: confira o stop antes.`}`;
       }
       return await enviarAlertaMoeda(SB, ch, `TOPO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
     }));
@@ -1223,6 +1265,8 @@ async function runTopo(chatId: number | string) {
     const alta = altaEfetiva(p.pct, Math.max(p.up, info.altaVale ?? 0));
     if (alta < TOPO_ALTA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
     if (ladoAtual(info) === "short") return;
+    // V54: idem /fundo — pré-filtro de pts do radar de topo (antes listava moeda sem sinal nenhum).
+    if (info.top.pts < (info.top.repique ? Math.max(1, TOPO_PRE_MIN - 1) : TOPO_PRE_MIN)) return;
     cands.push({ info, pct: p.pct, alta });
   });
   cands.sort((a, b) => Number(!!b.info.top!.repique) - Number(!!a.info.top!.repique) || b.info.top!.pts - a.info.top!.pts);
@@ -1241,7 +1285,7 @@ async function runTopo(chatId: number | string) {
     if (neg.length) msg += `⚠️ ${neg.join(" · ")}\n`;
     msg += `preço ${fmtPrice(c.info.preco)} (${ladoAtual(c.info) === "long" ? `${c.info.distAbs.toFixed(1)}% acima da faixa` : "dentro da faixa"}) | fundo ${fmtPrice(c.info.fundo)}\n\n`;
   });
-  msg += `<i>Aviso antecipado, não é entrada: o robô só abre SHORT quando fechar 15m abaixo do indicador. O alerta automático sai com confiança ≥ ${TOPO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
+  msg += `<i>⭐ repique = despencou, repicou até a faixa e foi rejeitada (retomada da queda). Aviso antecipado, não é entrada: o robô só abre SHORT quando fechar 15m abaixo do indicador. O alerta automático sai com confiança ≥ ${TOPO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
   await sendTelegram(chatId, cortar(msg), itens.length ? botoesAnalisarLista(itens.map(({ c }) => c.info.instId)) : undefined);
 }
 // ───── V36: radar de COMPRESSÃO — faixa achatada + velas minúsculas + volume começando a subir = rompimento iminente (direção imprevisível: o robô ligado pega o lado que romper) ─────
@@ -1359,7 +1403,7 @@ async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: st
     const ids = await Promise.all(ativos.map(async (ch) => {
       let extra = "";
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst)) {
-        extra += `\n\n📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"} em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nO rompimento pode vir pros dois lados: confira o stop antes.`;
+        extra += `\n\n📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"} em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nO rompimento pode vir pros dois lados: confira o stop antes.`;
       }
       return await enviarAlertaMoeda(SB, ch, `COMPRESSAO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
     }));
@@ -1454,6 +1498,27 @@ function motivoDescarte(x: InfoFiltravel, volUsdt: number, checaDist: boolean, l
 //   oportunidade = a favor do dia · reversão = contra o dia (SHORT em moeda que subiu = virada LONG → SHORT; LONG em moeda que caiu = virada SHORT → LONG)
 type ItemLado = { info: InfoFiltravel; pct: number; lado: "long" | "short"; tipo: "oportunidade" | "reversao"; noAlerta: boolean; repique: boolean };
 let _ladosCache: { t: number; itens: ItemLado[] } | null = null;
+// V54: contagem dos descartes da última montagem da lista (a mesma do cache), pra mensagem de lista vazia dizer o motivo
+let _ladosDescarte: { pool: number; cont: Record<string, number>; semFundo: number } | null = null;
+// /help em partes: comandos numa mensagem e "Como o robô e os alertas funcionam" (modo Novato) em outra; se alguma ainda
+// passar do limite, dividirTexto() quebra de novo.
+function ajudaEmPartes(texto: string): string[] {
+  const i = texto.indexOf(`\n${DIVISOR}\n<b>ℹ️ Como`);
+  const blocos = i > 0 ? [texto.slice(0, i), texto.slice(i + 1)] : [texto];
+  return blocos.flatMap((b) => dividirTexto(b));
+}
+function textoListaVazia(d: { pool: number; cont: Record<string, number>; semFundo: number } | null, outroTipo: number): string {
+  if (!d) return "sem dados no momento (nenhuma moeda passou nos filtros)\n";
+  const nomes: [string, number][] = [
+    [`distância > ${FILTRO_DIST_MAX_PCT}% da linha`, d.cont.dist ?? 0], ["ADX baixo", d.cont.adx ?? 0], ["RSI fora da faixa", d.cont.rsi ?? 0],
+    ["volume baixo", d.cont.volume ?? 0], ["serrote", d.cont.serrote ?? 0], ["LONG sem sinal de fundo", d.semFundo],
+  ];
+  const motivos = nomes.filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t}: ${n}`).join(" · ");
+  let m = `nenhuma moeda do pool (${d.pool}) passou nos filtros agora`;
+  if (motivos) m += `\n<i>descartadas por → ${motivos}</i>`;
+  if (outroTipo > 0) m += `\n<i>${outroTipo} passaram, mas são do outro tipo (veja /oportunidade e /reversao)</i>`;
+  return m + "\n";
+}
 async function itensPorLado(calc: (id: string) => Promise<InfoFiltravel | null> = calcIndicadorFiltro, variacoesIn?: VarInfo[]): Promise<ItemLado[]> {
   if (!variacoesIn && _ladosCache && Date.now() - _ladosCache.t < 60000) return _ladosCache.itens;
   const variacoes = variacoesIn ?? await getVariacoes24h();
@@ -1471,7 +1536,7 @@ async function itensPorLado(calc: (id: string) => Promise<InfoFiltravel | null> 
     const v = pool[i];
     const setup = classificar(info, v.pct);
     const lado = setup?.lado ?? ladoDoSetup(info, chegandoNaLinha(info));
-    const tipo = setup?.tipo ?? tipoDoLado(lado, v.pct);
+    const tipo = setup?.tipo ?? tipoDoLado(lado, v.pct, devolveuMovimento(info, lado));
     const m = motivoDescarte(info, v.volUsdt, true, lado);
     if (m) { cont[m]++; return; }
     if (!setup && ESTRAT_PUMP && tipo === "reversao" && lado === "long") {
@@ -1481,7 +1546,7 @@ async function itensPorLado(calc: (id: string) => Promise<InfoFiltravel | null> 
     itens.push({ info, pct: v.pct, lado, tipo, noAlerta: !!setup, repique: lado === "short" ? !!info.top?.repique : !!info.bottom?.repique });
   });
   console.log(`🧹 /oportunidade + /reversao: ${pool.length} no pool -> ${itens.length} passaram | descartadas: volume ${cont.volume}, ADX ${cont.adx}, RSI ${cont.rsi}, distância>${FILTRO_DIST_MAX_PCT}% ${cont.dist}, serrote ${cont.serrote}, LONG sem sinal de fundo ${semFundo}`);
-  if (!variacoesIn) _ladosCache = { t: Date.now(), itens };
+  if (!variacoesIn) { _ladosCache = { t: Date.now(), itens }; _ladosDescarte = { pool: pool.length, cont: { ...cont }, semFundo }; }
   return itens;
 }
 async function runCruzado(chatId: number | string, tipoAlvo: "oportunidade" | "reversao") {
@@ -1491,19 +1556,26 @@ async function runCruzado(chatId: number | string, tipoAlvo: "oportunidade" | "r
     .map((x) => ({ x, nota: x.info.distAbs * (ADX_REF / Math.max(x.info.adx, 1)) }))
     .sort((a, b) => Number(b.x.repique) - Number(a.x.repique) || a.nota - b.nota)
     .slice(0, TOP_N_CRUZADO).map((e) => e.x);
+  // V54: confiança X/10 nas primeiras moedas da lista (mesmo cálculo dos alertas e do /analise, via calcConfiancaAlerta). Limitado às
+  // CONF_LISTA_TOP primeiras porque cada uma faz várias consultas (velas 1H, funding, book...); a ordem da lista não muda.
+  const [varsC, perfilC] = top.length ? await Promise.all([getVariacoes24h().catch(() => [] as VarInfo[]), xPerfilHoras().catch(() => null)]) : [[] as VarInfo[], null];
+  const volDe = new Map(varsC.map((v) => [v.instId, v.volUsdt] as [string, number]));
+  const confsC = await Promise.all(top.map((x, i) => i >= CONF_LISTA_TOP ? Promise.resolve(null) : calcConfiancaAlerta(
+    { info: x.info, pct: x.pct, lado: x.lado, tipo: x.tipo, status: "", fresco: false, aprox: chegandoNaLinha(x.info) },
+    volDe.get(x.info.instId) ?? null, perfilC)));
   const dur = ((Date.now() - inicio) / 1000).toFixed(1);
   const pool = `top ${LISTA_POOL_LADO} que mais subiram + top ${LISTA_POOL_LADO} que mais caíram (24h)`;
   let msg = tipoAlvo === "oportunidade"
     ? `🚀 <b>OPORTUNIDADE — a favor do dia + perto do Indicador</b> — ${dur}s\n<i>LONG em moeda que subiu · SHORT em moeda que caiu · pool: ${pool}</i>\n${DIVISOR}\n\n`
     : `🔄 <b>REVERSÃO — vira contra o dia + perto do Indicador</b> — ${dur}s\n<i>SHORT em moeda que subiu (LONG → SHORT) · LONG em moeda que caiu (SHORT → LONG)${ESTRAT_PUMP ? ", só com sinais de fundo" : ""} · pool: ${pool}</i>\n${DIVISOR}\n\n`;
-  if (top.length === 0) msg += "sem dados no momento (nenhuma moeda passou nos filtros)\n";
+  if (top.length === 0) msg += textoListaVazia(_ladosDescarte, todos.length);
   top.forEach((x, i) => {
     const j = x.info;
     const dia = `${x.pct >= 0 ? "📈 +" : "📉 "}${x.pct.toFixed(2)}% em 24h`;
     const ladoLinha = x.tipo === "oportunidade"
       ? `${x.lado === "long" ? "🟢 LONG a favor da alta" : "🔴 SHORT a favor da queda"} (${dia})`
       : `${x.lado === "short" ? "🔴 SHORT" : "🟢 LONG"} · virada ${x.lado === "short" ? "LONG → SHORT" : "SHORT → LONG"} (${dia})`;
-    msg += `<b>${i + 1}. ${j.instId}</b>${x.repique ? " ⭐" : ""}${x.noAlerta ? " 🔔" : ""}\n${ladoLinha}\n📍 ${indicadorTxt(j)}\n${idadeTxt(j.idadeCandles)}\n${forcaLinha(j)}preço ${fmtPrice(j.preco)} | topo ${fmtPrice(j.topo)} | fundo ${fmtPrice(j.fundo)}\n\n`;
+    msg += `<b>${i + 1}. ${j.instId}</b>${x.repique ? " ⭐" : ""}${x.noAlerta ? " 🔔" : ""}\n${ladoLinha}\n📍 ${indicadorTxt(j)}\n${idadeTxt(j.idadeCandles)}\n${forcaLinha(j)}${confsC[i] ? `🧭 Confiança: ${confEmoji(confsC[i]!.conf)} <b>${confsC[i]!.conf}/10</b>\n` : ""}preço ${fmtPrice(j.preco)} | topo ${fmtPrice(j.topo)} | fundo ${fmtPrice(j.fundo)}\n\n`;
   });
   if (top.length) msg += `<i>🔔 = já no critério do alerta automático (oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% em 24h) · ⭐ = repique na faixa. Toque em 🔎 para a análise completa, com "ligar o robô?".</i>`;
   await sendTelegram(chatId, cortar(msg), top.length ? botoesAnalisarLista(top.map((j) => j.info.instId)) : undefined);
@@ -1542,15 +1614,26 @@ function ladoDoSetup(info: IndicadorInfo, ap: Aprox | null): "long" | "short" {
   if (ap) return ap.alvo;
   return info.regiao.includes("topo") ? "long" : "short";
 }
-// oportunidade = a favor do dia (LONG em moeda que subiu, SHORT em moeda que caiu); reversão = contra o dia (virada LONG → SHORT ou SHORT → LONG)
-const tipoDoLado = (lado: "long" | "short", pct: number): "oportunidade" | "reversao" =>
-  (lado === "long" && pct > 0) || (lado === "short" && pct < 0) ? "oportunidade" : "reversao";
 // V43: zona morta em torno de pct≈0 pra classificar o TIPO do repique (fundo/topo) — o repique por natureza
 // acontece com a moeda devolvendo boa parte do movimento, então o pct de 24h costuma ficar bem perto de zero
 // exatamente nesses casos; sem margem, ruído de rodada cruzava o zero e trocava oportunidade ↔ reversão à toa
 // (mudando a confiança mínima exigida e o bloqueio de BTC). Dentro da zona morta, fica sempre "reversao" (mais
 // conservador — só vira "oportunidade" quando o dia já virou de forma inequívoca).
 const REPIQUE_PCT_ZONA = numEnv("REPIQUE_PCT_ZONA", "2");
+// V54: zona morta ÚNICA, e só pra moeda que "disparou e devolveu" (LONG: queda >= FUNDO_QUEDA_MIN desde o pico; SHORT:
+// alta >= TOPO_ALTA_MIN desde o vale — a mesma condição do repique/sinais de fundo e topo no classificar()). Antes só o
+// classificar() respeitava REPIQUE_PCT_ZONA; a lista (itensPorLado) e o /agora usavam o tipoDoLado sem zona, e a mesma
+// moeda podia ser "reversão" no alerta e "oportunidade" na lista. Fora desse caso (moeda que só subiu/caiu no dia, sem
+// devolver), o tipo segue a regra simples de sempre (pct > 0 / pct < 0): o classificar() nem gera alerta abaixo de
+// ALERT_OPORT_PCT_MIN/ALERT_REV_PCT_MIN, então não há incoerência a corrigir ali. Passe devolveu=true nos dois lados do
+// repique (o classificar() já sabe) e use devolveuMovimento() onde só há o info.
+const devolveuMovimento = (info: { ddPico?: number; altaVale?: number }, lado: "long" | "short") =>
+  lado === "long" ? (info.ddPico ?? 0) >= FUNDO_QUEDA_MIN : (info.altaVale ?? 0) >= TOPO_ALTA_MIN;
+// oportunidade = a favor do dia (LONG em moeda que subiu, SHORT em moeda que caiu); reversão = contra o dia (virada LONG → SHORT ou SHORT → LONG)
+const tipoDoLado = (lado: "long" | "short", pct: number, devolveu = false): "oportunidade" | "reversao" => {
+  const z = devolveu ? REPIQUE_PCT_ZONA : 0;
+  return (lado === "long" && pct > z) || (lado === "short" && pct < -z) ? "oportunidade" : "reversao";
+};
 const tipoTxtDe = (tipo: "oportunidade" | "reversao", lado: "long" | "short") =>
   tipo === "oportunidade" ? "🚀 <b>OPORTUNIDADE</b> (continuação)" : `🔄 <b>REVERSÃO</b> — virada ${lado === "short" ? "LONG → SHORT" : "SHORT → LONG"} (moeda esticada)`;
 function classificar(info: IndicadorInfo, pct: number): Setup | null {
@@ -1570,16 +1653,16 @@ function classificar(info: IndicadorInfo, pct: number): Setup | null {
   }
   if (seguiu && abs >= ALERT_OPORT_PCT_MIN) return { info, pct, lado, tipo: "oportunidade", status, fresco, aprox: ap };
   if (!seguiu && abs >= ALERT_REV_PCT_MIN) return { info, pct, lado, tipo: "reversao", status, fresco, aprox: ap };
-  // moeda que disparou e devolveu, mostrando sinais de fundo; tipo segue a mesma regra do tipoDoLado (V44: antes
+  // moeda que disparou e devolveu, mostrando sinais de fundo; tipo segue a mesma regra do tipoDoLado(..., true) (V44: antes
   // era sempre "reversao", mesmo com o dia já virado positivo — agora espelha o bloco SHORT abaixo)
   if (lado === "long" && FUNDO_ON && FUNDO_LIBERA_LONG) {
     const f = info as Partial<InfoFiltravel>;
-    if ((f.ddPico ?? 0) >= FUNDO_QUEDA_MIN && f.bottom && f.bottom.pts >= (f.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN) && !f.bottom.caindoFaca) return { info, pct, lado, tipo: pct > REPIQUE_PCT_ZONA ? "oportunidade" : "reversao", status, fresco, aprox: ap };
+    if ((f.ddPico ?? 0) >= FUNDO_QUEDA_MIN && f.bottom && f.bottom.pts >= (f.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN) && !f.bottom.caindoFaca) return { info, pct, lado, tipo: tipoDoLado(lado, pct, true), status, fresco, aprox: ap };
   }
   // espelho: moeda que despencou e repicou até a faixa (dia ainda fraco) mostrando exaustão da alta: repique SHORT
   if (lado === "short" && TOPO_ON) {
     const f = info as Partial<InfoFiltravel>;
-    if ((f.altaVale ?? 0) >= TOPO_ALTA_MIN && f.top && f.top.pts >= (f.top.repique ? Math.max(1, TOPO_PRE_MIN - 1) : TOPO_PRE_MIN) && !f.top.caindoFaca) return { info, pct, lado, tipo: pct < -REPIQUE_PCT_ZONA ? "oportunidade" : "reversao", status, fresco, aprox: ap };
+    if ((f.altaVale ?? 0) >= TOPO_ALTA_MIN && f.top && f.top.pts >= (f.top.repique ? Math.max(1, TOPO_PRE_MIN - 1) : TOPO_PRE_MIN) && !f.top.caindoFaca) return { info, pct, lado, tipo: tipoDoLado(lado, pct, true), status, fresco, aprox: ap };
   }
   return null;
 }
@@ -1743,7 +1826,7 @@ async function enviarOuEditarFinal(SB: any, pend: FinalPend | undefined, chats: 
   await Promise.all(chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
     const msg = cortar(await msgPorChat(ch));
     const existente = pend?.msgIds?.[ch];
-    if (existente && (await editarTelegram(ch, existente, msg, botoes))) return;
+    if (existente && (await editarTelegram(ch, existente, cortar(agRiscoLinha() + msg), botoes))) return;
     const novo = await enviarAlertaMoeda(SB, ch, `FINAL_${inst}`, msg, botoes);
     if (novo) ids[ch] = novo; else delete ids[ch];
   }));
@@ -1847,7 +1930,7 @@ async function resolverFinais(SB: any, ck: number) {
     const destinos = p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch));
     const ok = await Promise.all(destinos.map(async (ch) => {
       const id = p.msgIds?.[ch];
-      if (id && (await editarTelegram(ch, id, cortar(msg), botaoAnalisar(p.inst)))) return true;
+      if (id && (await editarTelegram(ch, id, cortar(agRiscoLinha() + msg), botaoAnalisar(p.inst)))) return true;
       return !!(await enviarAlertaMoeda(SB, ch, `FINAL_${p.inst}`, cortar(msg), botaoAnalisar(p.inst)));
     }));
     if (ok.some(Boolean) || !destinos.length) _finalPend.delete(k);
@@ -2021,7 +2104,7 @@ async function checarAlertaFinal(
     const msg = modo === "aviso"
       ? `🚨 <b>${inst}</b> — VAI FECHAR CRUZADO\n${DIVISOR}\n\n${tipoTxt} · ${pctTxt}Robô abriria: <b>${ladoTxt}</b>\n` +
         subTitulo("🔌 Ligar o robô?") +
-        `⏱ <b>LIGUE O ROBÔ AGORA</b> — faltam ~${finalRestMin()} min pra vela de ${TIMEFRAME} fechar e o preço já está ${lado === "long" ? "acima" : "abaixo"} da linha (${hip.distAbs.toFixed(3)}% além). O robô entra no fechamento.\n` +
+        `⏱ <b>LIGUE AGORA</b> — faltam ~${finalRestMin()} min pra vela de ${TIMEFRAME} fechar e o preço já está ${lado === "long" ? "acima" : "abaixo"} da linha (${hip.distAbs.toFixed(3)}% além). O robô entra no fechamento.\n` +
         `🔁 Se o preço recuar pra dentro antes do fechamento, eu aviso pra desligar.\n` +
         toqueTxt + velTxt + clusterTxt +
         subTitulo("📍 Onde está") + `${linhas}\n` +
@@ -2063,9 +2146,15 @@ async function checarAlertaFinal(
 // UPDATE só com o prazo no WHERE (o Postgres serializa updates concorrentes na mesma linha — só quem realmente
 // casar o WHERE depois da outra commitar é que ganha a trava); a 1ª vez que a linha ainda não existe cai num
 // INSERT, e se duas rodadas colidirem nesse INSERT a chave duplicada decide sozinha quem perdeu.
+// V54: a trava agora tem DONO. Antes, se uma rodada A passasse de CRON_LOCK_TIMEOUT_MS, a rodada B pegava a trava
+// (expirada) e, quando A terminava, o destravar() dela zerava a trava de B com B ainda rodando — e uma rodada C
+// podia começar por cima de B (a mesma sobreposição que a trava existe pra evitar). Agora travarCron() devolve um
+// token (o timestamp gravado) e destravarCron() só libera se a linha ainda tiver ESSE token, num UPDATE condicional
+// (mesmo compare-and-swap da aquisição). Se a trava já é de outra rodada, a que terminou atrasada não mexe nela.
 const CRON_LOCK_ROW = "_CRON_LOCK_";
 const CRON_LOCK_TIMEOUT_MS = numEnv("CRON_LOCK_TIMEOUT_MS", "110000");
-async function travarCron(SB: any): Promise<boolean> {
+// devolve o token da trava; null = outra rodada está rodando (pular); "" = falha ao travar, segue sem trava (nada a liberar)
+async function travarCron(SB: any): Promise<string | null> {
   try {
     const agora = Date.now();
     const cutoff = String(agora - CRON_LOCK_TIMEOUT_MS);
@@ -2075,24 +2164,30 @@ async function travarCron(SB: any): Promise<boolean> {
       .lt("last_status", cutoff)
       .select("instid");
     if (eUpd) throw eUpd;
-    if (upd && upd.length) return true;
+    if (upd && upd.length) return String(agora);
     // ninguém travado agora: ou a linha não existe ainda (1ª rodada), ou já está travada dentro do prazo
     // (update não bateu no WHERE). Tenta criar a linha; se já existir (corrida no insert), perdeu a trava.
     const { error: eIns } = await SB.from(TAB).insert({ instid: CRON_LOCK_ROW, last_status: String(agora) });
-    if (!eIns) return true;
-    if (/duplicate|already exists|23505/i.test(String(eIns.message || eIns.code || ""))) return false;
+    if (!eIns) return String(agora);
+    if (/duplicate|already exists|23505/i.test(String(eIns.message || eIns.code || ""))) return null;
     throw eIns;
-  } catch (e) { console.log("⚠️ erro travando cron (seguindo sem trava)", e); return true; }
+  } catch (e) { console.log("⚠️ erro travando cron (seguindo sem trava)", e); return ""; }
 }
-async function destravarCron(SB: any) {
-  try { await upsertLinha(SB, CRON_LOCK_ROW, { last_status: "0" }); } catch (e) { console.log("⚠️ erro destravando cron", e); }
+async function destravarCron(SB: any, token: string) {
+  if (!token) return; // rodada que seguiu sem trava não tem o que liberar
+  try {
+    const { data, error } = await SB.from(TAB).update({ last_status: "0" }).eq("instid", CRON_LOCK_ROW).eq("last_status", token).select("instid");
+    if (error) throw error;
+    if (!data || !data.length) console.log("ℹ️ trava do cron já era de outra rodada (a minha expirou); não liberei a dela");
+  } catch (e) { console.log("⚠️ erro destravando cron", e); }
 }
 async function runAlertaProativo() {
   if (!ALERT_CHAT_IDS.length) { console.log("⚠️ nenhum chat recebe alerta (ALLOWED_CHAT_IDS vazio ou todos em ALERT_EXCLUIR_IDS)"); return; }
   const SB = getSupabase();
   if (!SB) { console.log("⚠️ SUPABASE_URL/KEY nao configurados"); return; }
   await restaurarCalibracao(SB);
-  if (!(await travarCron(SB))) { console.log("⏭️ rodada anterior do cron ainda em andamento, pulando esta"); return; }
+  const tokenCron = await travarCron(SB);
+  if (tokenCron === null) { console.log("⏭️ rodada anterior do cron ainda em andamento, pulando esta"); return; }
   try {
   await carregarEstado(SB);
   for (const k of Object.keys(_fonte)) delete _fonte[k];
@@ -2221,7 +2316,7 @@ async function runAlertaProativo() {
     }
     const ligarTxt = c.aprox
       ? (c.ligue
-        ? `🚨 <b>LIGUE O ROBÔ AGORA</b> — ${c.ligue.alem ? `o preço já está ${c.lado === "long" ? "acima" : "abaixo"} da linha; a vela fecha em ~${c.ligue.restMin} min (o robô entra no fechamento)` : `chega na linha em ~${Math.max(1, Math.round(c.aprox.etaCandles * TF_MIN))} min, dá tempo de ligar`}\n`
+        ? `🚨 <b>LIGUE AGORA</b> — ${c.ligue.alem ? `o preço já está ${c.lado === "long" ? "acima" : "abaixo"} da linha; a vela fecha em ~${c.ligue.restMin} min (o robô entra no fechamento)` : `chega na linha em ~${Math.max(1, Math.round(c.aprox.etaCandles * TF_MIN))} min, dá tempo de ligar`}\n`
         : `🕒 <b>PREPARE</b> — ainda não ligue: aviso antecipado, vou avisar de novo (🚨 LIGUE AGORA) quando estiver perto\n`)
       + `🎯 Aproximando: deve chegar na linha em ~${Math.max(1, Math.round(c.aprox.etaCandles * TF_MIN))} min (estimativa, ${c.aprox.vel.toFixed(2)}% por vela). Se recuar sem cruzar, eu aviso pra desligar\n`
       : "";
@@ -2271,7 +2366,7 @@ async function runAlertaProativo() {
   await processarAutoApagar(SB).catch((e) => console.log("❌ erro autoapagar", e));
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
   await extrasV13(SB, posMap);
-  } finally { await destravarCron(SB); }
+  } finally { await destravarCron(SB, tokenCron); }
 }
 const X_TZ_OFFSET_H = numEnv("TZ_OFFSET_H", "-3");
 const X_JANELA_FORTE = 1.15;
@@ -2505,8 +2600,6 @@ const PLACAR_HORIZONTES = [1, 4, 24];
 const PLACAR_MAX_CONFERE = 60;
 const ANALISE_TARDE_CANDLES = 8;
 const ANALISE_MUITO_TARDE_CANDLES = 16;
-const ANALISE_VERDE = 5;
-const ANALISE_AMARELO = 2;
 type VarInfo = { instId: string; pct: number; last: number; volUsdt: number; dd: number; up: number };
 let _logTemConf = true;
 async function inserirLogAlerta(SB: any, linha: Record<string, unknown>, conf: number | null) {
@@ -2697,9 +2790,11 @@ async function runPlacar(chatId: number | string, dias: number) {
     ["⭐ Repique SHORT (radar de topo)", (r) => String(r.status || "").includes("REPIQUE SHORT")],
     ["⭐ Repique LONG (radar de fundo)", (r) => String(r.status || "").includes("REPIQUE LONG")],
     ["🗜️ Compressão (radar)", (r) => r.tipo === "compressao"],
-    ["🧭 Confiança 8–10", (r) => r.conf != null && Number(r.conf) >= 8],
-    ["🧭 Confiança 6–7", (r) => r.conf != null && Number(r.conf) >= 6 && Number(r.conf) <= 7],
-    ["🧭 Confiança ≤ 5", (r) => r.conf != null && Number(r.conf) <= 5],
+    // V54: faixas iguais às bolinhas da confiança (🟢 ≥ CONF_VERDE, 🟡 = CONF_AMARELO..CONF_VERDE-1, 🔴 abaixo) — antes era 8–10 / 6–7 / ≤5,
+    // e a confiança 7 (🟢 nas mensagens) caía junto com a 6 (🟡), então o placar não respondia "o verde acerta mais que o amarelo?".
+    [`🟢 Confiança ${CONF_VERDE}–10`, (r) => r.conf != null && Number(r.conf) >= CONF_VERDE],
+    [CONF_VERDE - CONF_AMARELO > 1 ? `🟡 Confiança ${CONF_AMARELO}–${CONF_VERDE - 1}` : `🟡 Confiança ${CONF_AMARELO}`, (r) => r.conf != null && Number(r.conf) >= CONF_AMARELO && Number(r.conf) < CONF_VERDE],
+    [`🔴 Confiança ≤ ${CONF_AMARELO - 1}`, (r) => r.conf != null && Number(r.conf) < CONF_AMARELO],
     ["🆕 Cruzou agora", (r) => r.fresco === true],
     ["⌛ Não fresco", (r) => r.fresco !== true],
     ["🔥 Muito perto", (r) => String(r.status || "").includes("MUITO PERTO")],
@@ -2708,7 +2803,7 @@ async function runPlacar(chatId: number | string, dias: number) {
     ["💪 ADX ≥ 25", (r) => r.adx != null && Number(r.adx) >= 25],
     ["😐 ADX &lt; 25", (r) => r.adx != null && Number(r.adx) < 25],
     ["🟢 LONG", (r) => r.lado === "long" && !(r.tipo === "compressao" && r.ent_status !== "entrou")],
-    ["🔴 SHORT", (r) => r.lado === "short"],
+    ["🔴 SHORT", (r) => r.lado === "short" && !(r.tipo === "compressao" && r.ent_status !== "entrou")], // V54: mesmo filtro do LONG (compressão sem rompimento não tem lado)
   ];
   let msg = `📊 <b>PLACAR DOS ALERTAS</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${rows.length} alerta(s), ${comResultado} já conferidos\n<i>acerto = preço andou a favor do lado que o robô abriria, contado desde o FECHAMENTO da vela que cruzou a linha (entrada do robô); % = retorno médio já descontada a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta)</i>\n\n`;
   msg += `<b>Geral</b>\n${linhaStats(rows)}\n\n`;
@@ -2816,7 +2911,7 @@ function guiaDentro(x: CtxDentro): string {
     emoji = "🟠"; titulo = "A favor, mas sem força";
     dica = `${forca} (mínimo do filtro: ${FILTRO_ADX_MIN}). Os filtros não abririam essa entrada agora: realize boa parte se estiver no lucro, ou aperte o stop.`;
   } else if (perdendo) {
-    emoji = "🟡"; titulo = "A favor, perdendo força";
+    emoji = "🟡"; titulo = "A favor, mas perdendo força";
     dica = `${forca}. Momentum esfriando: bom momento para realizar parte ou subir o stop.`;
   } else if (forte) {
     emoji = "🟢"; titulo = "Dentro do movimento, pode manter";
@@ -2893,7 +2988,7 @@ async function posicaoRealTxt(chatId: number | string, ps: Pos[], inf: any, alvo
   let t = "";
   for (const p of ps) {
     const s = await sugestaoPosicaoComSeta(SB, chatId, p, inf, alvo);
-    t += `📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)}${p.lev ? ` | ${p.lev}x` : ""}\nPnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.dica}\n`;
+    t += `📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)}${p.lev ? ` | ${p.lev}x` : ""}\n${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.dica}\n`;
     t += trailingTxt(p, typeof inf.atr === "number" ? inf.atr : 0) || stopAlvoPosTxt(p, inf);
     const atual = ladoAtual(inf as IndicadorInfo);
     if (atual !== null && atual !== p.lado) t += `🔄 A vela já fechou do lado ${atual === "long" ? "LONG" : "SHORT"}. <i>O robô vira no fechamento. Se sua posição continua ${p.lado === "long" ? "LONG" : "SHORT"}, confira se ele virou e se está ligado.</i>\n`;
@@ -2935,6 +3030,20 @@ async function tocouRecuouTxt(instId: string, topo: number, fundo: number, preco
 // V39: /agora MOEDA — retrato rápido e compacto (bom pro modo Experiente): tempo até o fechamento, distância
 // às duas linhas, confiança e se já tocou e recuou. Sem precisar interpretar um alerta específico, só
 // consultar quando bater a dúvida "ligo agora ou não?".
+// V54: /agora e /comparar pontuavam sem vários ingredientes que o /analise e os alertas usam (tendência do funding, confiabilidade
+// histórica da moeda, ETH, desequilíbrio do book, perfil de horário → "janela forte"), então a MESMA moeda mostrava confiança
+// diferente em cada comando (e o /comparar ainda passava h1: null, perdendo os ±2 do 1H). Aqui fica o pacote que faltava, na mesma
+// forma que calcConfiancaAlerta() monta pros alertas — os campos têm o nome exato de CtxPontos pra entrarem com "...ex".
+async function extrasConfianca(instId: string, fo: { funding: number | null; oiChg: number | null } | null, apChega: Aprox | null) {
+  const [perfil, ethReg, ethV, bookImb, confiabInst, fundingTend] = await Promise.all([
+    xPerfilHoras().catch(() => null), xRegimeCacheEth().catch(() => null), ethVar1h().catch(() => null), getBookImbalance(instId).catch(() => null),
+    confiabilidadeMoeda(instId).catch(() => null), fundingTendencia(instId, fo ?? { funding: null, oiChg: null }),
+  ]);
+  return {
+    perfil, chegadaForte: chegadaEmJanelaForte(apChega, perfil), fundingTend, confiabInst,
+    ethAdx: ethReg ? ethReg.adx : null, ethVar: ethV, bookImb,
+  };
+}
 async function runAgora(chatId: number | string, entrada: string) {
   const instId = await resolverPar(entrada);
   if (!instId) { await sendTelegram(chatId, `⚠️ Não achei a moeda "${entrada.replace(/[<>&]/g, "").slice(0, 20)}" na lista de futuros. Exemplo: /agora ONE`); return; }
@@ -2977,10 +3086,11 @@ async function runAgora(chatId: number | string, entrada: string) {
   // o /agora ficou divergente, mostrando confiança mais pessimista que o radar automático pra mesma moeda.
   const bottomA = FUNDO_ON ? calcFundoPre(d15, info, atr, adx, adxAntes) : null;
   const topA = TOPO_ON ? calcTopoPre(d15, info, atr, adx, adxAntes) : null;
+  const ex = await extrasConfianca(instId, fo, apChega);
   const { conf } = pontuar({
-    info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1,
-    btcAdx: btc ? btc.adx : null, perfil: null, fo, volRatio, chegadaForte: false, apChega,
-    tipo: tipoDoLado(lado, pct), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
+    info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1, ...ex,
+    btcAdx: btc ? btc.adx : null, fo, volRatio, apChega,
+    tipo: tipoDoLado(lado, pct, devolveuMovimento({ ddPico: ddDoPico(d15.h, info.preco), altaVale: altaDoVale(d15.l, info.preco) }, lado)), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
   });
   const nome = (l: "long" | "short") => (l === "long" ? "LONG" : "SHORT");
   const SBseta = getSupabase();
@@ -3029,11 +3139,13 @@ async function snapshotComparar(
   const apChega = chegandoNaLinha(infoAtr);
   const bottomA = FUNDO_ON ? calcFundoPre(d15, info, atr, adx, adxAntes) : null;
   const topA = TOPO_ON ? calcTopoPre(d15, info, atr, adx, adxAntes) : null;
-  const fo = await getFundingOI(instId);
+  const [fo, d1h] = await Promise.all([getFundingOI(instId), xCandles(instId, "1H", 500)]);
+  const h1 = d1h ? calcIndicadorDeCloses(instId, d1h.c) : null;
+  const ex = await extrasConfianca(instId, fo, apChega);
   const { conf, total } = pontuar({
-    info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1: null,
-    btcAdx: btc ? btc.adx : null, perfil: null, fo, volRatio, chegadaForte: false, apChega,
-    tipo: tipoDoLado(lado, pct), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
+    info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1, ...ex,
+    btcAdx: btc ? btc.adx : null, fo, volRatio, apChega,
+    tipo: tipoDoLado(lado, pct, devolveuMovimento({ ddPico: ddDoPico(d15.h, info.preco), altaVale: altaDoVale(d15.l, info.preco) }, lado)), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
   });
   return { instId, info, lado, atual, conf, total, pct, vivo, adx, adxAntes, rsi };
 }
@@ -3461,16 +3573,24 @@ function pontuar(x: CtxPontos) {
   }
   if (ESTRAT_PUMP && lado === "long" && ((pct24 != null && pct24 < 0) || tipo === "reversao")) {
     if (FUNDO_ON && FUNDO_LIBERA_LONG && bottom) {
-      if (fundoOk(bottom)) add(2, `sinais de fundo (${bottom.conf}/10)${bottom.repique ? " ⭐ repique segurando na faixa" : ": queda esgotando"}, reversão com apoio`);
+      if (fundoOk(bottom)) add(2, `sinais de fundo (${bottom.conf}/10)${bottom.repique ? " ⭐ repique segurando na faixa" : ": queda esgotando"}, ${bottom.repique ? "retomada da alta com apoio" : "reversão com apoio"}`);
       else if (bottom.conf >= FUNDO_CONF_MIN - 2) add(0, `sinais de fundo parciais (${bottom.conf}/10)`);
-      else add(-2, `moeda em queda (no dia ou desde o topo) sem sinais claros de fundo (${bottom.conf}/10)`);
-    } else add(-3, "moeda em queda no dia: LONG seria reversão de baixa pra alta (fora da estratégia)");
+      else add(-2, `${pct24 != null && pct24 < 0 ? "moeda em queda (no dia ou desde o topo)" : `moeda sem alta clara no dia (dentro de ±${REPIQUE_PCT_ZONA}%)`} sem sinais claros de fundo (${bottom.conf}/10)`);
+    } else add(-3, pct24 != null && pct24 < 0 ? "moeda em queda no dia: LONG seria reversão de baixa pra alta (fora da estratégia)" : `moeda sem alta clara no dia (dentro de ±${REPIQUE_PCT_ZONA}%): LONG sem confirmação de alta (fora da estratégia)`);
   }
-  if (TOPO_ON && lado === "short" && topoOk(top)) add(2, `sinais de topo (${top!.conf}/10)${top!.repique ? " ⭐ repique rejeitado na faixa" : ": alta esgotando"}, virada SHORT com apoio`);
+  // V54: espelho do bloco de topo abaixo — o +2 de "sinais de fundo" vale pro LONG em qualquer tipo. Antes só entrava
+  // com pct24 < 0 ou tipo "reversao", então o repique LONG que virou "oportunidade" (V44) perdia o ponto e o SHORT não.
+  // As penalidades (-2/-3) continuam só no contexto de reversão, onde faz sentido cobrar sinal de fundo.
+  else if (FUNDO_ON && FUNDO_LIBERA_LONG && lado === "long" && fundoOk(bottom)) add(2, `sinais de fundo (${bottom!.conf}/10)${bottom!.repique ? " ⭐ repique segurando na faixa, retomada da alta com apoio" : ": queda esgotando"}`);
+  if (TOPO_ON && lado === "short" && topoOk(top)) add(2, `sinais de topo (${top!.conf}/10)${top!.repique ? " ⭐ repique rejeitado na faixa" : ": alta esgotando"}, ${top!.repique ? "retomada da queda com apoio" : "virada SHORT com apoio"}`);
   const total = motivos.reduce((s, m) => s + m.pts, 0);
   checarDerivaConfianca(total);
-  const veredito = total >= ANALISE_VERDE ? "🟢 <b>FAVORÁVEL</b>" : total >= ANALISE_AMARELO ? "🟡 <b>COM ATENÇÃO</b>" : "🔴 <b>EVITAR / ESPERAR</b>";
-  return { motivos, total, veredito, conf: confiancaDe(total) };
+  // V54: o veredito usava cortes próprios em pontos brutos (ANALISE_VERDE=5 / ANALISE_AMARELO=2) que ficaram pra trás quando a
+  // escala de confiança mudou (V43): total 0 ou 1 já dá confiança 6/10 (🟡), mas o veredito dizia 🔴 EVITAR / ESPERAR. Agora
+  // sai da própria confiança, com os mesmos CONF_VERDE/CONF_AMARELO da bolinha, e os dois nunca mais divergem.
+  const conf = confiancaDe(total);
+  const veredito = conf >= CONF_VERDE ? "✅ <b>FAVORÁVEL</b>" : conf >= CONF_AMARELO ? "⚠️ <b>COM ATENÇÃO</b>" : "⛔ <b>EVITAR / ESPERAR</b>";
+  return { motivos, total, veredito, conf };
 }
 function placarFiltros(motivos: Motivo[]): string {
   const f = motivos.filter((m) => m.pts > 0).length, c = motivos.filter((m) => m.pts < 0).length, n = motivos.length - f - c;
@@ -3603,7 +3723,8 @@ async function montarCalibracao(SB: any, dias: number): Promise<string> {
   // "rows" virava null e o primeiro rows.filter(...) abaixo estourava; o /placar chama isto com
   // .catch(() => "") então o erro sumia em silêncio (a seção de calibração só desaparecia da mensagem, sem log).
   if (error) { console.log("⚠️ montarCalibracao:", error.message); return ""; }
-  const rows = data as any[];
+  const rows = (data || []) as any[];
+  if (rows.length === 0) return ""; // V54: sem amostra, a conta de % dividia por zero e saía "NaN%"
   const conta = (res: string) => rows.filter((r) => r.resultado === res).length;
   const cruzou = rows.filter((r) => r.resultado === "cruzou");
   let t = `🎯 <b>Previsão "chegando na linha"</b> (n=${rows.length})\n`;
@@ -3978,7 +4099,6 @@ async function checarSeguidas(SB: any) {
 const RESUMO_ON = (Deno.env.get("RESUMO") || "1") !== "0";
 const RESUMO_MANHA_H = numEnv("RESUMO_MANHA_H", "8");
 const RESUMO_NOITE_H = numEnv("RESUMO_NOITE_H", "21");
-const _ultimoResumo: Record<string, string> = {};
 function xJanelasFortes(p: XPerfil): { ini: number; fim: number }[] {
   const forte = p.idx.map((v) => v >= X_JANELA_FORTE);
   const out: { ini: number; fim: number }[] = [];
@@ -3991,37 +4111,15 @@ function xJanelasFortes(p: XPerfil): { ini: number; fim: number }[] {
   }
   return out;
 }
-async function montarResumoManha(SB: any, chat?: string | number): Promise<string> {
-  const [perfil, regimesB] = await Promise.all([xPerfilHoras().catch(() => null), Promise.all(X_MOEDAS_MERCADO.map((m) => xRegime(m).catch(() => null)))]);
-  const regimes = regimesB.filter((x): x is XRegime => x !== null);
-  const tzTxt = `UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}`;
-  let msg = `🌅 <b>BOM DIA — resumo do dia</b>\n${DIVISOR}\n\n`;
-  if (perfil) {
-    const js = xJanelasFortes(perfil);
-    msg += `🔥 <b>Janelas fortes hoje</b> (${perfil.tipo}, ${tzTxt}):\n${js.length ? js.map((j) => `${xHH(j.ini)}–${xHH(j.fim)}`).join(" · ") : "nenhuma bem definida"}\n\n`;
-  } else msg += `⚠️ Sem perfil de horários agora.\n\n`;
-  if (regimes.length) {
-    const adxMed = regimes.reduce((s, r) => s + r.adx, 0) / regimes.length;
-    const nivel = adxMed >= X_ADX_FORTE ? "tendência forte" : adxMed >= X_ADX_FRACO ? "tendência moderada" : "lateral";
-    msg += `📊 <b>Mercado</b>: ADX médio ${adxMed.toFixed(1)} — ${nivel}\n${regimes.map((r) => `${r.instId.replace("-USDT", "")} ${r.adx.toFixed(0)}`).join(" · ")}\n\n`;
-  }
-  const { data: w } = await SB.from(TAB).select("instid, watch_side").not("watch_until", "is", null).gt("watch_until", new Date().toISOString()).eq("watch_notificado", false);
-  const ws = (w || []) as any[];
-  msg += ws.length ? `📋 <b>Em acompanhamento</b> (${ws.length}): ${ws.slice(0, 12).map((r) => `${String(r.instid).replace("-USDT", "")} ${r.watch_side === "long" ? "L" : "S"}`).join(", ")}\n` : `📋 Nada em acompanhamento.\n`;
-  const ss = chat === undefined ? [] : await listarSeguidas(SB, chat);
-  if (ss.length) msg += `⭐ <b>Seguindo</b> (${ss.length}): ${ss.slice(0, 12).map((x) => x.inst.replace("-USDT", "")).join(", ")}\n`;
-  msg += `\n<i>Estatístico: mostra QUANDO tende a haver mais movimento, não a direção.</i>`;
-  return cortar(msg);
-}
-async function montarResumoNoite(SB: any, chat?: string | number): Promise<string> {
+async function montarResumoNoite(SB: any, chat?: string | number, inicioMs?: number): Promise<string> {
   const tzMs = X_TZ_OFFSET_H * 3600000;
-  const inicioDia = Math.floor((Date.now() + tzMs) / 86400000) * 86400000 - tzMs;
+  const inicioDia = inicioMs ?? Math.floor((Date.now() + tzMs) / 86400000) * 86400000 - tzMs; // início do ciclo (painel: 21h)
   const { data, error } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(inicioDia).toISOString()).order("criado_em", { ascending: true }).limit(500);
   let msg = `🌙 <b>BOA NOITE — alertas do dia</b>\n${DIVISOR}\n\n`;
   const rows = ((error ? [] : (data || [])) as any[]).filter((r) => !ehFinalLog(r));
-  if (!rows.length) msg += error ? `⚠️ Não consegui ler o placar (tabela ${PLACAR_TABELA} existe?).\n` : `Nenhum alerta hoje.\n`;
+  if (!rows.length) msg += error ? `⚠️ Não consegui ler o placar (tabela ${PLACAR_TABELA} existe?).\n` : `Nenhum alerta neste ciclo.\n`;
   else {
-    msg += `${rows.length} alerta(s) hoje:\n`;
+    msg += `${rows.length} alerta(s) neste ciclo:\n`;
     for (const r of rows.slice(-10)) {
       const hora = new Date(new Date(r.criado_em).getTime() + tzMs).toISOString().slice(11, 16);
       const res = PLACAR_HORIZONTES.map((h) => { const x = retornoLog(r, h); return `${h}h ${x === null ? "—" : (x >= 0 ? "+" : "") + x.toFixed(1) + "%"}`; }).join(" · ");
@@ -4034,7 +4132,7 @@ async function montarResumoNoite(SB: any, chat?: string | number): Promise<strin
     const { data: d14 } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(Date.now() - 14 * 86400000).toISOString()).order("criado_em", { ascending: false }).limit(2000);
     const r14 = ((d14 || []) as any[]).filter((r) => !ehFinalLog(r));
     const ontem = r14.filter((r) => { const t = new Date(r.criado_em).getTime(); return t >= inicioDia - 86400000 && t < inicioDia; });
-    if (ontem.length) msg += `\n📆 <b>Ontem</b> (${ontem.length} alerta(s), já conferido)\n${linhaStats(ontem)}\n`;
+    if (ontem.length) msg += `\n📆 <b>Ciclo anterior</b> (${ontem.length} alerta(s), já conferido)\n${linhaStats(ontem)}\n`;
   } catch (e) { console.log("⚠️ resumo noite (14d)", e); }
   const credR = chat !== undefined ? credDe(chat) : null;
   if (credR) {
@@ -4043,50 +4141,388 @@ async function montarResumoNoite(SB: any, chat?: string | number): Promise<strin
       const fech = fills.filter((f) => numOr0(f.fillPnl) !== 0);
       const soma = fech.reduce((s, f) => s + numOr0(f.fillPnl), 0);
       const gan = fech.filter((f) => numOr0(f.fillPnl) > 0).length;
-      msg += `\n💼 <b>Seu resultado real hoje</b>: ${sgn(soma)} USDT${fech.length ? ` (${gan} ganho(s) × ${fech.length - gan} perda(s))` : " (nenhum fechamento)"}\n<i>sem taxas e funding</i>\n`;
+      msg += `\n💼 <b>Seu resultado real neste ciclo</b>: ${sgn(soma)} USDT${fech.length ? ` (${gan} ganho(s) × ${fech.length - gan} perda(s))` : " (nenhum fechamento)"}\n<i>sem taxas e funding</i>\n`;
     } catch (e) { console.log("⚠️ resumo noite (fills)", e); }
   }
   const { data: w } = await SB.from(TAB).select("instid").not("watch_until", "is", null).gt("watch_until", new Date().toISOString()).eq("watch_notificado", false);
   msg += `\n📋 ${(w || []).length} moeda(s) seguem em acompanhamento.`;
   return cortar(msg);
 }
-async function checarResumos(SB: any) {
-  if (!RESUMO_ON || !ALERT_CHAT_IDS.length || ALERT_CHAT_IDS.every((ch) => silChat(ch))) return;
-  const loc = new Date(Date.now() + X_TZ_OFFSET_H * 3600000);
-  const h = loc.getUTCHours(), dia = loc.toISOString().slice(0, 10);
-  const tarefas: [string, number, (SB: any, chat: string) => Promise<string>][] = [["M", RESUMO_MANHA_H, montarResumoManha], ["N", RESUMO_NOITE_H, montarResumoNoite]];
-  for (const [tag, H, montar] of tarefas) {
-    if (h < H || h >= H + 3) continue;
-    const chave = `${tag} ${dia}`;
-    if (_ultimoResumo[tag] === chave) continue;
-    const { data: row } = await SB.from(TAB).select("last_status").eq("instid", "_RESUMO_" + tag).maybeSingle();
-    if (row?.last_status === chave) { _ultimoResumo[tag] = chave; continue; }
-    // Auditoria (achado #17): _ultimoResumo[tag] e o upsertLinha (marca "resumo de hoje já mandado") eram
-    // gravados ANTES de sequer tentar enviar — pior que os achados #4-#11 (lá era incondicional ao resultado
-    // do envio; aqui nem esperava o resultado). Se todos os sendTelegram falhassem, o resumo do dia ficava
-    // marcado como entregue e nunca mais era tentado de novo (a janela H a H+3 passava em silêncio).
-    // Corrigido: monta e envia primeiro; só marca "enviado" (memória + Supabase) se pelo menos um chat confirmar.
-    const destinosResumo = ALERT_CHAT_IDS.filter((c) => !silChat(c));
-    if (!destinosResumo.length) continue;
-    const idsResumo = await Promise.all(destinosResumo.map(async (ch) => sendTelegram(ch, await montar(SB, ch), undefined, { semUi: true })));
-    if (!idsResumo.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo no próximo ciclo (ainda dentro da janela H–H+3)
-    _ultimoResumo[tag] = chave;
-    await upsertLinha(SB, "_RESUMO_" + tag, { last_status: chave, last_alert_at: new Date().toISOString() });
-    console.log(`🗓️ resumo ${tag} enviado (${chave})`);
+// ─── V55: AGENDA ECONÔMICA ────────────────────────────────────────────────────────────────────────
+// Avisa antes dos dados de ALTO impacto (CPI, payroll, FOMC...) pra você não abrir operação na hora em
+// que o preço dispara e volta em segundos. Fonte: calendário semanal público do Forex Factory (JSON,
+// grátis, sem chave). Ele limita requisições (429), então tudo passa por cache: memória + Supabase
+// (_AGENDA_CACHE_), e se a fonte cair o bot usa o último cache e AVISA que está desatualizado.
+//  • aviso automático 60 e 15 min antes (o de 15 substitui o de 60 — mesma mensagem, sem poluir)
+//  • bloco "Agenda — próximas 24h" dentro do painel do dia (sem mensagem extra = sem duplicar)
+//  • comando /agenda (hoje + amanhã)
+// Env: AGENDA=0 desliga · AGENDA_PAISES=USD,EUR · AGENDA_IMPACTOS=High,Medium · AGENDA_AVISOS_MIN=60,15
+//      AGENDA_QUARENTENA_MIN=30 (até quando o texto manda evitar operar depois do horário) · AGENDA_CACHE_MIN=60
+const AGENDA_ON = (Deno.env.get("AGENDA") || "1") !== "0";
+const AGENDA_PAISES = (Deno.env.get("AGENDA_PAISES") || "USD").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+const AGENDA_IMPACTOS = (Deno.env.get("AGENDA_IMPACTOS") || "High").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+const AGENDA_AVISOS_MIN = (Deno.env.get("AGENDA_AVISOS_MIN") || "60,15").split(",").map((s) => Number(s.trim())).filter((n) => isFinite(n) && n > 0).sort((a, b) => b - a);
+const AGENDA_QUARENTENA_MIN = numEnv("AGENDA_QUARENTENA_MIN", "30");
+// Só entram (avisos, marca nos alertas de entrada, agenda e painel) os dados que de fato movem o mercado cripto:
+// payroll, CPI, PCE, decisão de juros/comunicado/coletiva do Fed e discurso do presidente do Fed.
+// Ajuste com AGENDA_TITULOS (regex, ex.: "cpi|non-farm|ppi|retail sales") ou AGENDA_TITULOS=TODOS pra liberar todos do impacto escolhido.
+const AGENDA_TITULOS: RegExp | null = (() => {
+  const v = (Deno.env.get("AGENDA_TITULOS") || "non-farm|\\bnfp\\b|\\bcpi\\b|\\bpce\\b|federal funds rate|fomc statement|fomc press conference|fed chair|powell").trim();
+  if (/^(todos|all)$/i.test(v)) return null;
+  try { return new RegExp(v, "i"); } catch { console.log("⚠️ AGENDA_TITULOS inválido — usando filtro padrão"); return /non-farm|\bnfp\b|\bcpi\b|\bpce\b|federal funds rate|fomc statement|fomc press conference|fed chair|powell/i; }
+})();
+const AGENDA_CACHE_V = 2; // muda quando o filtro muda: cache antigo (com outros critérios) é ignorado
+const AGENDA_CACHE_MIN = numEnv("AGENDA_CACHE_MIN", "60");
+const AGENDA_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
+const AGENDA_CACHE_ROW = "_AGENDA_CACHE_";
+const AGENDA_AVISO_ROW = "_AGENDA_AVISO_";
+type AgEv = { ts: number; pais: string; imp: string; titulo: string; proj: string; ant: string };
+let _agCache: { t: number; ev: AgEv[] } | null = null;
+const _agEnviados = new Set<string>();
+const agEsc = (s: string) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const AG_BANDEIRA: Record<string, string> = { USD: "🇺🇸", EUR: "🇪🇺", GBP: "🇬🇧", JPY: "🇯🇵", CNY: "🇨🇳", CAD: "🇨🇦", AUD: "🇦🇺", CHF: "🇨🇭", NZD: "🇳🇿" };
+// Tradução dos títulos mais comuns (ordem importa: o mais específico primeiro). O que não bater fica no original.
+const AG_TRAD: [RegExp, string][] = [
+  [/Non-Farm Employment Change/i, "Payroll (NFP) — empregos fora do setor agrícola"],
+  [/ADP Non-Farm/i, "Emprego privado ADP"],
+  [/Unemployment Claims/i, "Pedidos de seguro-desemprego"],
+  [/Unemployment Rate/i, "Taxa de desemprego"],
+  [/Average Hourly Earnings/i, "Salário médio por hora"],
+  [/JOLTS/i, "Vagas em aberto (JOLTS)"],
+  [/Core CPI/i, "CPI núcleo (inflação ao consumidor)"],
+  [/CPI/i, "CPI (inflação ao consumidor)"],
+  [/Core PPI/i, "PPI núcleo (inflação ao produtor)"],
+  [/PPI/i, "PPI (inflação ao produtor)"],
+  [/Core PCE/i, "PCE núcleo (inflação preferida do Fed)"],
+  [/PCE Price/i, "PCE (inflação preferida do Fed)"],
+  [/Federal Funds Rate/i, "Decisão de juros do Fed"],
+  [/FOMC Statement/i, "Comunicado do FOMC"],
+  [/FOMC Press Conference/i, "Coletiva do FOMC"],
+  [/FOMC Meeting Minutes/i, "Ata do FOMC"],
+  [/FOMC Economic Projections/i, "Projeções econômicas do FOMC"],
+  [/Fed Chair .*Speaks|Powell/i, "Discurso do presidente do Fed"],
+  [/FOMC Member .*Speaks|Fed .*Speaks/i, "Discurso de membro do Fed"],
+  [/Advance GDP|Prelim GDP|Final GDP|Second Estimate GDP|GDP/i, "PIB"],
+  [/Retail Sales/i, "Vendas no varejo"],
+  [/ISM Manufacturing/i, "PMI industrial (ISM)"],
+  [/ISM Services/i, "PMI de serviços (ISM)"],
+  [/Flash Manufacturing PMI/i, "PMI industrial (prévia)"],
+  [/Flash Services PMI/i, "PMI de serviços (prévia)"],
+  [/Consumer Sentiment/i, "Confiança do consumidor (Michigan)"],
+  [/Durable Goods/i, "Bens duráveis"],
+  [/Crude Oil Inventories/i, "Estoques de petróleo"],
+  [/Treasury Currency Report/i, "Relatório cambial do Tesouro"],
+  [/(10|30)-y Bond Auction/i, "Leilão de títulos do Tesouro"],
+];
+const agTraduzir = (t: string) => { for (const [re, pt] of AG_TRAD) if (re.test(t)) return pt; return t; };
+function agInicioDia(offsetDias = 0): number {
+  const tzMs = X_TZ_OFFSET_H * 3600000;
+  return Math.floor((Date.now() + tzMs) / 86400000) * 86400000 - tzMs + offsetDias * 86400000;
+}
+function agParse(j: any): AgEv[] {
+  if (!Array.isArray(j)) return [];
+  const out: AgEv[] = [];
+  for (const x of j) {
+    const ts = new Date(String(x?.date ?? "")).getTime();
+    const pais = String(x?.country ?? "").toUpperCase();
+    const imp = String(x?.impact ?? "").toLowerCase();
+    if (!isFinite(ts) || !AGENDA_PAISES.includes(pais) || !AGENDA_IMPACTOS.includes(imp)) continue;
+    if (AGENDA_TITULOS && !AGENDA_TITULOS.test(String(x?.title ?? ""))) continue;
+    out.push({ ts, pais, imp, titulo: String(x?.title ?? "").trim(), proj: String(x?.forecast ?? "").trim(), ant: String(x?.previous ?? "").trim() });
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+// Devolve a agenda (com cache). velho=true quando a fonte falhou e estamos usando cache vencido; ev=null se não há nada.
+async function buscarAgenda(SB: any): Promise<{ ev: AgEv[] | null; velho: boolean }> {
+  const fresco = (t: number) => Date.now() - t < AGENDA_CACHE_MIN * 60000;
+  if (_agCache && fresco(_agCache.t)) return { ev: _agCache.ev, velho: false };
+  let doBanco: { t: number; ev: AgEv[] } | null = null;
+  try {
+    const { data } = await SB.from(TAB).select("last_status").eq("instid", AGENDA_CACHE_ROW).maybeSingle();
+    const p = data?.last_status ? JSON.parse(data.last_status) : null;
+    if (p && p.v === AGENDA_CACHE_V && Array.isArray(p.ev) && isFinite(p.t)) doBanco = { t: Number(p.t), ev: p.ev as AgEv[] };
+  } catch { }
+  if (doBanco && fresco(doBanco.t)) { _agCache = doBanco; return { ev: doBanco.ev, velho: false }; }
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(AGENDA_URL, { signal: ctl.signal, headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } });
+    clearTimeout(to);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const ev = agParse(await r.json());
+    _agCache = { t: Date.now(), ev };
+    await upsertLinha(SB, AGENDA_CACHE_ROW, { last_status: JSON.stringify({ v: AGENDA_CACHE_V, ..._agCache }), last_alert_at: new Date().toISOString() });
+    return { ev, velho: false };
+  } catch (e) {
+    console.log("⚠️ agenda: fonte falhou, usando cache", e);
+    // Fonte fora (ex.: 429): renova o carimbo por 10 min pra não martelar o servidor a cada rodada do cron.
+    const velhoCache = _agCache ?? doBanco;
+    if (velhoCache) { _agCache = { t: Date.now() - (AGENDA_CACHE_MIN - 10) * 60000, ev: velhoCache.ev }; return { ev: velhoCache.ev, velho: true }; }
+    return { ev: null, velho: true };
   }
 }
+// Linha de "entrada de risco" pros alertas de entrada (síncrona: lê o cache que o cron já mantém).
+function agRiscoLinha(): string {
+  if (!AGENDA_ON || !_agCache) return "";
+  const agora = Date.now(), q = AGENDA_QUARENTENA_MIN * 60000;
+  const perto = _agCache.ev.filter((e) => agora >= e.ts - q && agora <= e.ts + q).sort((a, b) => Math.abs(a.ts - agora) - Math.abs(b.ts - agora))[0];
+  if (!perto) return "";
+  const nome = agEsc(agTraduzir(perto.titulo).split(" — ")[0]);
+  const min = Math.round((perto.ts - agora) / 60000);
+  return min > 0
+    ? `⚠️ <b>Dado importante às ${horaLocal(perto.ts)} (${nome}) — em ${min} min.</b> Entrada de risco: o preço pode disparar e voltar.\n\n`
+    : `⚠️ <b>Dado importante saiu às ${horaLocal(perto.ts)} (${nome}) há ${Math.max(0, -min)} min.</b> Mercado volátil, entrada de risco.\n\n`;
+}
+// Posições abertas do chat (null = sem chave da BloFin ou consulta falhou). Usado no aviso de dado e no painel.
+async function agPosicoes(chat: string | number): Promise<{ lista: string[]; total: number } | null> {
+  const ps = await getPosicoes(chat).catch(() => null);
+  if (ps === null) return null;
+  return { lista: ps.map((p) => `${p.instId.replace("-USDT", "")} ${p.lado === "long" ? "LONG" : "SHORT"} ${p.pnl >= 0 ? "➕" : "➖"}${Math.abs(p.pnl).toFixed(2)}`), total: ps.reduce((s, p) => s + p.pnl, 0) };
+}
+type AgGrupo = { ts: number; itens: AgEv[] };
+function agAgrupar(ev: AgEv[]): AgGrupo[] {
+  const m = new Map<number, AgEv[]>();
+  for (const e of ev) m.set(e.ts, [...(m.get(e.ts) || []), e]);
+  return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([ts, itens]) => ({ ts, itens }));
+}
+function agEscopoTxt(): string {
+  return `${AGENDA_IMPACTOS.map((i) => i === "high" ? "alto" : i === "medium" ? "médio" : "baixo").join("/")} impacto · ${AGENDA_PAISES.join("/")}`;
+}
+// Bloco de texto de um dia (usado no /agenda, no resumo da manhã e no da noite).
+function agBlocoDia(ev: AgEv[], offsetDias: number, rotulo: string, comAviso: boolean): string {
+  const ini = agInicioDia(offsetDias), fim = ini + 86400000;
+  const grupos = agAgrupar(ev.filter((e) => e.ts >= ini && e.ts < fim));
+  let t = `📅 <b>Agenda econômica — ${rotulo}</b> <i>(${agEscopoTxt()})</i>\n`;
+  if (!grupos.length) return t + `✅ Nenhum dado importante marcado.\n`;
+  for (const g of grupos) t += `• <b>${horaLocal(g.ts)}</b> — ${g.itens.map((i) => agEsc(agTraduzir(i.titulo))).join(" · ")}\n`;
+  if (comAviso) t += `⚠️ <i>Evite abrir operação de ~${AGENDA_QUARENTENA_MIN} min antes até ~${AGENDA_QUARENTENA_MIN} min depois desses horários: o preço dispara nos dois sentidos, o spread abre e os stops são varridos.</i>\n`;
+  return t;
+}
+// Bloco do painel: eventos das próximas 24h. Nunca lança erro (um problema na agenda não pode derrubar o painel).
+async function agBlocoProximas(SB: any): Promise<string> {
+  if (!AGENDA_ON) return "";
+  try {
+    const { ev, velho } = await buscarAgenda(SB);
+    if (!ev) return `📅 ⚠️ <b>Não consegui ler a agenda econômica</b> — confira o calendário manualmente antes de operar.\n`;
+    const tzMs = X_TZ_OFFSET_H * 3600000, agora = Date.now();
+    const diaDe = (ms: number) => Math.floor((ms + tzMs) / 86400000);
+    const grupos = agAgrupar(ev.filter((e) => e.ts >= agora - AGENDA_QUARENTENA_MIN * 60000 && e.ts < agora + 86400000));
+    let t = `📅 <b>Agenda — próximas 24h</b> <i>(${agEscopoTxt()})</i>\n`;
+    if (!grupos.length) t += `✅ Nenhum dado importante marcado.\n`;
+    for (const g of grupos) t += `• <b>${horaLocal(g.ts)}</b>${diaDe(g.ts) > diaDe(agora) ? " (amanhã)" : ""} — ${g.itens.map((i) => agEsc(agTraduzir(i.titulo))).join(" · ")}\n`;
+    if (grupos.length) t += `⚠️ <i>Evite operar ~${AGENDA_QUARENTENA_MIN} min antes e depois desses horários.</i>\n`;
+    return t + (velho ? `<i>⚠️ fonte fora do ar — dados do último cache</i>\n` : "");
+  } catch (e) { console.log("⚠️ agenda (painel)", e); return ""; }
+}
+async function runAgenda(chatId: number | string) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  if (!AGENDA_ON) { await sendTelegram(chatId, "📅 Agenda econômica desligada (AGENDA=0)."); return; }
+  const { ev, velho } = await buscarAgenda(SB);
+  if (!ev) { await sendTelegram(chatId, "⚠️ Não consegui ler a agenda econômica agora (fonte fora do ar e sem cache). Confira o calendário manualmente antes de operar."); return; }
+  let msg = agBlocoDia(ev, 0, "hoje", true) + `\n` + agBlocoDia(ev, 1, "amanhã", false);
+  if (velho) msg += `\n<i>⚠️ fonte fora do ar — dados do último cache, podem estar desatualizados</i>`;
+  msg += `\n<i>Horários em UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}. Você recebe um aviso ${AGENDA_AVISOS_MIN.join(" e ")} min antes de cada dado.</i>`;
+  await sendTelegram(chatId, cortar(msg));
+}
+async function checarAgenda(SB: any) {
+  if (!AGENDA_ON || !AGENDA_AVISOS_MIN.length || !ALERT_CHAT_IDS.length) return;
+  const { ev } = await buscarAgenda(SB);
+  if (!ev || !ev.length) return;
+  const agora = Date.now();
+  const maxMin = AGENDA_AVISOS_MIN[0];
+  const proximos = agAgrupar(ev).filter((g) => { const m = (g.ts - agora) / 60000; return m > 0 && m <= maxMin; });
+  if (!proximos.length) return;
+  // Chaves já enviadas (memória + Supabase, porque o cron não guarda memória entre rodadas).
+  if (!_agEnviados.size) {
+    try {
+      const { data } = await SB.from(TAB).select("last_status").eq("instid", AGENDA_AVISO_ROW).maybeSingle();
+      const arr = data?.last_status ? JSON.parse(data.last_status) : [];
+      for (const k of arr) _agEnviados.add(String(k));
+    } catch { }
+  }
+  const destinos = ALERT_CHAT_IDS.filter((c) => !silChat(c));
+  if (!destinos.length) return;
+  let mudou = false;
+  for (const g of proximos) {
+    const min = (g.ts - agora) / 60000;
+    // menor nível que ainda cobre o tempo restante (se a rodada pegou em 10 min, manda o de 15 e pronto — sem o de 60)
+    const nivel = [...AGENDA_AVISOS_MIN].reverse().find((l) => l >= min) ?? maxMin;
+    const chave = `${g.ts}:${nivel}`;
+    if (_agEnviados.has(chave)) continue;
+    let msg = `📅 <b>DADO IMPORTANTE em ${Math.max(1, Math.round(min))} min</b> — ${horaLocal(g.ts)}\n${DIVISOR}\n`;
+    for (const i of g.itens) {
+      msg += `${AG_BANDEIRA[i.pais] || i.pais} <b>${agEsc(agTraduzir(i.titulo))}</b>\n`;
+      if (i.proj || i.ant) msg += `<i>${[i.proj ? `projeção ${agEsc(i.proj)}` : "", i.ant ? `anterior ${agEsc(i.ant)}` : ""].filter(Boolean).join(" · ")}</i>\n`;
+    }
+    const ate = horaLocal(g.ts + AGENDA_QUARENTENA_MIN * 60000);
+    msg += `\n⚠️ <b>Evite operar até ~${ate}.</b> Na hora do dado o preço dispara nos dois sentidos, o spread abre e os stops são varridos.`;
+    const ids = await Promise.all(destinos.map(async (ch) => {
+      const pos = await agPosicoes(ch);
+      const linhaPos = pos === null ? `\n🛡️ Com posição aberta: considere reduzir ou proteger antes.`
+        : pos.lista.length ? `\n🛡️ <b>Você tem ${pos.lista.length} posição(ões) aberta(s):</b> ${pos.lista.join(" · ")}\nConsidere reduzir ou proteger antes do dado.`
+        : `\n✅ Você não tem posição aberta agora — é só ficar de fora até ~${ate}.`;
+      return enviarAlertaMoeda(SB, ch, `AGENDA_${g.ts}`, cortar(msg + linhaPos));
+    }));
+    if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima rodada
+    // marca este nível e os maiores como enviados (o de 60 não deve sair depois que o de 15 já saiu)
+    for (const l of AGENDA_AVISOS_MIN) if (l >= nivel) _agEnviados.add(`${g.ts}:${l}`);
+    mudou = true;
+    console.log(`📅 aviso de agenda enviado (${chave})`);
+  }
+  if (mudou) {
+    const limite = agora - 2 * 86400000;
+    const manter = [..._agEnviados].filter((k) => Number(k.split(":")[0]) > limite);
+    _agEnviados.clear(); manter.forEach((k) => _agEnviados.add(k));
+    await upsertLinha(SB, AGENDA_AVISO_ROW, { last_status: JSON.stringify(manter), last_alert_at: new Date().toISOString() });
+  }
+}
+// ─── V55: PAINEL DO DIA (substitui os resumos soltos) ────────────────────────────────────────────────
+// UMA mensagem por ciclo de 24h (das RESUMO_NOITE_H — padrão 21h — até as 21h do dia seguinte, = virada da vela
+// diária em UTC-3), EDITADA no lugar a cada PAINEL_MIN min. Nada de mensagem nova a cada hora.
+//  • mostra BTC (subindo/caindo), comparação "desde as 21h" e "desde as 8h", janelas fortes, agenda das próximas
+//    24h e o placar do ciclo (alertas + seu resultado real)
+//  • na virada das 21h o painel vira "🏁 FIM DO RESUMO DO DIA" (congelado, desafixado) e o próximo começa
+// Env: RESUMO_NOITE_H=21 (começo do ciclo) · RESUMO_MANHA_H=8 (2ª referência) · PAINEL_MIN=60 · PAINEL_PIN=1 · PAINEL_BTC_PCT=0.3
+const PAINEL_MIN = numEnv("PAINEL_MIN", "60");
+const PAINEL_PIN = (Deno.env.get("PAINEL_PIN") || "1") !== "0";
+const PAINEL_BTC_PCT = numEnv("PAINEL_BTC_PCT", "0.3");
+const PAINEL_ROW = "_PAINEL_";
+type PainelBase = { t: number; btc: number | null; adx: number | null };
+type PainelEstado = { key: string; inicio: number; ids: Record<string, number>; base: PainelBase; base8?: PainelBase; upd: number; fim?: boolean };
+type PainelSnap = { btc: number; p1: number | null; p4: number | null; p24: number | null; adx: number | null };
+
+// ── ciclo atual (21h → 21h) ──
+function painelFase(): { key: string; inicio: number } {
+  const tzMs = X_TZ_OFFSET_H * 3600000;
+  const loc = new Date(Date.now() + tzMs);
+  const dia = new Date(loc.getTime() - (loc.getUTCHours() >= RESUMO_NOITE_H ? 0 : 86400000)).toISOString().slice(0, 10); // dia em que o ciclo começou
+  return { key: dia, inicio: Date.parse(dia + "T00:00:00Z") + RESUMO_NOITE_H * 3600000 - tzMs };
+}
+const painelDiurno = () => { const h = new Date(Date.now() + X_TZ_OFFSET_H * 3600000).getUTCHours(); return h >= RESUMO_MANHA_H && h < RESUMO_NOITE_H; };
+
+// ── dados ──
+async function painelSnap(): Promise<PainelSnap | null> {
+  try {
+    const bruto = await xCandles("BTC-USDT", TIMEFRAME, 500);
+    if (!bruto || bruto.c.length < 100) return null;
+    const c = bruto.c, n = c.length, last = c[n - 1];
+    const pct = (k: number) => (n > k ? ((last - c[n - 1 - k]) / c[n - 1 - k]) * 100 : null);
+    const d = xFechadas(bruto, TF_MIN * 60000);
+    const adx = xAdxSerie(d.h, d.l, d.c, 14);
+    return { btc: last, p1: pct(4), p4: pct(16), p24: pct(96), adx: adx.length ? adx[adx.length - 1] : null };
+  } catch (e) { console.log("⚠️ painel: BTC", e); return null; }
+}
+const baseDe = (s: PainelSnap | null): PainelBase => ({ t: Date.now(), btc: s?.btc ?? null, adx: s?.adx ?? null });
+
+// ── texto ──
+const pSgn = (x: number | null, d = 1) => (x === null || !isFinite(x) ? "—" : `${x >= 0 ? "+" : ""}${x.toFixed(d)}%`);
+const pUsd = (x: number) => `$${Math.round(x).toLocaleString("en-US")}`;
+function painelDesde(s: PainelSnap, b: PainelBase | undefined): string {
+  if (!b || b.btc === null || b.t > Date.now() - 5 * 60000) return "";
+  const adx = b.adx !== null && s.adx !== null ? ` · ADX ${b.adx.toFixed(0)}→${s.adx.toFixed(0)}` : "";
+  return `📈 Desde as ${horaLocal(b.t)}: BTC ${pSgn(((s.btc - b.btc) / b.btc) * 100, 2)} (${pUsd(b.btc)} → ${pUsd(s.btc)})${adx}\n`;
+}
+function painelBtcBloco(s: PainelSnap | null, est: Pick<PainelEstado, "base" | "base8">): string {
+  if (!s) return `₿ <b>Bitcoin</b>: ⚠️ sem dados agora\n\n`;
+  const T = PAINEL_BTC_PCT, p1 = s.p1 ?? 0, p4 = s.p4 ?? 0;
+  const dir = p1 >= T && p4 > -T ? "🟢⬆️ subindo" : p1 <= -T && p4 < T ? "🔴⬇️ caindo" : "⚪➡️ lateral";
+  let t = `₿ <b>Bitcoin</b> ${pUsd(s.btc)} — ${dir}\n1h ${pSgn(s.p1)} · 4h ${pSgn(s.p4)} · 24h ${pSgn(s.p24)}\n`;
+  if (s.adx !== null) t += `Tendência: ${s.adx >= X_ADX_FORTE ? "forte" : s.adx >= X_ADX_FRACO ? "moderada" : "lateral"} (ADX ${s.adx.toFixed(0)})\n`;
+  const d1 = painelDesde(s, est.base), d8 = painelDesde(s, est.base8);
+  t += d1 || d8 ? d1 + d8 : `📈 <i>Foto inicial das ${horaLocal(est.base.t)} — a comparação aparece na próxima atualização.</i>\n`;
+  return t + "\n";
+}
+async function painelJanelas(): Promise<string> {
+  const perfil = await xPerfilHoras().catch(() => null);
+  if (!perfil) return "";
+  const js = xJanelasFortes(perfil);
+  return `🔥 <b>Janelas fortes</b> (${perfil.tipo}, UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}): ${js.length ? js.map((j) => `${xHH(j.ini)}–${xHH(j.fim)}`).join(" · ") : "nenhuma bem definida"}\n\n`;
+}
+async function montarPainel(SB: any, chat: string | number, est: Pick<PainelEstado, "base" | "base8" | "inicio">, snap: PainelSnap | null, fim: boolean): Promise<string> {
+  const [janelas, agenda, placarBruto, pos] = await Promise.all([painelJanelas().catch(() => ""), agBlocoProximas(SB), montarResumoNoite(SB, chat, est.inicio), agPosicoes(chat)]);
+  const linhaPos = pos === null ? "" : pos.lista.length ? `💼 <b>Posições abertas (${pos.lista.length})</b>: ${pos.lista.join(" · ")}\nTotal agora: ${pos.total >= 0 ? "➕" : "➖"}${Math.abs(pos.total).toFixed(2)} USDT\n\n` : `💼 Sem posição aberta.\n\n`;
+  const placar = placarBruto.replace(/^[^\n]*\n[^\n]*\n\n?/, ""); // tira o cabeçalho antigo ("BOA NOITE…" + divisor)
+  const titulo = fim ? "🏁 <b>FIM DO RESUMO DO DIA</b>" : "🌎 <b>PAINEL DO DIA</b>";
+  const carimbo = fim ? `🔒 encerrado às ${horaLocal(Date.now())} · não atualiza mais` : `🕒 atualizado às ${horaLocal(Date.now())} · a cada ${PAINEL_MIN} min · ciclo desde ${horaLocal(est.inicio)}`;
+  return cortar(`${titulo}\n${carimbo}\n${DIVISOR}\n\n${painelBtcBloco(snap, est)}${linhaPos}${janelas}${agenda}\n${placar}`);
+}
+
+// ── estado e envio ──
+async function painelLer(SB: any): Promise<PainelEstado | null> {
+  try {
+    const { data } = await SB.from(TAB).select("last_status").eq("instid", PAINEL_ROW).maybeSingle();
+    const p = data?.last_status ? JSON.parse(data.last_status) : null;
+    return p && p.key && p.base && p.inicio ? (p as PainelEstado) : null;
+  } catch { return null; }
+}
+const painelSalvar = (SB: any, est: PainelEstado) => upsertLinha(SB, PAINEL_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date().toISOString() });
+async function painelEnviarNovo(SB: any, ch: string, est: PainelEstado, snap: PainelSnap | null): Promise<void> {
+  const id = await sendTelegram(ch, await montarPainel(SB, ch, est, snap, false), undefined, { semUi: true });
+  if (!id) return;
+  est.ids[ch] = id;
+  if (PAINEL_PIN) tgPost("pinChatMessage", { chat_id: ch, message_id: id, disable_notification: true }).catch(() => {});
+}
+// Edita os painéis existentes (e cria pra chat que ainda não tem). fim=true: última edição do ciclo — congela e desafixa.
+async function painelAtualizar(SB: any, est: PainelEstado, fim: boolean): Promise<void> {
+  const snap = await painelSnap();
+  if (!fim && !est.base8 && painelDiurno() && snap) est.base8 = baseDe(snap); // 2ª referência: primeira foto depois das 8h
+  for (const ch of ALERT_CHAT_IDS) {
+    const id = est.ids[ch];
+    if (id) {
+      const ok = await editarTelegram(ch, id, await montarPainel(SB, ch, est, snap, fim));
+      if (fim) { if (PAINEL_PIN) tgPost("unpinChatMessage", { chat_id: ch, message_id: id }).catch(() => {}); continue; }
+      if (!ok && !silChat(ch)) { delete est.ids[ch]; await painelEnviarNovo(SB, ch, est, snap); } // apagaram o painel: recria
+    } else if (!fim && !silChat(ch)) await painelEnviarNovo(SB, ch, est, snap);
+  }
+  est.upd = Date.now();
+}
+async function checarPainel(SB: any) {
+  if (!RESUMO_ON || !ALERT_CHAT_IDS.length) return;
+  const fase = painelFase();
+  const est = await painelLer(SB);
+  // 1) ciclo novo: encerra o painel antigo (uma vez só)
+  if (est && est.key !== fase.key && !est.fim) {
+    await painelAtualizar(SB, est, true);
+    est.fim = true;
+    await painelSalvar(SB, est);
+    console.log(`🏁 painel ${est.key} encerrado`);
+  }
+  // 2) sem painel neste ciclo: cria
+  if (!est || est.key !== fase.key) {
+    if (ALERT_CHAT_IDS.every((ch) => silChat(ch))) return;
+    const snap = await painelSnap();
+    const novo: PainelEstado = { key: fase.key, inicio: fase.inicio, ids: {}, base: baseDe(snap), upd: Date.now() };
+    for (const ch of ALERT_CHAT_IDS) if (!silChat(ch)) await painelEnviarNovo(SB, ch, novo, snap);
+    if (!Object.keys(novo.ids).length) return; // ninguém confirmou: tenta de novo no próximo ciclo do cron
+    await painelSalvar(SB, novo);
+    console.log(`🗓️ painel ${novo.key} iniciado`);
+    return;
+  }
+  // 3) painel do ciclo já existe: atualiza de hora em hora
+  if (Date.now() - est.upd >= (PAINEL_MIN - 2) * 60000) {
+    await painelAtualizar(SB, est, false);
+    await painelSalvar(SB, est);
+    console.log(`🔄 painel ${est.key} atualizado`);
+  }
+}
+// /resumo: uma mensagem com o painel de agora (não mexe no painel fixo).
 async function runResumo(chatId: number | string) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
-  await sendTelegram(chatId, await montarResumoManha(SB, chatId));
-  await sendTelegram(chatId, await montarResumoNoite(SB, chatId));
+  const fase = painelFase();
+  const est = await painelLer(SB);
+  const snap = await painelSnap();
+  const ref = est && est.key === fase.key ? est : { inicio: fase.inicio, base: baseDe(snap), base8: undefined };
+  await sendTelegram(chatId, await montarPainel(SB, chatId, ref, snap, false));
 }
 async function extrasV13(SB: any, posMap: Map<string, Pos[] | null>) {
   const partes: [string, () => Promise<void>][] = [
     ["placar", () => conferirPlacar(SB)],
     ["seguidas", () => checarSeguidas(SB)],
     ["posições", () => checarPosicoes(SB, posMap)],
-    ["resumos", () => checarResumos(SB)],
+    ["painel", () => checarPainel(SB)],
+    ["agenda", () => checarAgenda(SB)],
   ];
   await Promise.all(partes.map(async ([nome, fn]) => {
     try { await fn(); } catch (e) { console.log(`❌ erro ${nome}`, e); }
@@ -4145,7 +4581,12 @@ async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: str
     const n = Number(data?.last_status);
     if (isFinite(n) && n > 0) antigo = n;
   } catch { }
-  const novo = await sendTelegram(chat, ALERTA_MARCA + msg, botoes, { semUi: true });
+  // Alertas de ENTRADA ganham a linha "dado importante perto" (alertas de posição e o próprio aviso de agenda não).
+  let risco = "";
+  if (/^(FUNDO|TOPO|COMPRESSAO|ACOMP|FINAL|CRUZ|ANTEC|SEG)_/.test(instId)) {
+    try { await buscarAgenda(SB); risco = agRiscoLinha(); } catch { }
+  }
+  const novo = await sendTelegram(chat, cortar(ALERTA_MARCA + risco + msg), botoes, { semUi: true });
   if (novo) {
     if (antigo) await apagarMsg(chat, antigo);
     try { await upsertLinha(SB, chave, { last_status: String(novo) }); } catch (e) { console.log("⚠️ não salvei id da mensagem", e); }
@@ -4226,7 +4667,15 @@ function sugestaoPosicao(p: Pos, info: IndicadorInfo & { adx?: number; rsi?: num
   const perdendoForca = !fraco && adx !== null && adxAntes !== null && (adx - adxAntes) <= -3;
   const lucroGrande = p.pnl > 0 && p.pnlPct >= 15;
   const forca = [adx !== null ? `ADX ${adx.toFixed(0)}` : "", rsi !== null ? `RSI ${rsi.toFixed(0)}` : ""].filter(Boolean).join(", ");
-  const stopTxt = p.pnl > 0 ? "suba o stop para o preço de entrada" : "mantenha o stop original e não aumente a posição";
+  // V54: com lucro, a dica mandava "suba o stop para o preço de entrada" mesmo quando o trailing (linha logo abaixo, em /robo,
+  // /analise e nos alertas) já mandava subir o stop pra um preço com ganho travado — duas ordens diferentes pro mesmo stop.
+  // Agora: trailing ativo → a dica manda seguir o trailing; lucro ainda abaixo do 1º degrau → mantém o stop (o trailing avisa
+  // quando subir); trailing desligado (TRAIL_ATR_MULT=0) → cai no texto antigo.
+  const atrPos = typeof (info as any).atr === "number" ? (info as any).atr : 0;
+  const stopTxt = p.pnl <= 0 ? "mantenha o stop original e não aumente a posição"
+    : calcTrailing(p, atrPos) ? "siga o stop do trailing logo abaixo"
+    : TRAIL_ATR_MULT > 0 ? `mantenha o stop de proteção (o trailing sobe o stop quando o ganho passar de ${TRAIL_ATR_MULT}×ATR)`
+    : "suba o stop para o preço de entrada";
   if (atual === p.lado) {
     if (esticado) return { emoji: "🟠", titulo: "A favor, mas esticado", contra: false, dica: `${forca}. Risco de correção: realize uma parte e proteja o resto com stop.` };
     if (fraco) return { emoji: "🟠", titulo: "A favor, mas sem força", contra: false, dica: `${forca} (mínimo do filtro: ${FILTRO_ADX_MIN}). Os filtros não abririam essa entrada agora: ${p.pnl > 0 ? "realize tudo ou boa parte" : "aperte o stop"}.` };
@@ -4272,7 +4721,7 @@ async function blocoPosicao(SB: any, chatId: number | string, ps: Pos[], info: I
   let out = `\n\n${DIVISOR}`;
   for (const p of ps) {
     const s = await sugestaoPosicaoComSeta(SB, chatId, p, inf, alvo);
-    out += `\n📌 <b>Você já está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.dica}\n` + (trailingTxt(p, typeof inf.atr === "number" ? inf.atr : 0) || stopAlvoPosTxt(p, inf));
+    out += `\n📌 <b>Você já está ${p.lado === "long" ? "LONG" : "SHORT"}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${s.emoji} <b>${s.titulo}</b>\n${s.dica}\n` + (trailingTxt(p, typeof inf.atr === "number" ? inf.atr : 0) || stopAlvoPosTxt(p, inf));
   }
   return out + `<i>Sugestão automática (Indicador + ADX + RSI), não é ordem.</i>`;
 }
@@ -4335,6 +4784,13 @@ function trailingTxt(p: Pos, atr: number): string {
     ? `🔒 Trailing: o trade já andou ${TRAIL_ATR_MULT}×ATR a seu favor (+${t.ganhoPct.toFixed(2)}%). Suba o stop para o preço de entrada (${fmtPrice(t.stop)})<i> e não deixe o lucro virar prejuízo</i>.\n`
     : `🔒 Trailing: suba o stop para ${fmtPrice(t.stop)} — trava +${t.travaPct.toFixed(2)}% de ganho${mg} — o preço já andou +${t.ganhoPct.toFixed(2)}%.\n`;
 }
+// V54: texto de stop pros alertas de radar (fundo/topo) com posição aberta — usa o mesmo cálculo do trailing, em vez de mandar
+// "stop no preço de entrada" com o trailing já pedindo mais (esses alertas não mostram a linha do trailing).
+function stopSugeridoTxt(p: Pos, atr: number): string {
+  const t = calcTrailing(p, atr);
+  if (t) return t.n === 1 ? "subir o stop pro preço de entrada" : `subir o stop para ${fmtPrice(t.stop)} (trailing, trava +${t.travaPct.toFixed(2)}%)`;
+  return TRAIL_ATR_MULT > 0 ? "manter o stop de proteção" : "subir o stop pro preço de entrada";
+}
 const _infoPosCache = new Map<string, { t: number; v: InfoFiltravel | null }>();
 async function infoPosCache(instId: string): Promise<InfoFiltravel | null> {
   const c = _infoPosCache.get(instId);
@@ -4367,7 +4823,7 @@ async function checarProtecaoLucro(SB: any, posMap: Map<string, Pos[] | null>) {
         const info = await infoPosCache(p.instId);
         if (!info) continue;
         const ladoTxt = p.lado === "long" ? "LONG" : "SHORT";
-        const cab = `entrada ${fmtPrice(p.entrada)} | agora ${fmtPrice(p.mark)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)`;
+        const cab = `entrada ${fmtPrice(p.entrada)} | agora ${fmtPrice(p.mark)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)`;
         const tr = calcTrailing(p, info.atr);
         if (tr && tr.n > (prevT[k] ?? 0)) {
           const msg = `🔒 <b>${p.instId}</b> ${ladoTxt} — hora de subir o stop\n${DIVISOR}\n\n${cab}\n\n${trailingTxt(p, info.atr)}\n<i>Sugestão automática (ATR ${TRAIL_ATR_MULT}×), não é ordem. Só avisa de novo no próximo degrau.</i>`;
@@ -4421,7 +4877,7 @@ async function checarEnfraquecimento(SB: any, posMap: Map<string, Pos[] | null>)
           if (prevN !== 0) salvo = { n: 0, t: agora };
         } else if (n > prevN || (n === prevN && agora - prevT >= FRACO_COOLDOWN_MIN * 60000)) {
           const ladoTxt = p.lado === "long" ? "LONG" : "SHORT";
-          const cab = `entrada ${fmtPrice(p.entrada)} | agora ${fmtPrice(p.mark)} | PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)`;
+          const cab = `entrada ${fmtPrice(p.entrada)} | agora ${fmtPrice(p.mark)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)`;
           const msg = `${sug.emoji} <b>${p.instId}</b> ${ladoTxt} — ${sug.titulo}\n${DIVISOR}\n\n${cab}\n\n${sug.dica}\n` +
             (p.pnl > 0 ? trailingTxt(p, info.atr) : "") +
             `\n<i>Aviso automático: o sinal desta moeda enfraqueceu com a posição aberta. Sugestão, não é ordem.</i>`;
@@ -4556,6 +5012,14 @@ async function buscarFills(cred: Cred, desdeMs: number, maxPag = 12): Promise<{ 
 }
 const MEUPLACAR_ANTES_MIN = 15;
 const MEUPLACAR_DEPOIS_H = 6;
+// V54: ganhos/perdas por ORDEM de fechamento (uma ordem costuma vir em várias execuções/fills; contar cada fill inflava o placar).
+// Recebe só as execuções com fillPnl != 0. Sem orderId usa o tradeId (cada execução vira uma "ordem").
+function contaPorOrdem(fech: any[]): { ordens: number; ganhos: number; perdas: number } {
+  const m = new Map<string, number>();
+  fech.forEach((f, i) => { const k = String(f.orderId ?? f.tradeId ?? `sem-id-${i}`); m.set(k, (m.get(k) ?? 0) + numOr0(f.fillPnl)); });
+  const v = [...m.values()];
+  return { ordens: v.length, ganhos: v.filter((x) => x > 0).length, perdas: v.filter((x) => x < 0).length };
+}
 async function runMeuPlacar(chatId: number | string, dias: number) {
   const cred = credDe(chatId);
   if (!cred) { await sendTelegram(chatId, `🧾 <b>/meuplacar</b> precisa da sua chave BloFin (só leitura) ligada a este chat.\nSeu chat_id: <b>${chatId}</b>`); return; }
@@ -4589,7 +5053,7 @@ async function runMeuPlacar(chatId: number | string, dias: number) {
   const soma = (l: any[]) => l.reduce((s, f) => s + numOr0(f.fillPnl), 0);
   const fSeg = fech.filter((f) => instSeguidas.has(String(f.instId)));
   const fOut = fech.filter((f) => !instSeguidas.has(String(f.instId)));
-  const gp = (l: any[]) => `${l.filter((f) => numOr0(f.fillPnl) > 0).length} ganho(s) × ${l.filter((f) => numOr0(f.fillPnl) < 0).length} perda(s)`;
+  const gp = (l: any[]) => { const c = contaPorOrdem(l); return `${c.ganhos} ganho(s) × ${c.perdas} perda(s)`; };
   let msg = `🧾 <b>MEU PLACAR</b> — últimos ${dias} dia(s)\n${DIVISOR}\n\n`;
   msg += `🔔 ${alertas.length} alerta(s) do bot no período\n✅ Você entrou em ${seguidos.length}\n⏭️ Não entrou em ${ignorados.length - contra}\n↔️ Entrou contra o lado do alerta em ${contra}\n\n`;
   msg += `💰 <b>Resultado realizado</b>: ${sgn(soma(fech))} USDT (${gp(fech)})\n`;
@@ -4753,10 +5217,10 @@ async function runRobo(chatId: number | string) {
       const lado = p.positionSide === "long" ? "LONG" : p.positionSide === "short" ? "SHORT" : (q > 0 ? "LONG" : "SHORT");
       const pnl = numOr0(p.unrealizedPnl);
       if (idx > 0) msg += `${MINI_DIVISOR}\n`;
-      msg += `${pnl >= 0 ? "🟢" : "🔴"} <b>${String(p.instId).replace("-USDT", "")}</b> — ${lado} ${numOr0(p.leverage) || ""}x ${p.marginMode === "cross" ? "cross" : "isolada"}\n` +
+      msg += `🪙 <b>${String(p.instId).replace("-USDT", "")}</b> — ${lado} ${numOr0(p.leverage) || ""}x ${p.marginMode === "cross" ? "cross" : "isolada"}\n` +
         `   entrada ${fmtPrice(numOr0(p.averagePrice))} → agora ${fmtPrice(numOr0(p.markPrice))}\n` +
-        `   PnL ${sgn(pnl)} USDT (${sgn(numOr0(p.unrealizedPnlRatio) * 100, 1)}% da margem)` +
-        (numOr0(p.liquidationPrice) > 0 ? ` | liq ${fmtPrice(numOr0(p.liquidationPrice))}` : "") + `\n`;
+        `   ${pnl >= 0 ? "😎" : "🤧"} PnL <b>${sgn(pnl)} USDT</b> (${sgn(numOr0(p.unrealizedPnlRatio) * 100, 1)}% da margem)\n` +
+        (numOr0(p.liquidationPrice) > 0 ? `   liq ${fmtPrice(numOr0(p.liquidationPrice))}\n` : "");
       const pp = paraPos(p), inf = infosRobo[idx];
       if (pp && inf) {
         const sug = await sugestaoPosicaoComSeta(SBrobo, chatId, pp, inf);
@@ -4773,11 +5237,11 @@ async function runRobo(chatId: number | string) {
   else {
     const fech = fills.filter((f) => numOr0(f.fillPnl) !== 0);
     const soma = fech.reduce((s, f) => s + numOr0(f.fillPnl), 0);
-    const ganhos = fech.filter((f) => numOr0(f.fillPnl) > 0).length;
+    const cnt = contaPorOrdem(fech); // V54: por ordem de fechamento, não por execução
     msg += `📅 <b>Hoje</b> (desde 00h, UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H})\n`;
     if (!fills.length) msg += `Nenhuma execução hoje.\n`;
-    else msg += `${fills.length} execução(ões), ${fech.length} de fechamento\nResultado realizado: <b>${sgn(soma)} USDT</b>` +
-      (fech.length ? ` | ${ganhos} ganho(s) × ${fech.length - ganhos} perda(s)` : "") + `\n`;
+    else msg += `${fills.length} execução(ões), ${cnt.ordens} ordem(ns) de fechamento\nResultado realizado: <b>${sgn(soma)} USDT</b>` +
+      (cnt.ordens ? ` | ${cnt.ganhos} ganho(s) × ${cnt.perdas} perda(s)` : "") + `\n`;
     if (fills.length >= 500) msg += `<i>(limite de 500 execuções lidas)</i>\n`;
   }
   msg += `\n<i>Só leitura. O resultado usa o fillPnl informado pela BloFin e pode não incluir taxas e funding. As sugestões usam Indicador + ADX + RSI e não são ordem de compra ou venda.</i>`;
@@ -4846,8 +5310,8 @@ function textoAjuda(chatId: number | string, modoAtual: Modo, remetente: number 
       "🔄 /reversao — vira contra o dia: SHORT em moeda que subiu (LONG → SHORT) e LONG em moeda que caiu (SHORT → LONG, só com sinais de fundo), perto do Indicador\n";
   if (FUNDO_ON || TOPO_ON || COMPRESS_ON) {
     t += `${MINI_DIVISOR}\n`;
-    if (FUNDO_ON) t += c ? `🟢 /fundo — sinais de fundo (⭐ repique primeiro)\n` : "🟢 /fundo — despencaram no dia e já mostram sinais de fundo (possível virada SHORT → LONG); ⭐ repique segurando na faixa vem primeiro\n";
-    if (TOPO_ON) t += c ? `🔴 /topo — sinais de topo (⭐ repique primeiro)\n` : "🔴 /topo — dispararam no dia (ou desde a mínima) e já mostram sinais de topo (possível virada LONG → SHORT); ⭐ repique rejeitado na faixa vem primeiro\n";
+    if (FUNDO_ON) t += c ? `🟢 /fundo — sinais de fundo (⭐ repique primeiro)\n` : "🟢 /fundo — caíram ≥10% (no dia ou desde a máxima recente) e já mostram sinais de fundo (possível virada SHORT → LONG); ⭐ repique = disparou, recuou até a faixa e segura nela (retomada da alta), vem primeiro\n";
+    if (TOPO_ON) t += c ? `🔴 /topo — sinais de topo (⭐ repique primeiro)\n` : "🔴 /topo — subiram ≥10% (no dia ou desde a mínima recente) e já mostram sinais de topo (possível virada LONG → SHORT); ⭐ repique = despencou, repicou até a faixa e foi rejeitada (retomada da queda), vem primeiro\n";
     if (COMPRESS_ON) t += c ? `🗜️ /compressao — faixa comprimida, rompimento perto\n` : "🗜️ /compressao — faixa achatada + volume começando a subir: PREPARE de rompimento (alerta automático varre todos os pares em rodízio)\n";
   }
   t += `${MINI_DIVISOR}\n`;
@@ -4858,8 +5322,8 @@ function textoAjuda(chatId: number | string, modoAtual: Modo, remetente: number 
 
   t += `\n${MINI_DIVISOR}\n<b>📊 Resultados</b>\n`;
   t += c
-    ? `📊 /placar 7 · 🧾 /meuplacar 7 · 🌅 /resumo\n`
-    : "📊 /placar 7 — taxa de acerto dos alertas (1h, 4h, 24h)\n🧾 /meuplacar 7 — seus trades reais x alertas do bot (precisa da chave BloFin)\n🌅 /resumo — resumo da manhã e da noite (também chegam sozinhos)\n";
+    ? `📊 /placar 7 · 🧾 /meuplacar 7 · 🌅 /resumo · 📅 /agenda\n`
+    : "📊 /placar 7 — taxa de acerto dos alertas (1h, 4h, 24h)\n🧾 /meuplacar 7 — seus trades reais x alertas do bot (precisa da chave BloFin)\n🌅 /resumo — painel do dia (21h a 21h): BTC, comparação desde as 21h e 8h, agenda e placar; atualiza sozinho a cada hora\n📅 /agenda — dados econômicos importantes de hoje e amanhã (avisa 60 e 15 min antes, pra você evitar operar)\n";
 
   t += `\n${MINI_DIVISOR}\n<b>🤖 Sua conta BloFin</b>\n`;
   t += c
@@ -5026,7 +5490,8 @@ Deno.serve(async (req) => {
         await sendTelegram(chatId, textoBoasVindas(chatId, modoAtual));
         await sendTelegram(chatId, "⌨️ Atalhos fixos ativados aqui embaixo 👇");
       } else {
-        await sendTelegram(chatId, textoAjuda(chatId, modoAtual, remetente));
+        // V54: em partes se passar do limite do Telegram (modo Novato ≈ 4,4k caracteres)
+        for (const parte of ajudaEmPartes(textoAjuda(chatId, modoAtual, remetente))) await sendTelegram(chatId, parte);
       }
       return new Response("ok");
     }
@@ -5047,12 +5512,12 @@ Deno.serve(async (req) => {
     // "if (!FUNDO_ON) return;"/"if (!TOPO_ON) return;" logo no início, então já ficavam mudos corretamente.
     if (text.startsWith("/fundo")) {
       if (!FUNDO_ON) { await sendTelegram(chatId, "🟢 Radar de fundo desligado neste bot (FUNDO_RADAR=0)."); return new Response("ok"); }
-      await comAguarde("🔍 Procurando moedas que despencaram e já mostram sinais de fundo, aguarde...", () => runFundo(chatId));
+      await comAguarde("🔍 Procurando moedas que caíram (no dia ou desde a máxima) e já mostram sinais de fundo, aguarde...", () => runFundo(chatId));
       return new Response("ok");
     }
     if (text.startsWith("/topo")) {
       if (!TOPO_ON) { await sendTelegram(chatId, "🔴 Radar de topo desligado neste bot (TOPO_RADAR=0)."); return new Response("ok"); }
-      await comAguarde("🔍 Procurando moedas que dispararam e já mostram sinais de topo, aguarde...", () => runTopo(chatId));
+      await comAguarde("🔍 Procurando moedas que subiram (no dia ou desde a mínima) e já mostram sinais de topo, aguarde...", () => runTopo(chatId));
       return new Response("ok");
     }
     // V50: com COMPRESS_ON=0 essa condição não entrava e caía direto no "return new Response(ok)" do fim —
@@ -5120,6 +5585,10 @@ Deno.serve(async (req) => {
     }
     if (text.startsWith("/resumo")) {
       await comAguarde("🗓️ Montando os resumos, aguarde...", () => runResumo(chatId));
+      return new Response("ok");
+    }
+    if (text.startsWith("/agenda")) {
+      await comAguarde("📅 Lendo a agenda econômica, aguarde...", () => runAgenda(chatId));
       return new Response("ok");
     }
     if (text.startsWith("/robo")) {
