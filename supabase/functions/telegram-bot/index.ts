@@ -2998,7 +2998,7 @@ async function runAgora(chatId: number | string, entrada: string) {
 // distância até a linha, confiança) e mostra lado a lado, com o veredito de qual tem a confiança mais alta
 // agora. Cada lado usa o lado (LONG/SHORT) que o robô abriria PRA AQUELA moeda especificamente — não é uma
 // comparação crua de ADX ou variação, é "qual sinal está mais forte pro lado que faz sentido pra cada uma".
-type SnapComparar = { instId: string; info: IndicadorInfo; lado: "long" | "short"; atual: "long" | "short" | null; conf: number; pct: number; vivo: number; adx: number; adxAntes: number; rsi: number };
+type SnapComparar = { instId: string; info: IndicadorInfo; lado: "long" | "short"; atual: "long" | "short" | null; conf: number; total: number; pct: number; vivo: number; adx: number; adxAntes: number; rsi: number };
 type SnapComparaErro = { erro: string };
 async function snapshotComparar(
   entrada: string,
@@ -3030,12 +3030,12 @@ async function snapshotComparar(
   const bottomA = FUNDO_ON ? calcFundoPre(d15, info, atr, adx, adxAntes) : null;
   const topA = TOPO_ON ? calcTopoPre(d15, info, atr, adx, adxAntes) : null;
   const fo = await getFundingOI(instId);
-  const { conf } = pontuar({
+  const { conf, total } = pontuar({
     info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1: null,
     btcAdx: btc ? btc.adx : null, perfil: null, fo, volRatio, chegadaForte: false, apChega,
     tipo: tipoDoLado(lado, pct), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
   });
-  return { instId, info, lado, atual, conf, pct, vivo, adx, adxAntes, rsi };
+  return { instId, info, lado, atual, conf, total, pct, vivo, adx, adxAntes, rsi };
 }
 async function runComparar(chatId: number | string, entradaA: string, entradaB: string) {
   const [variacoes, btc, btcV] = await Promise.all([
@@ -3064,8 +3064,14 @@ async function runComparar(chatId: number | string, entradaA: string, entradaB: 
   };
   let msg = `⚖️ <b>Comparar</b> — ${a.instId} × ${b.instId}\n${DIVISOR}\n\n`;
   msg += bloco(a) + `${MINI_DIVISOR}\n` + bloco(b) + `${MINI_DIVISOR}\n`;
-  if (a.conf === b.conf) {
+  const DESEMPATE_MARGEM_TOTAL = 3; // conf é total arredondado numa escala 0-10 (~4.8 pontos brutos por degrau);
+  // diferença de total abaixo disso é considerada empate real mesmo com um total maior que o outro.
+  if (a.conf === b.conf && Math.abs(a.total - b.total) < DESEMPATE_MARGEM_TOTAL) {
     msg += `🤝 Empate em confiança (${a.conf}/10) — sinal parecido nas duas agora; olhe a distância até a linha e o ADX acima pra desempatar.`;
+  } else if (a.conf === b.conf) {
+    const melhor = a.total > b.total ? a : b;
+    const pior = a.total > b.total ? b : a;
+    msg += `🏆 <b>${melhor.instId}</b> leva por pouco (${a.conf}/10 nas duas, mas ${melhor.total} vs ${pior.total} pontos por trás do arredondamento) pro lado ${nome(melhor.lado)} agora.`;
   } else {
     const melhor = a.conf > b.conf ? a : b;
     const pior = a.conf > b.conf ? b : a;
