@@ -1,3 +1,5 @@
+// telegram-bot V57 (V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 2 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), pra não ligar e desligar em cima do limite; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
+// telegram-bot V56 (V55 + revisão dos filtros: volume mínimo aplicado ANTES do corte top-N nos pools de alerta e das listas (moeda ilíquida não gasta mais vaga); /config descreve o RSI do modo pump como ele roda (LONG só barra acima de FILTRO_RSI_MAX_LONG, SHORT só abaixo de FILTRO_RSI_MIN) e o volume em M; serrote: textos dizem "trocas em 4h" (entrar/sair da faixa conta) e o limiar do aviso/penalidade segue SERROTE_MAX; X_ADX_FRACO segue FILTRO_ADX_MIN; log único dos campos de volume do ticker pra conferir a unidade)
 // telegram-bot V55 (V54 + painel do dia de 21h a 21h: 1 mensagem editada a cada hora, BTC subindo/caindo, comparação desde as 21h e desde as 8h, vira "FIM DO RESUMO DO DIA" na virada; agenda econômica: aviso 60 e 15 min antes de dado de alto impacto (CPI, payroll, FOMC...) pra evitar operar; bloco "agenda de hoje" no resumo da manhã e "amanhã" no da noite (sem mensagem extra, sem duplicar); /agenda; cache em memória + Supabase e aviso quando a fonte está fora)
 // telegram-bot V54 (V53 + /robo: emoji 🪙 no nome da moeda no lugar da bolinha 🟢/🔴 de PnL (colidia com o emoji de estado da linha de baixo); rótulo "LIGUE AGORA" único (os alertas diziam "LIGUE O ROBÔ AGORA" no corpo e "LIGUE AGORA" no título e no /help); linha de PnL própria com 😎 (ganhando) / 🤧 (perdendo) e liq em linha separada; nos outros lugares (/analise, /agora, alertas de posição e de proteção) o PnL da posição ganhou ➕/➖ na frente (não quebra mais no celular) e dica de stop alinhada ao trailing (não manda mais "stop na entrada" quando o trailing já manda travar ganho); coerência do repique, sem mudar o nome: limiares do marcador alinhados ao pool (FUNDO_TOQUE_PICO_MIN/
 // TOPO_TOQUE_VALE_MIN acompanham FUNDO_QUEDA_MIN/TOPO_ALTA_MIN); zona morta ±REPIQUE_PCT_ZONA única em tipoDoLado (só pra moeda que devolveu o movimento; o resto
@@ -74,6 +76,20 @@ const OPORT_POOL = 40;
 const PAIRS_CACHE_MS = 30 * 60 * 1000;
 let FILTRO_VOL_MIN_USDT = numEnv("FILTRO_VOL_MIN_USDT", "1000000");
 let FILTRO_ADX_MIN = numEnv("FILTRO_ADX_MIN", "18");
+// V57: filtro de mercado lateral (BTC + ETH), com duas faixas pra não ficar ligando/desligando em cima do limite.
+// Bloqueia quando os DOIS estão com ADX < LATERAL_ADX_BLOQ; só libera quando UM deles chega a >= LATERAL_ADX_LIBERA.
+const LATERAL_ON = (Deno.env.get("LATERAL_BLOQ") || "1") !== "0";
+const LATERAL_ADX_BLOQ = numEnv("LATERAL_ADX_BLOQ", "18");
+const LATERAL_ADX_LIBERA = Math.max(numEnv("LATERAL_ADX_LIBERA", "20"), LATERAL_ADX_BLOQ);
+// V57: 2 confirmações além do ADX (mesma ideia de duas faixas): ER = Efficiency Ratio de Kaufman (deslocamento líquido ÷ caminho percorrido
+// nas últimas LATERAL_JAN velas 15m; perto de 0 = vai e vem, perto de 1 = tendência) e "caixa" = amplitude máx−mín das mesmas velas em ATRs.
+// Cada ativo vota com os 3 indicadores; bloqueia com LATERAL_VOTOS (2) de 3 nos DOIS ativos e libera com LATERAL_VOTOS de 3 de tendência em UM deles.
+const LATERAL_ER_BLOQ = numEnv("LATERAL_ER_BLOQ", "0.25");
+const LATERAL_ER_LIBERA = Math.max(numEnv("LATERAL_ER_LIBERA", "0.35"), LATERAL_ER_BLOQ);
+const LATERAL_AMP_BLOQ = numEnv("LATERAL_AMP_BLOQ", "3");
+const LATERAL_AMP_LIBERA = Math.max(numEnv("LATERAL_AMP_LIBERA", "4"), LATERAL_AMP_BLOQ);
+const LATERAL_JAN = Math.max(4, Math.round(numEnv("LATERAL_JAN", "16")));
+const LATERAL_VOTOS = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS", "2"))));
 let FILTRO_RSI_MAX = numEnv("FILTRO_RSI_MAX", "85");
 let FILTRO_RSI_MIN = numEnv("FILTRO_RSI_MIN", "15");
 let FILTRO_DIST_MAX_PCT = numEnv("FILTRO_DIST_MAX_PCT", "2");
@@ -107,6 +123,8 @@ const CONF_AMARELO = 6;
 const ESTRAT_PUMP = (Deno.env.get("ESTRATEGIA_PUMP") || "1") !== "0";
 const FILTRO_RSI_MAX_LONG = numEnv("FILTRO_RSI_MAX_LONG", "90");
 const SERROTE_MAX = numEnv("SERROTE_MAX", "4");
+// V56: limiar do texto/penalidade de "vai e vem" segue o SERROTE_MAX (antes 4 fixo em 2 lugares); com SERROTE_MAX=0 (filtro duro desligado) mantém 4
+const SERROTE_AVISO = SERROTE_MAX > 0 ? SERROTE_MAX : 4;
 const LIMITE_LADO = numEnv("LIMITE_LADO", "3");
 const CONF_MIN_OPORT = numEnv("CONF_MIN_OPORT", "6");
 const CONF_MIN_REVERSAO = numEnv("CONF_MIN_REVERSAO", "7");
@@ -766,12 +784,22 @@ function passaAmplitude(pct: number, dd: number, up: number): boolean {
   if (FILTRO_AMPLITUDE_MIN <= 0) return true;
   return Math.max(Math.abs(pct), dd || 0, up || 0) >= FILTRO_AMPLITUDE_MIN;
 }
+let _volCampoLogado = false;
 async function getVariacoes24h(): Promise<VarInfo[]> {
   const pares = await getFuturesPairs();
   const paresSet = new Set(pares);
   const variacoes: VarInfo[] = [];
   const bulk = await getAllTickersBulk();
   if (bulk) {
+    // V56: 1x por isolate, mostra os campos de volume do ticker com o volUsdt calculado, pra conferir a unidade
+    // (volCurrency24h deve ser em moeda-base; vol24h em contratos). Compare com o volume 24h no app da BloFin.
+    if (!_volCampoLogado) {
+      _volCampoLogado = true;
+      for (const t of bulk.filter((x: any) => x?.instId && parseFloat(x.last || "0") > 0).slice(0, 3)) {
+        const l = parseFloat(t.last);
+        console.log(`🔎 volume ${t.instId}: vol24h=${t.vol24h} volCurrency24h=${t.volCurrency24h} last=${t.last} -> volUsdt=${((parseFloat(t.volCurrency24h || "0") || 0) * l).toFixed(0)}`);
+      }
+    }
     for (const t of bulk) {
       if (!t.instId || !paresSet.has(t.instId)) continue;
       if (BLACKLIST_MOEDAS.has(t.instId.toUpperCase())) continue;
@@ -865,6 +893,8 @@ function volAcel(v: number[]): number | null {
   const base = xMediana(v.slice(n - 15, n - 3).filter((x) => isFinite(x)));
   return base > 0 && isFinite(rec) ? rec / base : null;
 }
+// V56: conta mudanças entre 3 estados (acima / dentro / abaixo da faixa) nas últimas 16 velas (4h). Acima→dentro→acima = 2 trocas:
+// entrar e sair da faixa também é serrote. Os textos dizem "trocas em 4h", não "trocas de lado".
 function contarTrocas(closes: number[]): number {
   const L = superV2(closes, PESO_SUPREMA);
   let trocas = 0;
@@ -1583,8 +1613,10 @@ async function itensPorLado(calc: (id: string) => Promise<InfoFiltravel | null> 
   const variacoes = variacoesIn ?? await getVariacoes24h();
   const n = Math.max(1, LISTA_POOL_LADO);
   const mapa = new Map<string, VarInfo>();
-  for (const v of [...variacoes].sort((a, b) => b.pct - a.pct).slice(0, n)) mapa.set(v.instId, v);
-  for (const v of [...variacoes].sort((a, b) => a.pct - b.pct).slice(0, n)) mapa.set(v.instId, v);
+  // V56: volume mínimo ANTES do corte top-N (o motivoDescarte já barrava depois, mas as vagas eram gastas com moeda ilíquida)
+  const liquidas = variacoes.filter((v) => v.volUsdt >= FILTRO_VOL_MIN_USDT);
+  for (const v of [...liquidas].sort((a, b) => b.pct - a.pct).slice(0, n)) mapa.set(v.instId, v);
+  for (const v of [...liquidas].sort((a, b) => a.pct - b.pct).slice(0, n)) mapa.set(v.instId, v);
   const pool = [...mapa.values()];
   const infos = await emLotes(pool.map((v) => v.instId), 15, calc);
   const itens: ItemLado[] = [];
@@ -2027,6 +2059,7 @@ async function checarAlertaFinal(
   lastMap: Map<string, number>,
   posMap: Map<string, Pos[] | null>,
   perfil: XPerfil | null,
+  lat?: LateralEst | null,
 ) {
   if (!FINAL_ON) return;
   const ck = Math.floor(Date.now() / FINAL_PERIODO_MS);
@@ -2119,7 +2152,7 @@ async function checarAlertaFinal(
     // 🚨 em silêncio ainda protege quem tem posição do lado oposto; PREPARE é só antecipação e respeita o silêncio
     const protegidos = modo === "aviso" && SILENCIO_PROTECAO ? ALERT_CHAT_IDS.filter((ch) => silChat(ch) && posDe(ch, inst).some((p) => p.lado !== lado)) : [];
     // quem já está posicionado no lado do sinal não precisa do "ligue o robô"
-    const destinos = [...new Set([...ativos, ...protegidos])].filter((ch) => !posDe(ch, inst).some((p) => p.lado === lado));
+    let destinos = [...new Set([...ativos, ...protegidos])].filter((ch) => !posDe(ch, inst).some((p) => p.lado === lado));
     if (!destinos.length) continue;
     // V41: pendAntes/distAgora/vel precisam ser calculados ANTES da confiança pra o sinal 🚀🚀/🐢🐢 poder entrar no pontuar()
     const pendAntes = _finalPend.get(finalKey(inst, lado, ck));
@@ -2147,6 +2180,16 @@ async function checarAlertaFinal(
       if (modo === "aviso") _confBarrada.set(inst + lado, ck);
       console.log(`₿ final ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}%/h (limite -${BTC_BLOQ_REV_PCT}%)`);
       continue;
+    }
+    // V57: mercado lateral (BTC e ETH sem tendência): barra a entrada nova; o 🚨 só sai pra quem tem posição do lado oposto
+    if (lat?.bloq) {
+      const contra = modo === "aviso" ? destinos.filter((ch) => posDe(ch, inst).some((p) => p.lado !== lado)) : [];
+      if (!contra.length) {
+        latContar(lat, inst, lado);
+        console.log(`🧱 final ${inst} ${lado} (${modo}) barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
+        continue;
+      }
+      destinos = contra;
     }
     const tipoTxt = tipoTxtDe(s.tipo, s.lado);
     const ladoTxt = lado === "long" ? "LONG (compra)" : "SHORT (venda)";
@@ -2274,9 +2317,12 @@ async function runAlertaProativo() {
     return;
   }
   if (todosSil) console.log(`🌙 todos em silêncio/pausa: só alertas de proteção (${nPos} posição(ões) aberta(s))`);
+  const lat = await avaliarLateral(SB).catch((e) => { console.log("⚠️ filtro lateral falhou (segue liberado)", e); return lateralNovo(); });
   const variacoes = await getVariacoes24h();
-  const subiram = [...variacoes].sort((a, b) => b.pct - a.pct).slice(0, ALERT_POOL);
-  const cairam = [...variacoes].sort((a, b) => a.pct - b.pct).slice(0, ALERT_POOL);
+  // V56: com os filtros ligados, o volume mínimo entra ANTES do corte top-N (igual recuaram/repicaram), senão moeda ilíquida ocupa vaga e é descartada depois
+  const baseMov = ALERT_FILTROS_ON ? variacoes.filter((v) => v.volUsdt >= FILTRO_VOL_MIN_USDT) : variacoes;
+  const subiram = [...baseMov].sort((a, b) => b.pct - a.pct).slice(0, ALERT_POOL);
+  const cairam = [...baseMov].sort((a, b) => a.pct - b.pct).slice(0, ALERT_POOL);
   const recuaram = ALERT_POOL_RECUO > 0 ? [...variacoes].filter((v) => v.dd >= FUNDO_QUEDA_MIN && v.volUsdt >= FILTRO_VOL_MIN_USDT).sort((a, b) => b.dd - a.dd).slice(0, ALERT_POOL_RECUO) : [];
   const repicaram = TOPO_ON && ALERT_POOL_ALTA > 0 ? [...variacoes].filter((v) => v.up >= TOPO_ALTA_MIN && v.volUsdt >= FILTRO_VOL_MIN_USDT).sort((a, b) => b.up - a.up).slice(0, ALERT_POOL_ALTA) : [];
   const poolMap = new Map<string, { instId: string; pct: number; volUsdt: number; dd: number; up: number }>();
@@ -2312,6 +2358,7 @@ async function runAlertaProativo() {
   const agora = Date.now();
   let enviados = 0;
   let confBarrados = 0;
+  let barradosLat = 0;
   const vivoMemo = new Map<string, Promise<number | null>>();
   const getVivo = (i: string) => { if (!vivoMemo.has(i)) vivoMemo.set(i, precoAoVivo(i)); return vivoMemo.get(i)!; };
   for (const c of setups) {
@@ -2336,7 +2383,8 @@ async function runAlertaProativo() {
     || (c.fresco && !(row?.last_status || "").includes("🆕"));
     const escalouContra = contraPos && !(row?.last_status || "").includes("🛡️");
     if (!cooldownOk && !escalouBase && !escalouContra) continue;
-    const destinosBase = (cooldownOk || escalouBase) ? [...new Set([...ativos, ...protegidos])] : chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO);
+    // V57: com o filtro lateral ligado, só sai o aviso de proteção pra quem tem posição do lado oposto; entrada nova fica barrada mais abaixo
+    const destinosBase = lat.bloq ? chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO) : (cooldownOk || escalouBase) ? [...new Set([...ativos, ...protegidos])] : chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO);
     // Posição já no lado do sinal: "chegando na linha" não acrescenta nada pra quem já está posicionado (só ruído).
     const destinos = c.info.idadeCandles === null ? destinosBase.filter((ch) => !posDe(ch, inst).some((p) => p.lado === c.lado)) : destinosBase;
     if (!destinos.length) continue;
@@ -2374,6 +2422,11 @@ async function runAlertaProativo() {
     if (BTC_BLOQ_REV_PCT > 0 && c.tipo === "reversao" && c.lado === "long" && confRes?.btcVar != null && confRes.btcVar <= -BTC_BLOQ_REV_PCT) {
       barrarLoop();
       console.log(`₿ ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}% na última hora (limite -${BTC_BLOQ_REV_PCT}%)`);
+      continue;
+    }
+    if (lat.bloq && !contraPos) {
+      if (latContar(lat, inst, c.lado)) barradosLat++;
+      console.log(`🧱 ${inst} ${c.lado} barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
       continue;
     }
     const ligarTxt = c.aprox
@@ -2416,14 +2469,18 @@ async function runAlertaProativo() {
   // de topo/fundo/compressão, lista de acompanhamento e antecipações; se a rodada demorava ou era pulada pela trava do cron, o 🚨 não saía.
   // Agora roda logo depois do laço principal, antes de tudo isso.
   const lastMap = new Map(variacoes.map((v) => [v.instId, v.last] as [string, number]));
-  await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta).catch((e) => console.log("❌ erro alerta final", e));
-  console.log(`🏁 alerta proativo em ${((Date.now() - inicio) / 1000).toFixed(1)}s - ${setups.length} setups, ${enviados} alertas enviados, ${confBarrados} barrados por confiança`);
+  await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta, lat).catch((e) => console.log("❌ erro alerta final", e));
+  if (lat.sujo) await lateralSalvar(SB, lat).catch((e) => console.log("⚠️ erro salvando contador lateral", e));
+  console.log(`🏁 alerta proativo em ${((Date.now() - inicio) / 1000).toFixed(1)}s - ${setups.length} setups, ${enviados} alertas enviados, ${confBarrados} barrados por confiança${lat.bloq ? `, ${barradosLat} barrados por mercado lateral` : ""}`);
   await heartbeat(SB, `${((Date.now() - inicio) / 1000).toFixed(1)}s | setups ${setups.length} | enviados ${enviados}`);
   await avisarFonteDados(SB).catch((e) => console.log("⚠️ erro avisarFonteDados", e));
   await avisarBtcSemDados(SB).catch((e) => console.log("⚠️ erro avisarBtcSemDados", e));
-  if (TOPO_ON) await radarTopo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de topo", e));
-  if (FUNDO_ON) await radarFundo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de fundo", e));
-  if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
+  if (lat.bloq) console.log("🧱 radares de topo/fundo/compressão pausados: mercado lateral (BTC e ETH sem tendência)");
+  else {
+    if (TOPO_ON) await radarTopo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de topo", e));
+    if (FUNDO_ON) await radarFundo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de fundo", e));
+    if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
+  }
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   await checarListaAcompanhamento(SB, poolInfoMap, posMap);
@@ -2438,7 +2495,7 @@ const X_TZ_OFFSET_H = numEnv("TZ_OFFSET_H", "-3");
 const X_JANELA_FORTE = 1.15;
 const X_JANELA_FRACA = 0.85;
 const X_ADX_FORTE = 25;
-const X_ADX_FRACO = 18;
+const X_ADX_FRACO = FILTRO_ADX_MIN; // V56: era 18 fixo; agora segue FILTRO_ADX_MIN (mesma env)
 const X_MOEDAS_MERCADO = ["BTC-USDT", "ETH-USDT", "SOL-USDT"];
 type XVelas = { t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[] };
 function xMediana(a: number[]) {
@@ -2590,7 +2647,7 @@ function chegadaEmJanelaForte(ap: Aprox | null | undefined, perfil: XPerfil | nu
   const h = new Date(chegada + X_TZ_OFFSET_H * 3600000).getUTCHours();
   return perfil.idx[h] >= X_JANELA_FORTE;
 }
-type XRegime = { instId: string; adx: number; adxAntes: number; preco: number; distAbs: number; regiao: string };
+type XRegime = { instId: string; adx: number; adxAntes: number; preco: number; distAbs: number; regiao: string; er: number | null; amp: number | null };
 let _btcReg: { t: number; v: XRegime | null } | null = null;
 async function xRegimeCache(): Promise<XRegime | null> {
   if (_btcReg && Date.now() - _btcReg.t < 4 * 60000) return _btcReg.v;
@@ -2617,7 +2674,119 @@ async function xRegime(instId: string): Promise<XRegime | null> {
   const adx = xAdxSerie(d.h, d.l, d.c, 14);
   if (adx.length < 6) return null;
   const dist = xDistancia(d.c[i], topo, fundo);
-  return { instId, adx: adx[adx.length - 1], adxAntes: adx[adx.length - 5], preco: d.c[i], distAbs: dist.distAbs, regiao: dist.regiao };
+  // V57: ER (Efficiency Ratio) e caixa (amplitude em ATRs) das últimas LATERAL_JAN velas fechadas — usados pelo filtro de mercado lateral
+  let er: number | null = null, amp: number | null = null;
+  const n = d.c.length, N = LATERAL_JAN;
+  if (n > N + 1) {
+    let caminho = 0;
+    for (let k = n - N; k < n; k++) caminho += Math.abs(d.c[k] - d.c[k - 1]);
+    er = caminho > 0 ? Math.abs(d.c[n - 1] - d.c[n - 1 - N]) / caminho : 0;
+    const atrR = calcATR(d.h, d.l, d.c, 14);
+    amp = atrR > 0 ? (Math.max(...d.h.slice(n - N)) - Math.min(...d.l.slice(n - N))) / atrR : null;
+  }
+  return { instId, adx: adx[adx.length - 1], adxAntes: adx[adx.length - 5], preco: d.c[i], distAbs: dist.distAbs, regiao: dist.regiao, er, amp };
+}
+// ─── V57: FILTRO DE MERCADO LATERAL (BTC + ETH, 3 indicadores, duas faixas) ──────────────────────────
+// Cada ativo (BTC e ETH, velas 15m fechadas) vota com 3 indicadores: ADX, ER (Efficiency Ratio) e caixa (amplitude de LATERAL_JAN velas em ATRs).
+//  • BLOQUEIA quando os DOIS ativos têm >= LATERAL_VOTOS de 3 sinais de lateral (ADX < BLOQ · ER < BLOQ · caixa < BLOQ)
+//  • LIBERA quando UM ativo tem >= LATERAL_VOTOS de 3 sinais de tendência (ADX >= LIBERA · ER >= LIBERA · caixa >= LIBERA)
+//  • entre as duas faixas mantém o estado anterior (histerese), então o filtro não pisca em cima do limite.
+// O estado fica no Supabase (linha _LATERAL_) porque cada rodada do cron é uma execução nova. Sem dado de BTC/ETH: mantém o estado por até
+// 30 min e depois libera (nunca fica travado por falha de fonte). Só barra ENTRADA (alerta do loop principal, 🚨/PREPARE dos minutos finais e
+// radares); aviso de posição aberta do lado oposto, risco, proteção de lucro, painel e comandos manuais (/agora, /analise...) seguem normais.
+const LATERAL_ROW = "_LATERAL_";
+type LatInd = { adx: number | null; er: number | null; amp: number | null };
+type LateralEst = {
+  bloq: boolean; desde: number; flip: number; btc: number | null; eth: number | null; upd: number; dadoT: number; // btc/eth = ADX
+  btcEr: number | null; btcAmp: number | null; ethEr: number | null; ethAmp: number | null;
+  cont: Record<string, { n: number; ms: number }>; // por ciclo do painel (chave = início do ciclo em ms): sinais barrados e tempo bloqueado
+  hk: string[]; hora: number; // chaves moeda|lado já contadas na hora atual (conta 1x por hora, não a cada rodada de 2 min)
+  sujo?: boolean;
+};
+const lateralNovo = (): LateralEst => ({ bloq: false, desde: Date.now(), flip: 0, btc: null, eth: null, upd: Date.now(), dadoT: 0, btcEr: null, btcAmp: null, ethEr: null, ethAmp: null, cont: {}, hk: [], hora: 0 });
+const fmtAdx = (x: number | null) => (x === null ? "?" : x.toFixed(1));
+const latCiclo = (est: LateralEst, inicio = painelFase().inicio) => (est.cont[String(inicio)] ??= { n: 0, ms: 0 });
+const votosLat = (x: LatInd) => Number(x.adx !== null && x.adx < LATERAL_ADX_BLOQ) + Number(x.er !== null && x.er < LATERAL_ER_BLOQ) + Number(x.amp !== null && x.amp < LATERAL_AMP_BLOQ);
+const votosTend = (x: LatInd) => Number(x.adx !== null && x.adx >= LATERAL_ADX_LIBERA) + Number(x.er !== null && x.er >= LATERAL_ER_LIBERA) + Number(x.amp !== null && x.amp >= LATERAL_AMP_LIBERA);
+const indBtc = (e: LateralEst): LatInd => ({ adx: e.btc, er: e.btcEr, amp: e.btcAmp });
+const indEth = (e: LateralEst): LatInd => ({ adx: e.eth, er: e.ethEr, amp: e.ethAmp });
+const indTxt = (x: LatInd) => `ADX ${fmtAdx(x.adx)} · ER ${x.er === null ? "?" : x.er.toFixed(2)} · caixa ${x.amp === null ? "?" : x.amp.toFixed(1)}×ATR`;
+async function lateralLer(SB: any): Promise<LateralEst | null> {
+  try {
+    const { data } = await SB.from(TAB).select("last_status").eq("instid", LATERAL_ROW).maybeSingle();
+    const j = data?.last_status ? JSON.parse(data.last_status) : null;
+    if (!j || typeof j.bloq !== "boolean") return null;
+    return { ...lateralNovo(), ...j, cont: j.cont && typeof j.cont === "object" ? j.cont : {}, hk: Array.isArray(j.hk) ? j.hk.map(String) : [], sujo: false };
+  } catch { return null; }
+}
+async function lateralSalvar(SB: any, est: LateralEst) {
+  const { sujo: _s, ...limpo } = est;
+  const chaves = Object.keys(limpo.cont).sort();
+  for (const k of chaves.slice(0, Math.max(0, chaves.length - 2))) delete limpo.cont[k]; // guarda só o ciclo atual e o anterior
+  await upsertLinha(SB, LATERAL_ROW, { last_status: JSON.stringify(limpo), last_alert_at: new Date(est.upd).toISOString() });
+  est.sujo = false;
+}
+async function avaliarLateral(SB: any): Promise<LateralEst> {
+  const est = (await lateralLer(SB)) ?? lateralNovo();
+  if (!LATERAL_ON) { est.bloq = false; return est; }
+  const agora = Date.now();
+  if (est.bloq) latCiclo(est).ms += Math.min(Math.max(agora - est.upd, 0), 6 * 60000); // passo limitado: cron parado não conta o buraco
+  const [b, e] = await Promise.all([xRegimeCache().catch(() => null), xRegimeCacheEth().catch(() => null)]);
+  const ib: LatInd | null = b ? { adx: b.adx, er: b.er, amp: b.amp } : null;
+  const ie: LatInd | null = e ? { adx: e.adx, er: e.er, amp: e.amp } : null;
+  const inds = [ib, ie].filter((x): x is LatInd => x !== null);
+  const antes = est.bloq;
+  if (inds.length) est.dadoT = agora;
+  if (!est.bloq && ib && ie && votosLat(ib) >= LATERAL_VOTOS && votosLat(ie) >= LATERAL_VOTOS) est.bloq = true;
+  else if (est.bloq && inds.some((x) => votosTend(x) >= LATERAL_VOTOS)) est.bloq = false;
+  else if (est.bloq && !inds.length && agora - est.dadoT > 30 * 60000) est.bloq = false; // sem dado há 30 min: solta
+  if (est.bloq !== antes) { est.desde = agora; est.flip = agora; }
+  est.btc = ib?.adx ?? null; est.btcEr = ib?.er ?? null; est.btcAmp = ib?.amp ?? null;
+  est.eth = ie?.adx ?? null; est.ethEr = ie?.er ?? null; est.ethAmp = ie?.amp ?? null;
+  est.upd = agora;
+  const c = latCiclo(est);
+  console.log(`🧱 lateral: BTC ${ib ? `${indTxt(ib)} (${votosLat(ib)}/3 lateral, ${votosTend(ib)}/3 tendência)` : "sem dado"} | ETH ${ie ? `${indTxt(ie)} (${votosLat(ie)}/3 lateral, ${votosTend(ie)}/3 tendência)` : "sem dado"} → ${est.bloq ? "BLOQUEANDO" : "liberado"}${est.bloq !== antes ? " (mudou agora)" : ""} | votos ${LATERAL_VOTOS}/3 | ciclo: ${c.n} barrado(s)`);
+  await lateralSalvar(SB, est);
+  return est;
+}
+// conta 1 sinal barrado (1x por moeda|lado por hora). Devolve true se contou agora.
+function latContar(est: LateralEst, inst: string, lado: string): boolean {
+  const hora = Math.floor(Date.now() / 3600000);
+  if (est.hora !== hora) { est.hora = hora; est.hk = []; }
+  const k = `${inst}|${lado}`;
+  if (est.hk.includes(k)) return false;
+  est.hk.push(k);
+  latCiclo(est).n++;
+  est.sujo = true;
+  return true;
+}
+const latDur = (ms: number) => { const m = Math.round(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}` : `${m} min`; };
+const latRegras = () => `ADX &lt; ${LATERAL_ADX_BLOQ} · ER &lt; ${LATERAL_ER_BLOQ} · caixa ${LATERAL_JAN / 4}h &lt; ${LATERAL_AMP_BLOQ}×ATR`; // &lt; porque a mensagem vai em HTML do Telegram
+const latRegrasTend = () => `ADX ≥ ${LATERAL_ADX_LIBERA} · ER ≥ ${LATERAL_ER_LIBERA} · caixa ≥ ${LATERAL_AMP_LIBERA}×ATR`;
+// bloco do PAINEL DO DIA (inicio = início do ciclo do painel, pra o "FIM DO RESUMO" mostrar o placar do ciclo que acabou)
+function lateralTxt(est: LateralEst | null, inicio: number): string {
+  const titulo = "🧱 <b>Filtro de mercado lateral</b>";
+  if (!LATERAL_ON) return `${titulo}: desligado\n\n`;
+  if (!est) return `${titulo}: <i>aguardando a primeira leitura do cron</i>\n\n`;
+  const velho = Date.now() - est.upd > 15 * 60000 ? ` <i>(leitura das ${horaLocal(est.upd)})</i>` : "";
+  const c = est.cont[String(inicio)];
+  const placar = c && (c.n > 0 || c.ms >= 60000) ? `📊 Neste ciclo: ${c.n} sinal(is) de entrada barrado(s) · ${latDur(c.ms)} com o filtro ligado\n` : `📊 Neste ciclo: nenhum sinal barrado até agora\n`;
+  const b = indBtc(est), e = indEth(est);
+  const vb = est.bloq ? `${votosTend(b)}/3 tendência` : `${votosLat(b)}/3 lateral`;
+  const ve = est.bloq ? `${votosTend(e)}/3 tendência` : `${votosLat(e)}/3 lateral`;
+  const linhas = `BTC: ${indTxt(b)} → ${vb}\nETH: ${indTxt(e)} → ${ve}\n`;
+  return est.bloq
+    ? `${titulo}: 🛑 <b>BLOQUEANDO alertas de entrada</b> desde ${horaLocal(est.desde)}\n${linhas}Libera quando um dos dois tiver ${LATERAL_VOTOS} de 3 sinais de tendência (${latRegrasTend()})${velho}\n${placar}\n`
+    : `${titulo}: ✅ liberado\n${linhas}Bloqueia quando os dois tiverem ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()})${velho}\n${placar}\n`;
+}
+function lateralStatusTxt(est: LateralEst | null): string {
+  if (!LATERAL_ON) return "🧱 Filtro lateral: desligado\n";
+  if (!est) return "🧱 Filtro lateral: ainda sem leitura do cron\n";
+  const c = est.cont[String(painelFase().inicio)];
+  const barr = c && c.n > 0 ? ` · ${c.n} barrado(s) no ciclo` : "";
+  const velho = Date.now() - est.upd > 15 * 60000 ? ` · leitura das ${horaLocal(est.upd)}` : "";
+  const cab = est.bloq ? `🧱 Filtro lateral: 🛑 bloqueando desde ${horaLocal(est.desde)}` : `🧱 Filtro lateral: ✅ liberado`;
+  return `${cab}${barr}${velho}\n   BTC ${indTxt(indBtc(est))}\n   ETH ${indTxt(indEth(est))}\n`;
 }
 async function runLista(chatId: number | string) {
   const SB = getSupabase();
@@ -2947,10 +3116,10 @@ function viraQuandoTxt(ladoPos: "long" | "short", info: IndicadorInfo, preco: nu
 function pausarTxt(adx: number, trocas: number, btcAdx: number | null): string {
   const agora: string[] = [];
   if (adx < FILTRO_ADX_MIN) agora.push(`ADX ${adx.toFixed(0)} abaixo do mínimo`);
-  if (trocas >= 4) agora.push(`vai e vem (${trocas} trocas em 4h)`);
+  if (trocas >= SERROTE_AVISO) agora.push(`vai e vem (${trocas} trocas em 4h)`);
   if (btcAdx !== null && btcAdx < X_ADX_FRACO) agora.push(`BTC lateral (ADX ${btcAdx.toFixed(0)})`);
   let t = `\n⏸ <b>Considere desligar o robô se o mercado ficar lateral</b> <i>(a virada falha mais)</i>\n`;
-  t += `• ADX &lt; ${FILTRO_ADX_MIN} · vai e vem (4+ trocas de lado em 4h) · BTC lateral (ADX &lt; ${X_ADX_FRACO})\n`;
+  t += `• ADX &lt; ${FILTRO_ADX_MIN} · vai e vem (${SERROTE_AVISO}+ trocas em 4h, contando entrar/sair da faixa) · BTC lateral (ADX &lt; ${X_ADX_FRACO})\n`;
   if (agora.length) t += `⚠️ já acontece agora: ${agora.join(" · ")}\n`;
   return t;
 }
@@ -3587,7 +3756,7 @@ function pontuar(x: CtxPontos) {
     else if (-contra >= INCLINA_MOD) add(1, `inclinação da faixa ${inclinaTxt(info)}: ${ladoTxt} a favor da inclinação`);
   }
   if (info.distAbs > FILTRO_DIST_MAX_PCT) add(-2, `${info.distAbs.toFixed(2)}% longe da faixa`);
-  if (trocas >= 4) add(-1, `vai e vem: ${trocas} trocas de posição em 4h`);
+  if (trocas >= SERROTE_AVISO) add(-1, `vai e vem: ${trocas} trocas de posição em 4h`);
   if (btcAdx !== null && btcAdx < X_ADX_FRACO) add(-1, `BTC lateral (ADX ${btcAdx.toFixed(1)})`);
   // V41: ETH como segunda referência de mercado — só reforça (não duplica) quando o BTC já não pegou o mesmo alerta
   else if (x.ethAdx != null && x.ethAdx < X_ADX_FRACO) add(-1, `ETH também lateral (ADX ${x.ethAdx.toFixed(1)})`);
@@ -4514,14 +4683,14 @@ async function painelJanelas(): Promise<string> {
   return `🔥 <b>Janelas fortes</b> (${perfil.tipo}, UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}): ${js.length ? js.map((j) => `${xHH(j.ini)}–${xHH(j.fim)}`).join(" · ") : "nenhuma bem definida"}\n\n`;
 }
 async function montarPainel(SB: any, chat: string | number, est: Pick<PainelEstado, "base" | "base8" | "inicio">, snap: PainelSnap | null, fim: boolean): Promise<string> {
-  const [janelas, agenda, placarBruto, pos] = await Promise.all([painelJanelas().catch(() => ""), agBlocoProximas(SB), fim ? montarResumoNoite(SB, chat, est.inicio) : Promise.resolve(""), agPosicoes(chat)]); // placar (alertas + resultado real) só no fechamento das 21h
+  const [janelas, agenda, placarBruto, pos, lat] = await Promise.all([painelJanelas().catch(() => ""), agBlocoProximas(SB), fim ? montarResumoNoite(SB, chat, est.inicio) : Promise.resolve(""), agPosicoes(chat), lateralLer(SB)]); // placar (alertas + resultado real) só no fechamento das 21h
   const linhaPos = pos === null ? "" : pos.lista.length ? `💼 <b>Posições abertas (${pos.lista.length})</b>: ${pos.lista.join(" · ")}\nTotal agora: ${pos.total >= 0 ? "➕" : "➖"}${Math.abs(pos.total).toFixed(2)} USDT\n\n` : `💼 Sem posição aberta.\n\n`;
   const placar = placarBruto
     ? "\n" + placarBruto.replace(/^[^\n]*\n[^\n]*\n\n?/, "") // tira o cabeçalho antigo ("BOA NOITE…" + divisor)
     : `\n<i>📊 O placar do dia (alertas e seu resultado real) chega no fechamento, às ${xHH(RESUMO_NOITE_H)}.</i>`;
   const titulo = fim ? "🏁 <b>FIM DO RESUMO DO DIA</b>" : "🌎 <b>PAINEL DO DIA</b>";
   const carimbo = fim ? `🔒 encerrado às ${horaLocal(Date.now())} · não atualiza mais` : `🕒 atualizado às ${horaLocal(Date.now())} · a cada ${PAINEL_MIN} min · ciclo desde ${horaLocal(est.inicio)}`;
-  return cortar(`${titulo}\n${carimbo}\n${DIVISOR}\n\n${painelBtcBloco(snap, est)}${linhaPos}${janelas}${agenda}${placar}`);
+  return cortar(`${titulo}\n${carimbo}\n${DIVISOR}\n\n${painelBtcBloco(snap, est)}${lateralTxt(lat, est.inicio)}${linhaPos}${janelas}${agenda}${placar}`);
 }
 
 // ── estado e envio ──
@@ -4581,7 +4750,9 @@ async function checarPainel(SB: any) {
     return;
   }
   // 3) painel do ciclo já existe: atualiza de hora em hora
-  if (Date.now() - est.upd >= (PAINEL_MIN - 2) * 60000) {
+  const latPn = LATERAL_ON ? await lateralLer(SB) : null;
+  const mudouLateral = !!latPn && latPn.flip > est.upd; // V57: filtro ligou/desligou desde a última edição → edita já (edição não notifica)
+  if (mudouLateral || Date.now() - est.upd >= (PAINEL_MIN - 2) * 60000) {
     await painelAtualizar(SB, est, false);
     await painelSalvar(SB, est);
     console.log(`🔄 painel ${est.key} atualizado`);
@@ -5250,6 +5421,7 @@ async function runStatus(chatId: number | string) {
   let fonte = "";
   let nSeg = 0;
   let nDel = 0;
+  let lateral = "";
   if (SB) {
     const { data: r } = await SB.from(TAB).select("last_status, last_alert_at").eq("instid", "_CRON_").maybeSingle();
     if (r?.last_alert_at) {
@@ -5259,6 +5431,7 @@ async function runStatus(chatId: number | string) {
     const { data: p } = await SB.from(TAB).select("last_status").eq("instid", `_PAUSA_${chatId}`).maybeSingle();
     const ate = Number(p?.last_status);
     if (ate > Date.now()) pausa = `⏸ Alertas pausados até ${horaLocal(ate)}\n`;
+    lateral = lateralStatusTxt(await lateralLer(SB));
     nSeg = (await listarSeguidas(SB, chatId)).length;
     const { count: nDelCount } = await SB.from(TAB).select("instid", { count: "exact", head: true }).like("instid", `${AUTOAPAGAR_PREFIXO}%`);
     nDel = nDelCount ?? 0;
@@ -5269,7 +5442,7 @@ async function runStatus(chatId: number | string) {
       else if (fj.e === "ok") fonte = `📡 ✅ Dados de mercado vindo da BloFin\n`;
     } catch { }
   }
-  const msg = `🩺 <b>STATUS</b>\n${DIVISOR}\n\n${testes.join("\n")}\n${cron}\n${fonte}\n` +
+  const msg = `🩺 <b>STATUS</b>\n${DIVISOR}\n\n${testes.join("\n")}\n${cron}\n${fonte}${lateral}\n` +
     pausa + (emSilencio() ? `🌙 Silêncio automático agora (${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h)\n` : "") +
     `⭐ Seguidas: ${nSeg}/${SEG_MAX}\n` +
     (ALERTA_AUTOAPAGAR_MIN > 0 ? `🗑️ Auto-apagar: ${nDel} alerta(s) na fila (some${nDel ? "m" : ""} em até ${ALERTA_AUTOAPAGAR_MIN} min)\n` : "") +
@@ -5465,7 +5638,8 @@ function montarConfig(): string {
   m += `🟢 <b>V28/V34 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% (em 24h ou desde a máxima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_RECUO} moedas que mais recuaram · toque na faixa após recuo ≥ ${FUNDO_TOQUE_PICO_MIN}% pontua · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n\n`;
   m += `🧭 <b>V26</b>\n• squeeze: faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica · volume das velas ≥ ${VOL_ACEL_RATIO}× (seco ≤ ${VOL_SECO_RATIO}×)\n• alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou passar de 2× o prazo\n• confiança: verde ≥ ${CONF_VERDE}/10 · amarelo ≥ ${CONF_AMARELO}/10\n• modo pump (${on(ESTRAT_PUMP)}): mín. confiança oportunidade ${CONF_MIN_OPORT} · reversão ${CONF_MIN_REVERSAO} · serrote ≥ ${SERROTE_MAX} trocas/4h barra · RSI máx LONG ${FILTRO_RSI_MAX_LONG} · limite ${LIMITE_LADO} por lado\n`;
   m += `\n${MINI_DIVISOR}\n`;
-  m += `🧹 <b>Filtros</b> (${on(ALERT_FILTROS_ON)})\n• volume ≥ ${(FILTRO_VOL_MIN_USDT / 1000).toFixed(0)}k USDT · ADX ≥ ${FILTRO_ADX_MIN}\n• RSI entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX} · distância ≤ ${FILTRO_DIST_MAX_PCT}%\n• amplitude mín. ${FILTRO_AMPLITUDE_MIN > 0 ? `${FILTRO_AMPLITUDE_MIN}%` : "desligada"}\n• 🚫 lista negra (${BLACKLIST_MOEDAS.size}): ${BLACKLIST_MOEDAS.size ? [...BLACKLIST_MOEDAS].sort().join(", ") : "nenhuma"}\n\n`;
+  m += `🧹 <b>Filtros</b> (${on(ALERT_FILTROS_ON)})\n• volume ≥ ${(FILTRO_VOL_MIN_USDT / 1e6).toFixed(1)}M USDT (antes do corte do pool) · ADX ≥ ${FILTRO_ADX_MIN}\n• ${ESTRAT_PUMP ? `RSI (modo pump, um lado só): LONG barrado acima de ${FILTRO_RSI_MAX_LONG} · SHORT barrado abaixo de ${FILTRO_RSI_MIN}` : `RSI entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX}`} · distância ≤ ${FILTRO_DIST_MAX_PCT}% (só nas listas)\n• amplitude mín. ${FILTRO_AMPLITUDE_MIN > 0 ? `${FILTRO_AMPLITUDE_MIN}%` : "desligada"}\n• 🚫 lista negra (${BLACKLIST_MOEDAS.size}): ${BLACKLIST_MOEDAS.size ? [...BLACKLIST_MOEDAS].sort().join(", ") : "nenhuma"}\n\n`;
+  m += `🧱 <b>V57 · filtro de mercado lateral</b> (${on(LATERAL_ON)})\n• BTC e ETH votam com 3 indicadores 15m: ADX · ER (Efficiency Ratio) · caixa (amplitude de ${LATERAL_JAN / 4}h em ATRs)\n• bloqueia alertas de ENTRADA quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) · libera quando um deles tem ${LATERAL_VOTOS} de 3 de tendência (${latRegrasTend()}) · no meio mantém o estado\n• alertas de posição aberta seguem normais · env: LATERAL_ADX_BLOQ/LIBERA, LATERAL_ER_BLOQ/LIBERA, LATERAL_AMP_BLOQ/LIBERA, LATERAL_JAN, LATERAL_VOTOS, LATERAL_BLOQ=0 desliga\n\n`;
   m += `🎯 <b>Stop / alvo / trailing</b>\n• stop: faixa + ${STOP_ATR_MULT}×ATR · alvo RR ${ALVO_RR}:1\n• stop de reserva: ${STOP_ATR_RESERVA}×ATR\n• trailing (${on(PROT_LUCRO_ON)}): degrau de ${TRAIL_ATR_MULT}×ATR\n• RSI esticado: ≥ ${ESTICADO_RSI} (long) · ≤ ${100 - ESTICADO_RSI} (short)\n\n`;
   m += `🚨 <b>Risco</b> (${on(RISCO_ON)}): liquidação < ${RISCO_LIQ_PCT}% (crítico ${RISCO_LIQ_CRITICO_PCT}%) · prejuízo ≥ ${RISCO_PERDA_PCT}% (crítico ${RISCO_PERDA_CRITICA_PCT}%) · reenvio ${RISCO_COOLDOWN_MIN} min\n`;
   m += `\n${MINI_DIVISOR}\n`;
