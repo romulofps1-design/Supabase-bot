@@ -4474,7 +4474,12 @@ async function painelAtualizar(SB: any, est: PainelEstado, fim: boolean): Promis
     if (id) {
       const ok = await editarTelegram(ch, id, await montarPainel(SB, ch, est, snap, fim));
       if (fim) { if (PAINEL_PIN) tgPost("unpinChatMessage", { chat_id: ch, message_id: id }).catch(() => {}); continue; }
-      if (!ok && !silChat(ch)) { delete est.ids[ch]; await painelEnviarNovo(SB, ch, est, snap); } // apagaram o painel: recria
+      if (!ok && !silChat(ch)) { // edição falhou: apaga o painel velho (se ainda existir) ANTES de recriar, pra não ficar mensagem sobrando
+        console.log(`⚠️ painel: edição falhou em ${ch}, recriando (apagando o anterior)`);
+        await apagarMsg(ch, id);
+        delete est.ids[ch];
+        await painelEnviarNovo(SB, ch, est, snap);
+      }
     } else if (!fim && !silChat(ch)) await painelEnviarNovo(SB, ch, est, snap);
   }
   est.upd = Date.now();
