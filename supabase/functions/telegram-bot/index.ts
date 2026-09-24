@@ -4671,7 +4671,7 @@ function painelBtcBloco(s: PainelSnap | null, est: Pick<PainelEstado, "base" | "
   const T = PAINEL_BTC_PCT, p1 = s.p1 ?? 0, p4 = s.p4 ?? 0;
   const dir = p1 >= T && p4 > -T ? "🟢⬆️ subindo" : p1 <= -T && p4 < T ? "🔴⬇️ caindo" : "⚪➡️ lateral";
   let t = `₿ <b>Bitcoin</b> ${pUsd(s.btc)} — ${dir}\n1h ${pSgn(s.p1)} · 4h ${pSgn(s.p4)} · 24h ${pSgn(s.p24)}\n`;
-  if (s.adx !== null) t += `Tendência: ${s.adx >= X_ADX_FORTE ? "forte" : s.adx >= X_ADX_FRACO ? "moderada" : "lateral"} (ADX ${s.adx.toFixed(0)})\n`;
+  if (!LATERAL_ON && s.adx !== null) t += `Tendência: ${s.adx >= X_ADX_FORTE ? "forte" : s.adx >= X_ADX_FRACO ? "moderada" : "lateral"} (ADX ${s.adx.toFixed(0)})\n`;
   const d1 = painelDesde(s, est.base), d8 = painelDesde(s, est.base8);
   t += d1 || d8 ? d1 + d8 : `📈 <i>Foto inicial das ${horaLocal(est.base.t)} — a comparação aparece na próxima atualização.</i>\n`;
   return t + "\n";
