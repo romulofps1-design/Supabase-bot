@@ -4948,7 +4948,9 @@ async function avisarBtcSemDados(SB: any) {
   }
   if (n !== (prev.n ?? 0) || av !== eraAv) await upsertLinha(SB, "_BTC_", { last_status: JSON.stringify({ n, av }) });
 }
-const FONTE_FALLBACK_PCT = numEnv("FONTE_FALLBACK_PCT", "30");
+const FONTE_FALLBACK_PCT = numEnv("FONTE_FALLBACK_PCT", "40");
+// Histerese: o aviso liga em FONTE_FALLBACK_PCT e só desliga abaixo de FONTE_NORMALIZA_PCT (evita o par "modo reserva"/"normalizado" repetido quando a taxa fica rondando o limite).
+const FONTE_NORMALIZA_PCT = Math.min(numEnv("FONTE_NORMALIZA_PCT", "25"), FONTE_FALLBACK_PCT);
 const FONTE_MIN_CHAMADAS = 10;
 const FONTE_AUTOAPAGAR_MIN = numEnv("FONTE_AUTOAPAGAR_MIN", "2");
 async function avisarFonteDados(SB: any) {
@@ -4958,7 +4960,6 @@ async function avisarFonteDados(SB: any) {
   const total = blofin + fb + falhas;
   if (total < FONTE_MIN_CHAMADAS) return;
   const pctRuim = ((fb + falhas) / total) * 100;
-  const degradado = pctRuim >= FONTE_FALLBACK_PCT;
   const nomes = alt.sort((a, b) => b[1] - a[1]).map(([k]) => k).join("/") || "outra fonte";
   let prev: { e?: string; t?: number } = {};
   try {
@@ -4966,6 +4967,7 @@ async function avisarFonteDados(SB: any) {
     prev = JSON.parse(data?.last_status || "{}") || {};
   } catch { prev = {}; }
   const estavaDeg = prev.e === "deg";
+  const degradado = estavaDeg ? pctRuim >= FONTE_NORMALIZA_PCT : pctRuim >= FONTE_FALLBACK_PCT;
   const transicao = degradado !== estavaDeg;
   const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
   if (transicao && !ativos.length) return;
@@ -5424,7 +5426,7 @@ function montarConfig(): string {
   m += `🌙 <b>Silêncio</b> (${on(SILENCIO_ON)}): ${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h, proteção ${on(SILENCIO_PROTECAO)} · fuso ${tz}\n`;
   m += `🗓️ <b>Resumos</b> (${on(RESUMO_ON)}): manhã ${RESUMO_MANHA_H}h · noite ${RESUMO_NOITE_H}h\n`;
   m += `⭐ seguidas: ${SEG_MAX} por pessoa\n`;
-  m += `📡 Fallback de dados avisa a partir de ${FONTE_FALLBACK_PCT}% das consultas\n`;
+  m += `📡 Fallback de dados avisa a partir de ${FONTE_FALLBACK_PCT}% das consultas e normaliza abaixo de ${FONTE_NORMALIZA_PCT}%\n`;
   m += `⏱ Cron: aviso se parar > ${CRON_AVISO_MIN} min (/status alerta > ${CRON_ALERTA_MIN} min) · trava contra sobreposição ${(CRON_LOCK_TIMEOUT_MS / 1000).toFixed(0)}s\n`;
   m += `🎯 Antecipação: auto-calibração ${on(AUTO_CALIB_ON)} a cada ${AUTO_CALIB_INTERVALO_H}h (janela ${AUTO_CALIB_DIAS}d, mín. ${ANTEC_CALIB_MIN} amostras) · confiabilidade por moeda: mín. ${CONFIAB_MIN_AMOSTRA} em até ${CONFIAB_JANELA_N} últimas previsões\n`;
   m += `\n${MINI_DIVISOR}\n`;
