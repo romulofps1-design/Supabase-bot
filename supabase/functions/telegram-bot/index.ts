@@ -111,6 +111,10 @@ const LIMITE_LADO = numEnv("LIMITE_LADO", "3");
 const CONF_MIN_OPORT = numEnv("CONF_MIN_OPORT", "6");
 const CONF_MIN_REVERSAO = numEnv("CONF_MIN_REVERSAO", "7");
 const _confBarrada = new Map<string, number>();
+// Fix: o laço principal também barra por confiança setups que AINDA NÃO CRUZARAM a linha (idadeCandles === null). Antes usava o mesmo
+// _confBarrada do alerta dos minutos finais, então uma nota baixa no início da vela bloqueava o 🚨 e o aviso final pela vela inteira.
+// Agora esses barrados ficam num mapa separado, que só o laço principal consulta.
+const _confBarradaPre = new Map<string, number>();
 const FUNDO_ON = (Deno.env.get("FUNDO_RADAR") || "1") !== "0";
 const FUNDO_QUEDA_MIN = numEnv("FUNDO_QUEDA_MIN", "10");
 const FUNDO_JAN_PICO = numEnv("FUNDO_JAN_PICO", "96");
@@ -124,6 +128,12 @@ const TOPO_CONF_MIN = numEnv("TOPO_CONF_MIN", "5");
 const TOPO_PRE_MIN = numEnv("TOPO_PRE_MIN", "5");
 // V54: idem FUNDO_TOQUE_PICO_MIN — o padrão acompanha TOPO_ALTA_MIN (altaDoVale nos dois lados).
 const TOPO_TOQUE_VALE_MIN = numEnv("TOPO_TOQUE_VALE_MIN", String(TOPO_ALTA_MIN));
+// Fix do repique: o repique só vale quando existe o movimento ANTERIOR (SHORT: queda antes do vale; LONG: alta antes do topo) e o preço chegou
+// na faixa pelo lado certo (SHORT: vindo de baixo; LONG: vindo de cima). Antes só se media a alta desde a mínima de 24h (SHORT) ou a queda desde a
+// máxima (LONG), e o "tocou a faixa" era trivialmente verdadeiro pra moeda vindo do lado oposto: uma moeda que disparou e voltava pra faixa
+// por cima era marcada como ⭐ REPIQUE SHORT ("despencou e repicou"), o contrário do que ela fazia (o caso certo era REPIQUE LONG).
+const REPIQUE_MOV_ANTES_MIN = numEnv("REPIQUE_MOV_ANTES_MIN", String(Math.min(FUNDO_QUEDA_MIN, TOPO_ALTA_MIN)));
+const REPIQUE_LADO_ATR = numEnv("REPIQUE_LADO_ATR", "1");
 const TOPO_COOLDOWN_MIN = numEnv("TOPO_COOLDOWN_MIN", "240");
 const TOPO_MAX_POR_RODADA = numEnv("TOPO_MAX_POR_RODADA", "2");
 const ALERT_POOL_ALTA = numEnv("ALERT_POOL_ALTA", "15");
@@ -720,6 +730,30 @@ function ddDoPico(h: number[], preco: number, jan: number = FUNDO_JAN_PICO): num
   for (let i = h.length - n; i < h.length; i++) if (h[i] > pico) pico = h[i];
   return pico > preco ? ((pico - preco) / pico) * 100 : 0;
 }
+// Movimento ANTERIOR ao repique. SHORT: queda do pico até o vale (só conta o pico que veio ANTES do vale de 24h).
+function quedaAntesDoVale(h: number[], l: number[], jan: number = FUNDO_JAN_PICO): number {
+  const n = Math.min(l.length, jan);
+  if (n < 2) return 0;
+  const ini = l.length - n;
+  let iv = -1, vale = Infinity;
+  for (let i = ini; i < l.length; i++) if (l[i] > 0 && l[i] < vale) { vale = l[i]; iv = i; }
+  if (iv <= ini) return 0;
+  let pico = 0;
+  for (let i = ini; i < iv; i++) if (h[i] > pico) pico = h[i];
+  return pico > vale ? ((pico - vale) / pico) * 100 : 0;
+}
+// LONG (espelho): alta do fundo até o topo, só contando o fundo que veio ANTES do topo de 24h.
+function altaAntesDoTopo(h: number[], l: number[], jan: number = FUNDO_JAN_PICO): number {
+  const n = Math.min(h.length, jan);
+  if (n < 2) return 0;
+  const ini = h.length - n;
+  let it = -1, topo = 0;
+  for (let i = ini; i < h.length; i++) if (h[i] > topo) { topo = h[i]; it = i; }
+  if (it <= ini) return 0;
+  let fundo = Infinity;
+  for (let i = ini; i < it; i++) if (l[i] > 0 && l[i] < fundo) fundo = l[i];
+  return isFinite(fundo) && topo > fundo ? ((topo - fundo) / fundo) * 100 : 0;
+}
 // queda em % (positivo = caiu): o maior entre a variação de 24h e o recuo desde a máxima
 const quedaEfetiva = (pct: number, dd?: number | null) => Math.max(-pct, dd ?? 0, 0);
 function quedaTxt(pct: number, queda: number): string {
@@ -882,7 +916,10 @@ function calcFundoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, 
     const recuoPico = ddDoPico(d.h, info.preco);
     const tocou = Math.min(...d.l.slice(n - 6)) <= info.topo + 0.25 * atr;
     const segura = info.preco >= info.fundo - 0.5 * atr;
-    if (recuoPico >= FUNDO_TOQUE_PICO_MIN && tocou && segura) { add(2, `voltou até a faixa (${recuoPico.toFixed(0)}% abaixo do pico) e está segurando nela`); repique = true; }
+    // veio de baixo = nas últimas 16 velas o preço esteve bem abaixo da faixa: é bounce de queda, não repique de alta
+    const veioDeBaixo = Math.min(...d.l.slice(n - JAN)) < info.fundo - REPIQUE_LADO_ATR * atr;
+    const dispAntes = altaAntesDoTopo(d.h, d.l) >= REPIQUE_MOV_ANTES_MIN;
+    if (recuoPico >= FUNDO_TOQUE_PICO_MIN && tocou && segura && dispAntes && !veioDeBaixo) { add(2, `voltou até a faixa (${recuoPico.toFixed(0)}% abaixo do pico) e está segurando nela`); repique = true; }
   }
   const rs = rsiSerie(d.c, 14);
   const rsiAtual = rs[n - 1];
@@ -1123,7 +1160,10 @@ function calcTopoPre(d: XVelas, info: IndicadorInfo, atr: number, adx: number, a
     const altaVale = altaDoVale(d.l, info.preco);
     const tocou = Math.max(...d.h.slice(n - 6)) >= info.fundo - 0.25 * atr;
     const rejeita = info.preco <= info.topo + 0.5 * atr;
-    if (altaVale >= TOPO_TOQUE_VALE_MIN && tocou && rejeita) { add(2, `voltou até a faixa (${altaVale.toFixed(0)}% acima da mínima) e está sendo rejeitada nela`); repique = true; }
+    // veio de cima = nas últimas 16 velas o preço esteve bem acima da faixa: é recuo de pump, não repique de queda
+    const veioDeCima = Math.max(...d.h.slice(n - JAN)) > info.topo + REPIQUE_LADO_ATR * atr;
+    const despencouAntes = quedaAntesDoVale(d.h, d.l) >= REPIQUE_MOV_ANTES_MIN;
+    if (altaVale >= TOPO_TOQUE_VALE_MIN && tocou && rejeita && despencouAntes && !veioDeCima) { add(2, `voltou até a faixa (${altaVale.toFixed(0)}% acima da mínima) e está sendo rejeitada nela`); repique = true; }
   }
   const rs = rsiSerie(d.c, 14);
   const rsiAtual = rs[n - 1];
@@ -1703,6 +1743,7 @@ async function carregarEstado(SB: any) {
     const j = JSON.parse(data.last_status);
     const ck = Math.floor(Date.now() / (TF_MIN * 60000));
     for (const [k, v] of Object.entries(j.conf || {})) if (Number(v) === ck) _confBarrada.set(k, ck);
+    for (const [k, v] of Object.entries(j.confPre || {})) if (Number(v) === ck) _confBarradaPre.set(k, ck);
     for (const [k, v] of Object.entries(j.fundo || {})) if (Number(v) === ck) _fundoAvaliado.set(k, ck);
     for (const k of (Array.isArray(j.watch) ? j.watch : [])) _watchEnviado.add(String(k));
     if (isFinite(Number(j.comp?.cur))) _compCursor = Math.max(0, Math.floor(Number(j.comp.cur)));
@@ -1728,9 +1769,10 @@ async function salvarEstado(SB: any) {
   try {
     const ck = Math.floor(Date.now() / (TF_MIN * 60000));
     for (const [k, v] of _confBarrada) if (v !== ck) _confBarrada.delete(k);
+    for (const [k, v] of _confBarradaPre) if (v !== ck) _confBarradaPre.delete(k);
     for (const [k, v] of _fundoAvaliado) if (v !== ck) _fundoAvaliado.delete(k);
     for (const [k, p] of _finalPend) if (p.ck < ck - 2) _finalPend.delete(k);
-    const estado = { conf: Object.fromEntries(_confBarrada), fundo: Object.fromEntries(_fundoAvaliado), watch: [..._watchEnviado], final: [..._finalPend.values()], comp: { cur: _compCursor } };
+    const estado = { conf: Object.fromEntries(_confBarrada), confPre: Object.fromEntries(_confBarradaPre), fundo: Object.fromEntries(_fundoAvaliado), watch: [..._watchEnviado], final: [..._finalPend.values()], comp: { cur: _compCursor } };
     const { data: row } = await SB.from("alertas_indicador").select("instid").eq("instid", ESTADO_ROW).maybeSingle();
     const campos = { last_status: JSON.stringify(estado) };
     if (row) await SB.from("alertas_indicador").update(campos).eq("instid", ESTADO_ROW);
@@ -2302,7 +2344,8 @@ async function runAlertaProativo() {
     const ladoTxt = c.lado === "long" ? "LONG (compra)" : "SHORT (venda)";
     const infoAtr = (c.info as InfoFiltravel).atr;
     const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
-    if (_confBarrada.get(inst + c.lado) === ckVela) continue;
+    if (_confBarrada.get(inst + c.lado) === ckVela || _confBarradaPre.get(inst + c.lado) === ckVela) continue;
+    const barrarLoop = () => (c.info.idadeCandles === null ? _confBarradaPre : _confBarrada).set(inst + c.lado, ckVela);
     if (_finalPend.has(finalKey(inst, c.lado, ckVela))) { console.log(`⏱ ${inst} ${c.lado}: já coberto pelo alerta dos minutos finais desta vela`); continue; }
     const vivo = await getVivo(inst);
     if (TRAVA_PRECO_ON && vivo !== null) {
@@ -2318,18 +2361,18 @@ async function runAlertaProativo() {
     const confRes = await calcConfiancaAlerta(c, poolMap.get(inst)?.volUsdt ?? null, perfilAlerta);
     const minConf = c.tipo === "reversao" ? (c.lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
     if (minConf > 0 && confRes && confRes.conf < minConf) {
-      _confBarrada.set(inst + c.lado, ckVela);
+      barrarLoop();
       confBarrados++;
       console.log(`🧭 ${inst} ${c.lado} (${c.tipo}) barrado: confiança ${confRes.conf}/10 < ${minConf}`);
       continue;
     }
     if (BTC_BLOQ_REV_PCT > 0 && c.tipo === "reversao" && c.lado === "short" && confRes?.btcVar != null && confRes.btcVar >= BTC_BLOQ_REV_PCT) {
-      _confBarrada.set(inst + c.lado, ckVela);
+      barrarLoop();
       console.log(`₿ ${inst} SHORT de reversão barrado: BTC +${confRes.btcVar.toFixed(1)}% na última hora (limite ${BTC_BLOQ_REV_PCT}%)`);
       continue;
     }
     if (BTC_BLOQ_REV_PCT > 0 && c.tipo === "reversao" && c.lado === "long" && confRes?.btcVar != null && confRes.btcVar <= -BTC_BLOQ_REV_PCT) {
-      _confBarrada.set(inst + c.lado, ckVela);
+      barrarLoop();
       console.log(`₿ ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}% na última hora (limite -${BTC_BLOQ_REV_PCT}%)`);
       continue;
     }
@@ -2369,6 +2412,11 @@ async function runAlertaProativo() {
     if (row) await SB.from("alertas_indicador").update(registro).eq("instid", c.info.instId);
     else await SB.from("alertas_indicador").insert({ instid: c.info.instId, ...registro });
   }
+  // Fix: o alerta dos minutos finais (🚨) tem janela curta (1–5 min antes do fechamento). Antes rodava no fim da rodada, depois dos radares
+  // de topo/fundo/compressão, lista de acompanhamento e antecipações; se a rodada demorava ou era pulada pela trava do cron, o 🚨 não saía.
+  // Agora roda logo depois do laço principal, antes de tudo isso.
+  const lastMap = new Map(variacoes.map((v) => [v.instId, v.last] as [string, number]));
+  await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta).catch((e) => console.log("❌ erro alerta final", e));
   console.log(`🏁 alerta proativo em ${((Date.now() - inicio) / 1000).toFixed(1)}s - ${setups.length} setups, ${enviados} alertas enviados, ${confBarrados} barrados por confiança`);
   await heartbeat(SB, `${((Date.now() - inicio) / 1000).toFixed(1)}s | setups ${setups.length} | enviados ${enviados}`);
   await avisarFonteDados(SB).catch((e) => console.log("⚠️ erro avisarFonteDados", e));
@@ -2380,8 +2428,6 @@ async function runAlertaProativo() {
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   await checarListaAcompanhamento(SB, poolInfoMap, posMap);
   await checarAntecipacoes(SB, poolInfoMap).catch((e) => console.log("❌ erro antecipações", e));
-  const lastMap = new Map(variacoes.map((v) => [v.instId, v.last] as [string, number]));
-  await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta).catch((e) => console.log("❌ erro alerta final", e));
   await salvarEstado(SB);
   await processarAutoApagar(SB).catch((e) => console.log("❌ erro autoapagar", e));
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
