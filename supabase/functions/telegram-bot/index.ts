@@ -1,4 +1,4 @@
-// telegram-bot V57 (V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 2 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), pra não ligar e desligar em cima do limite; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
+// telegram-bot V57 (V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
 // telegram-bot V56 (V55 + revisão dos filtros: volume mínimo aplicado ANTES do corte top-N nos pools de alerta e das listas (moeda ilíquida não gasta mais vaga); /config descreve o RSI do modo pump como ele roda (LONG só barra acima de FILTRO_RSI_MAX_LONG, SHORT só abaixo de FILTRO_RSI_MIN) e o volume em M; serrote: textos dizem "trocas em 4h" (entrar/sair da faixa conta) e o limiar do aviso/penalidade segue SERROTE_MAX; X_ADX_FRACO segue FILTRO_ADX_MIN; log único dos campos de volume do ticker pra conferir a unidade)
 // telegram-bot V55 (V54 + painel do dia de 21h a 21h: 1 mensagem editada a cada hora, BTC subindo/caindo, comparação desde as 21h e desde as 8h, vira "FIM DO RESUMO DO DIA" na virada; agenda econômica: aviso 60 e 15 min antes de dado de alto impacto (CPI, payroll, FOMC...) pra evitar operar; bloco "agenda de hoje" no resumo da manhã e "amanhã" no da noite (sem mensagem extra, sem duplicar); /agenda; cache em memória + Supabase e aviso quando a fonte está fora)
 // telegram-bot V54 (V53 + /robo: emoji 🪙 no nome da moeda no lugar da bolinha 🟢/🔴 de PnL (colidia com o emoji de estado da linha de baixo); rótulo "LIGUE AGORA" único (os alertas diziam "LIGUE O ROBÔ AGORA" no corpo e "LIGUE AGORA" no título e no /help); linha de PnL própria com 😎 (ganhando) / 🤧 (perdendo) e liq em linha separada; nos outros lugares (/analise, /agora, alertas de posição e de proteção) o PnL da posição ganhou ➕/➖ na frente (não quebra mais no celular) e dica de stop alinhada ao trailing (não manda mais "stop na entrada" quando o trailing já manda travar ganho); coerência do repique, sem mudar o nome: limiares do marcador alinhados ao pool (FUNDO_TOQUE_PICO_MIN/
@@ -83,13 +83,22 @@ const LATERAL_ADX_BLOQ = numEnv("LATERAL_ADX_BLOQ", "18");
 const LATERAL_ADX_LIBERA = Math.max(numEnv("LATERAL_ADX_LIBERA", "20"), LATERAL_ADX_BLOQ);
 // V57: 2 confirmações além do ADX (mesma ideia de duas faixas): ER = Efficiency Ratio de Kaufman (deslocamento líquido ÷ caminho percorrido
 // nas últimas LATERAL_JAN velas 15m; perto de 0 = vai e vem, perto de 1 = tendência) e "caixa" = amplitude máx−mín das mesmas velas em ATRs.
-// Cada ativo vota com os 3 indicadores; bloqueia com LATERAL_VOTOS (2) de 3 nos DOIS ativos e libera com LATERAL_VOTOS de 3 de tendência em UM deles.
+// Cada ativo vota com os 3 indicadores; bloqueia com LATERAL_VOTOS (2) de 3 nos DOIS ativos (e nenhum sinal de tendência) e libera com LATERAL_VOTOS_LIBERA (1) de 3 de tendência em UM deles.
 const LATERAL_ER_BLOQ = numEnv("LATERAL_ER_BLOQ", "0.25");
 const LATERAL_ER_LIBERA = Math.max(numEnv("LATERAL_ER_LIBERA", "0.35"), LATERAL_ER_BLOQ);
 const LATERAL_AMP_BLOQ = numEnv("LATERAL_AMP_BLOQ", "3");
 const LATERAL_AMP_LIBERA = Math.max(numEnv("LATERAL_AMP_LIBERA", "4"), LATERAL_AMP_BLOQ);
 const LATERAL_JAN = Math.max(4, Math.round(numEnv("LATERAL_JAN", "16")));
-const LATERAL_VOTOS = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS", "2"))));
+const LATERAL_VOTOS = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS", "2")))); // votos de LATERAL (nos dois ativos) pra bloquear
+const LATERAL_VOTOS_LIBERA = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS_LIBERA", "1")))); // votos de TENDÊNCIA (em um ativo) pra liberar
+const LATERAL_AVISO_ON = (Deno.env.get("LATERAL_AVISO") || "1") !== "0"; // aviso quando um dos 3 sinais sai da lateral (com o filtro bloqueando)
+const LATERAL_AVISO_MIN = numEnv("LATERAL_AVISO_MIN", "30"); // intervalo mínimo entre dois desses avisos
+const LATERAL_HOLD_MIN = numEnv("LATERAL_HOLD_MIN", "30"); // depois de liberar, espera esse tempo antes de poder bloquear de novo (evita piscar)
+// V58: LATERAL_MODO decide o que o filtro FAZ quando detecta lateral: "bloqueia" (padrão, comportamento V57) barra
+// o LIGUE AGORA e os alertas de entrada; "visual" mantém a leitura/estado/contadores normais, mas não barra nada —
+// todo alerta sai como sairia sem o filtro, só com a nota 🧱 avisando que o mercado está lateral.
+const LATERAL_MODO = (Deno.env.get("LATERAL_MODO") || "visual").toLowerCase();
+const LATERAL_BARRA = LATERAL_ON && LATERAL_MODO !== "visual"; // usar isso (não LATERAL_ON sozinho) em qualquer lugar que decida BARRAR um alerta
 let FILTRO_RSI_MAX = numEnv("FILTRO_RSI_MAX", "85");
 let FILTRO_RSI_MIN = numEnv("FILTRO_RSI_MIN", "15");
 let FILTRO_DIST_MAX_PCT = numEnv("FILTRO_DIST_MAX_PCT", "2");
@@ -1125,7 +1134,7 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst).filter((x) => x.lado === "short")) {
         extra += `\n\n📌 <b>Você está SHORT em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${p.pnl > 0 ? `Sinais de fundo aparecendo: considere realizar parte do lucro e ${stopSugeridoTxt(p, atrRadar)}.` : `Sinais de fundo aparecendo contra a sua posição SHORT, que está no prejuízo: confira o stop antes.`}`;
       }
-      return await enviarAlertaMoeda(SB, ch, `FUNDO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
+      return await enviarAlertaMoeda(SB, ch, `FUNDO_${inst}`, cortar(msg + extra + notaLat()), botaoAnalisar(inst));
     }));
     if (!ids.some(Boolean)) { console.log(`⚠️ radar de fundo: ${inst} — nenhum envio confirmado, não vou queimar o cooldown`); continue; }
     _fundoAvaliado.set(inst, ckVela);
@@ -1332,7 +1341,7 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst).filter((x) => x.lado === "long")) {
         extra += `\n\n📌 <b>Você está LONG em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\n${p.pnl > 0 ? `Sinais de topo aparecendo: considere realizar parte do lucro e ${stopSugeridoTxt(p, atrRadar)}.` : `Sinais de topo aparecendo contra a sua posição LONG, que está no prejuízo: confira o stop antes.`}`;
       }
-      return await enviarAlertaMoeda(SB, ch, `TOPO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
+      return await enviarAlertaMoeda(SB, ch, `TOPO_${inst}`, cortar(msg + extra + notaLat()), botaoAnalisar(inst));
     }));
     if (!ids.some(Boolean)) { console.log(`⚠️ radar de topo: ${inst} — nenhum envio confirmado, não vou queimar o cooldown`); continue; }
     _fundoAvaliado.set("topo|" + inst, ckVela);
@@ -1494,7 +1503,7 @@ async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: st
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst)) {
         extra += `\n\n📌 <b>Você está ${p.lado === "long" ? "LONG" : "SHORT"} em ${inst}</b> — entrada ${fmtPrice(p.entrada)} | ${p.pnl >= 0 ? "➕" : "➖"} PnL ${sgn(p.pnl)} USDT (${sgn(p.pnlPct, 1)}% da margem)\nO rompimento pode vir pros dois lados: confira o stop antes.`;
       }
-      return await enviarAlertaMoeda(SB, ch, `COMPRESSAO_${inst}`, cortar(msg + extra), botaoAnalisar(inst));
+      return await enviarAlertaMoeda(SB, ch, `COMPRESSAO_${inst}`, cortar(msg + extra + notaLat()), botaoAnalisar(inst));
     }));
     if (!ids.some(Boolean)) { console.log(`⚠️ radar de compressão: ${inst} — nenhum envio confirmado, não vou queimar o cooldown`); continue; }
     _fundoAvaliado.set("comp|" + inst, ckVela);
@@ -2181,9 +2190,9 @@ async function checarAlertaFinal(
       console.log(`₿ final ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}%/h (limite -${BTC_BLOQ_REV_PCT}%)`);
       continue;
     }
-    // V57: mercado lateral (BTC e ETH sem tendência): barra a entrada nova; o 🚨 só sai pra quem tem posição do lado oposto
-    if (lat?.bloq) {
-      const contra = modo === "aviso" ? destinos.filter((ch) => posDe(ch, inst).some((p) => p.lado !== lado)) : [];
+    // V57: mercado lateral (BTC e ETH sem tendência): barra o 🚨 (LIGUE AGORA); só sai pra quem tem posição do lado oposto. O PREPARE passa, com aviso 🧱
+    if (LATERAL_BARRA && lat?.bloq && modo === "aviso") {
+      const contra = destinos.filter((ch) => posDe(ch, inst).some((p) => p.lado !== lado));
       if (!contra.length) {
         latContar(lat, inst, lado);
         console.log(`🧱 final ${inst} ${lado} (${modo}) barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
@@ -2220,7 +2229,7 @@ async function checarAlertaFinal(
         subTitulo("📍 Onde está") + `${linhas}\n`;
     const botaoLiguei: Botoes = modo === "aviso" ? [[{ text: "🔔 Já liguei", callback_data: `liguei:${inst}:${lado}:${ck}` }]] : [];
     const msgIds = await enviarOuEditarFinal(SB, pendAntes, destinos, inst, async (ch) =>
-      msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, lado) + (modo === "aviso" ? await blocoPosicao(SB, ch, posDe(ch, inst), hip, lado) : ""), botaoLiguei);
+      msg + linhaConf + linhaFo + (lat?.bloq && (modo === "prepare" || !LATERAL_BARRA) ? notaLat() : "") + avisoLimiteLado(posMap.get(ch) ?? null, lado) + (modo === "aviso" ? await blocoPosicao(SB, ch, posDe(ch, inst), hip, lado) : ""), botaoLiguei);
     // Auditoria #15: mesma família dos achados 4–11, aqui no pipeline paralelo do "alerta dos minutos finais".
     // `_finalPend`/`registrarAlertaFinal`/`enviados` eram todos gravados incondicionalmente, mesmo que TODOS os
     // envios/edições falhassem (Telegram fora do ar etc.) — ou seja: ninguém recebia o "LIGUE O ROBÔ AGORA", mas
@@ -2318,6 +2327,7 @@ async function runAlertaProativo() {
   }
   if (todosSil) console.log(`🌙 todos em silêncio/pausa: só alertas de proteção (${nPos} posição(ões) aberta(s))`);
   const lat = await avaliarLateral(SB).catch((e) => { console.log("⚠️ filtro lateral falhou (segue liberado)", e); return lateralNovo(); });
+  _latBloq = lat.bloq;
   const variacoes = await getVariacoes24h();
   // V56: com os filtros ligados, o volume mínimo entra ANTES do corte top-N (igual recuaram/repicaram), senão moeda ilíquida ocupa vaga e é descartada depois
   const baseMov = ALERT_FILTROS_ON ? variacoes.filter((v) => v.volUsdt >= FILTRO_VOL_MIN_USDT) : variacoes;
@@ -2371,6 +2381,8 @@ async function runAlertaProativo() {
         continue;
       }
     }
+    // V57: com o filtro lateral ligado só o PREPARE (ainda não cruzou, sem LIGUE AGORA) passa; o resto da entrada fica barrado mais abaixo
+    const soPrepare = LATERAL_BARRA && lat.bloq && c.info.idadeCandles === null && !!c.aprox && !c.ligue;
     const cruzou = ladoAtual(c.info) === c.lado;
     const chatsContra = ALERT_CHAT_IDS.filter((ch) => cruzou && posDe(ch, inst).some((p) => p.lado !== c.lado));
     const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
@@ -2384,7 +2396,7 @@ async function runAlertaProativo() {
     const escalouContra = contraPos && !(row?.last_status || "").includes("🛡️");
     if (!cooldownOk && !escalouBase && !escalouContra) continue;
     // V57: com o filtro lateral ligado, só sai o aviso de proteção pra quem tem posição do lado oposto; entrada nova fica barrada mais abaixo
-    const destinosBase = lat.bloq ? chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO) : (cooldownOk || escalouBase) ? [...new Set([...ativos, ...protegidos])] : chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO);
+    const destinosBase = LATERAL_BARRA && lat.bloq && !soPrepare ? chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO) : (cooldownOk || escalouBase) ? [...new Set([...ativos, ...protegidos])] : chatsContra.filter((ch) => !silChat(ch) || SILENCIO_PROTECAO);
     // Posição já no lado do sinal: "chegando na linha" não acrescenta nada pra quem já está posicionado (só ruído).
     const destinos = c.info.idadeCandles === null ? destinosBase.filter((ch) => !posDe(ch, inst).some((p) => p.lado === c.lado)) : destinosBase;
     if (!destinos.length) continue;
@@ -2424,7 +2436,7 @@ async function runAlertaProativo() {
       console.log(`₿ ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}% na última hora (limite -${BTC_BLOQ_REV_PCT}%)`);
       continue;
     }
-    if (lat.bloq && !contraPos) {
+    if (LATERAL_BARRA && lat.bloq && !contraPos && !soPrepare) {
       if (latContar(lat, inst, c.lado)) barradosLat++;
       console.log(`🧱 ${inst} ${c.lado} barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
       continue;
@@ -2449,7 +2461,7 @@ async function runAlertaProativo() {
     const linhaFo = confRes ? (foTxt ? `\n💸 ${foTxt}` : "") : await linhaFundingOI(inst);
     const prio = !!c.aprox && chegadaEmJanelaForte(c.aprox, perfilAlerta);
     const linhaConf = "\n" + (prio ? "⚡ <b>PRIORIDADE</b> — chegada prevista dentro de janela forte de movimento\n" : "") + (confRes ? confLinha(confRes) : "");
-    const entregasOk = await Promise.all(destinos.map(async (ch) => !!(await enviarAlertaMoeda(SB, ch, `CRUZ_${inst}`, cortar(msg + linhaConf + linhaFo + avisoLimiteLado(posMap.get(ch) ?? null, c.lado) + (await blocoPosicao(SB, ch, posDe(ch, inst), c.info, c.lado))), botaoAnalisar(inst)))));
+    const entregasOk = await Promise.all(destinos.map(async (ch) => !!(await enviarAlertaMoeda(SB, ch, `CRUZ_${inst}`, cortar(msg + linhaConf + linhaFo + (soPrepare || (lat.bloq && !LATERAL_BARRA) ? notaLat() : "") + avisoLimiteLado(posMap.get(ch) ?? null, c.lado) + (await blocoPosicao(SB, ch, posDe(ch, inst), c.info, c.lado))), botaoAnalisar(inst)))));
     const entregues = destinos.filter((_, idx) => entregasOk[idx]);
     if (!entregues.length) { console.log(`⚠️ ${inst} ${c.lado}: nenhum envio confirmado, não vou queimar cooldown/cota desta rodada`); continue; }
     await registrarAlerta(SB, c, confRes?.conf ?? null);
@@ -2475,12 +2487,10 @@ async function runAlertaProativo() {
   await heartbeat(SB, `${((Date.now() - inicio) / 1000).toFixed(1)}s | setups ${setups.length} | enviados ${enviados}`);
   await avisarFonteDados(SB).catch((e) => console.log("⚠️ erro avisarFonteDados", e));
   await avisarBtcSemDados(SB).catch((e) => console.log("⚠️ erro avisarBtcSemDados", e));
-  if (lat.bloq) console.log("🧱 radares de topo/fundo/compressão pausados: mercado lateral (BTC e ETH sem tendência)");
-  else {
-    if (TOPO_ON) await radarTopo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de topo", e));
-    if (FUNDO_ON) await radarFundo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de fundo", e));
-    if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
-  }
+  // V57: os radares são avisos antecipados (nunca LIGUE AGORA), então seguem rodando com o filtro lateral ligado — a mensagem sai com o aviso 🧱
+  if (TOPO_ON) await radarTopo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de topo", e));
+  if (FUNDO_ON) await radarFundo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de fundo", e));
+  if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   await checarListaAcompanhamento(SB, poolInfoMap, posMap);
@@ -2689,8 +2699,10 @@ async function xRegime(instId: string): Promise<XRegime | null> {
 // ─── V57: FILTRO DE MERCADO LATERAL (BTC + ETH, 3 indicadores, duas faixas) ──────────────────────────
 // Cada ativo (BTC e ETH, velas 15m fechadas) vota com 3 indicadores: ADX, ER (Efficiency Ratio) e caixa (amplitude de LATERAL_JAN velas em ATRs).
 //  • BLOQUEIA quando os DOIS ativos têm >= LATERAL_VOTOS de 3 sinais de lateral (ADX < BLOQ · ER < BLOQ · caixa < BLOQ)
-//  • LIBERA quando UM ativo tem >= LATERAL_VOTOS de 3 sinais de tendência (ADX >= LIBERA · ER >= LIBERA · caixa >= LIBERA)
-//  • entre as duas faixas mantém o estado anterior (histerese), então o filtro não pisca em cima do limite.
+//  • LIBERA quando UM ativo tem >= LATERAL_VOTOS_LIBERA de 3 sinais de tendência (ADX >= LIBERA · ER >= LIBERA · caixa >= LIBERA)
+//  • entre as duas faixas mantém o estado anterior (histerese) e, depois de liberar, espera LATERAL_HOLD_MIN min antes de bloquear de novo
+//    (com 1 voto pra liberar, um indicador oscilando no limite faria o filtro piscar).
+//  • enquanto bloqueia: barra o LIGUE AGORA/🚨 e o alerta de entrada; PREPARE (loop principal e minutos finais) e os radares passam com aviso 🧱.
 // O estado fica no Supabase (linha _LATERAL_) porque cada rodada do cron é uma execução nova. Sem dado de BTC/ETH: mantém o estado por até
 // 30 min e depois libera (nunca fica travado por falha de fonte). Só barra ENTRADA (alerta do loop principal, 🚨/PREPARE dos minutos finais e
 // radares); aviso de posição aberta do lado oposto, risco, proteção de lucro, painel e comandos manuais (/agora, /analise...) seguem normais.
@@ -2699,11 +2711,12 @@ type LatInd = { adx: number | null; er: number | null; amp: number | null };
 type LateralEst = {
   bloq: boolean; desde: number; flip: number; btc: number | null; eth: number | null; upd: number; dadoT: number; // btc/eth = ADX
   btcEr: number | null; btcAmp: number | null; ethEr: number | null; ethAmp: number | null;
+  tend: string[]; avisoT: number; // sinais (ex.: "BTC|ER") que estavam em tendência na última leitura, e hora do último aviso de saída da lateral
   cont: Record<string, { n: number; ms: number }>; // por ciclo do painel (chave = início do ciclo em ms): sinais barrados e tempo bloqueado
   hk: string[]; hora: number; // chaves moeda|lado já contadas na hora atual (conta 1x por hora, não a cada rodada de 2 min)
   sujo?: boolean;
 };
-const lateralNovo = (): LateralEst => ({ bloq: false, desde: Date.now(), flip: 0, btc: null, eth: null, upd: Date.now(), dadoT: 0, btcEr: null, btcAmp: null, ethEr: null, ethAmp: null, cont: {}, hk: [], hora: 0 });
+const lateralNovo = (): LateralEst => ({ bloq: false, desde: Date.now(), flip: 0, btc: null, eth: null, upd: Date.now(), dadoT: 0, btcEr: null, btcAmp: null, ethEr: null, ethAmp: null, tend: [], avisoT: 0, cont: {}, hk: [], hora: 0 });
 const fmtAdx = (x: number | null) => (x === null ? "?" : x.toFixed(1));
 const latCiclo = (est: LateralEst, inicio = painelFase().inicio) => (est.cont[String(inicio)] ??= { n: 0, ms: 0 });
 const votosLat = (x: LatInd) => Number(x.adx !== null && x.adx < LATERAL_ADX_BLOQ) + Number(x.er !== null && x.er < LATERAL_ER_BLOQ) + Number(x.amp !== null && x.amp < LATERAL_AMP_BLOQ);
@@ -2716,7 +2729,7 @@ async function lateralLer(SB: any): Promise<LateralEst | null> {
     const { data } = await SB.from(TAB).select("last_status").eq("instid", LATERAL_ROW).maybeSingle();
     const j = data?.last_status ? JSON.parse(data.last_status) : null;
     if (!j || typeof j.bloq !== "boolean") return null;
-    return { ...lateralNovo(), ...j, cont: j.cont && typeof j.cont === "object" ? j.cont : {}, hk: Array.isArray(j.hk) ? j.hk.map(String) : [], sujo: false };
+    return { ...lateralNovo(), ...j, cont: j.cont && typeof j.cont === "object" ? j.cont : {}, hk: Array.isArray(j.hk) ? j.hk.map(String) : [], tend: Array.isArray(j.tend) ? j.tend.map(String) : [], sujo: false };
   } catch { return null; }
 }
 async function lateralSalvar(SB: any, est: LateralEst) {
@@ -2737,17 +2750,50 @@ async function avaliarLateral(SB: any): Promise<LateralEst> {
   const inds = [ib, ie].filter((x): x is LatInd => x !== null);
   const antes = est.bloq;
   if (inds.length) est.dadoT = agora;
-  if (!est.bloq && ib && ie && votosLat(ib) >= LATERAL_VOTOS && votosLat(ie) >= LATERAL_VOTOS) est.bloq = true;
-  else if (est.bloq && inds.some((x) => votosTend(x) >= LATERAL_VOTOS)) est.bloq = false;
+  const semTend = (x: LatInd) => votosTend(x) < LATERAL_VOTOS_LIBERA; // quem já tem sinal de tendência não conta como lateral
+  const podeBloquear = agora - est.flip >= LATERAL_HOLD_MIN * 60000; // recém-liberado: espera antes de bloquear de novo
+  if (!est.bloq && podeBloquear && ib && ie && votosLat(ib) >= LATERAL_VOTOS && votosLat(ie) >= LATERAL_VOTOS && semTend(ib) && semTend(ie)) est.bloq = true;
+  else if (est.bloq && inds.some((x) => votosTend(x) >= LATERAL_VOTOS_LIBERA)) est.bloq = false;
   else if (est.bloq && !inds.length && agora - est.dadoT > 30 * 60000) est.bloq = false; // sem dado há 30 min: solta
   if (est.bloq !== antes) { est.desde = agora; est.flip = agora; }
   est.btc = ib?.adx ?? null; est.btcEr = ib?.er ?? null; est.btcAmp = ib?.amp ?? null;
   est.eth = ie?.adx ?? null; est.ethEr = ie?.er ?? null; est.ethAmp = ie?.amp ?? null;
   est.upd = agora;
+  // V57: quais dos 6 sinais (3 indicadores × BTC/ETH) estão em tendência agora; "novos" = entraram em tendência desde a última leitura
+  const tendAgora: string[] = [];
+  for (const [nome, x] of [["BTC", ib], ["ETH", ie]] as const) {
+    if (!x) continue;
+    if (x.adx !== null && x.adx >= LATERAL_ADX_LIBERA) tendAgora.push(`${nome}|ADX`);
+    if (x.er !== null && x.er >= LATERAL_ER_LIBERA) tendAgora.push(`${nome}|ER`);
+    if (x.amp !== null && x.amp >= LATERAL_AMP_LIBERA) tendAgora.push(`${nome}|caixa`);
+  }
+  const novos = tendAgora.filter((k) => !est.tend.includes(k));
+  est.tend = tendAgora;
+  const querAviso = LATERAL_AVISO_ON && antes && novos.length > 0 && agora - est.avisoT >= LATERAL_AVISO_MIN * 60000; // só quando estava lateral (bloqueando) na leitura anterior
   const c = latCiclo(est);
-  console.log(`🧱 lateral: BTC ${ib ? `${indTxt(ib)} (${votosLat(ib)}/3 lateral, ${votosTend(ib)}/3 tendência)` : "sem dado"} | ETH ${ie ? `${indTxt(ie)} (${votosLat(ie)}/3 lateral, ${votosTend(ie)}/3 tendência)` : "sem dado"} → ${est.bloq ? "BLOQUEANDO" : "liberado"}${est.bloq !== antes ? " (mudou agora)" : ""} | votos ${LATERAL_VOTOS}/3 | ciclo: ${c.n} barrado(s)`);
+  console.log(`🧱 lateral: BTC ${ib ? `${indTxt(ib)} (${votosLat(ib)}/3 lateral, ${votosTend(ib)}/3 tendência)` : "sem dado"} | ETH ${ie ? `${indTxt(ie)} (${votosLat(ie)}/3 lateral, ${votosTend(ie)}/3 tendência)` : "sem dado"} → ${est.bloq ? "BLOQUEANDO" : "liberado"}${est.bloq !== antes ? " (mudou agora)" : ""} | votos bloqueia ${LATERAL_VOTOS}/3 · libera ${LATERAL_VOTOS_LIBERA}/3 | ciclo: ${c.n} barrado(s)`);
   await lateralSalvar(SB, est);
+  if (querAviso) {
+    const msg = msgSaiuLateral(est, novos);
+    const ids = await Promise.all(ALERT_CHAT_IDS.filter((ch) => !silChat(ch)).map((ch) => enviarAlertaMoeda(SB, ch, "LATERAL", msg).catch(() => null)));
+    if (ids.some(Boolean)) { est.avisoT = agora; await lateralSalvar(SB, est); }
+    console.log(`📈 saiu da lateral: ${novos.join(", ")} → ${est.bloq ? "ainda bloqueando" : "liberado"} (aviso ${ids.some(Boolean) ? "enviado" : "não confirmado"})`);
+  }
   return est;
+}
+// V57: aviso quando um dos 3 sinais (ADX/ER/caixa, de BTC ou ETH) sai da lateral e chega no valor de tendência, com o filtro bloqueando
+function msgSaiuLateral(est: LateralEst, novos: string[]): string {
+  const desc = (k: string) => {
+    const [n, i] = k.split("|");
+    const x = n === "BTC" ? indBtc(est) : indEth(est);
+    const v = i === "ADX" ? `ADX ${fmtAdx(x.adx)} (≥ ${LATERAL_ADX_LIBERA})` : i === "ER" ? `ER ${x.er === null ? "?" : x.er.toFixed(2)} (≥ ${LATERAL_ER_LIBERA})` : `caixa ${x.amp === null ? "?" : x.amp.toFixed(1)}×ATR (≥ ${LATERAL_AMP_LIBERA})`;
+    return `• ${n}: ${v}`;
+  };
+  const b = indBtc(est), e = indEth(est);
+  return `📈 <b>Mercado saindo da lateral</b>\n${DIVISOR}\n\n${novos.map(desc).join("\n")}\n\n` +
+    `BTC: ${indTxt(b)} → ${votosTend(b)}/3 tendência\nETH: ${indTxt(e)} → ${votosTend(e)}/3 tendência\n\n` +
+    (est.bloq ? `🛑 O filtro ainda bloqueia: precisa de ${latQtdLibera()} em BTC ou ETH.` : `✅ Filtro liberado: o LIGUE AGORA e os alertas de entrada voltam ao normal.`) +
+    `\n<i>O mercado pode estar começando a andar. Confirme no gráfico antes de ligar o robô.</i>`;
 }
 // conta 1 sinal barrado (1x por moeda|lado por hora). Devolve true se contou agora.
 function latContar(est: LateralEst, inst: string, lado: string): boolean {
@@ -2763,6 +2809,12 @@ function latContar(est: LateralEst, inst: string, lado: string): boolean {
 const latDur = (ms: number) => { const m = Math.round(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}` : `${m} min`; };
 const latRegras = () => `ADX &lt; ${LATERAL_ADX_BLOQ} · ER &lt; ${LATERAL_ER_BLOQ} · caixa ${LATERAL_JAN / 4}h &lt; ${LATERAL_AMP_BLOQ}×ATR`; // &lt; porque a mensagem vai em HTML do Telegram
 const latRegrasTend = () => `ADX ≥ ${LATERAL_ADX_LIBERA} · ER ≥ ${LATERAL_ER_LIBERA} · caixa ≥ ${LATERAL_AMP_LIBERA}×ATR`;
+const latQtdLibera = () => (LATERAL_VOTOS_LIBERA === 1 ? "algum sinal de tendência" : `${LATERAL_VOTOS_LIBERA} de 3 sinais de tendência`);
+// V57: aviso colado nos PREPARE/radares que passam enquanto o filtro bloqueia (o LIGUE AGORA fica barrado)
+let _latBloq = false;
+const notaLat = () => (!_latBloq ? "" : LATERAL_BARRA
+  ? `\n\n🧱 <b>Mercado lateral</b> (BTC e ETH sem tendência): é só aviso antecipado — o LIGUE AGORA fica barrado até o filtro liberar.`
+  : `\n\n🧱 <b>Mercado lateral</b> (BTC e ETH sem tendência): aviso visual — o filtro não está barrando nada, confirme no gráfico antes de ligar o robô.`);
 // bloco do PAINEL DO DIA (inicio = início do ciclo do painel, pra o "FIM DO RESUMO" mostrar o placar do ciclo que acabou)
 function lateralTxt(est: LateralEst | null, inicio: number): string {
   const titulo = "🧱 <b>Filtro de mercado lateral</b>";
@@ -2770,14 +2822,17 @@ function lateralTxt(est: LateralEst | null, inicio: number): string {
   if (!est) return `${titulo}: <i>aguardando a primeira leitura do cron</i>\n\n`;
   const velho = Date.now() - est.upd > 15 * 60000 ? ` <i>(leitura das ${horaLocal(est.upd)})</i>` : "";
   const c = est.cont[String(inicio)];
-  const placar = c && (c.n > 0 || c.ms >= 60000) ? `📊 Neste ciclo: ${c.n} sinal(is) de entrada barrado(s) · ${latDur(c.ms)} com o filtro ligado\n` : `📊 Neste ciclo: nenhum sinal barrado até agora\n`;
+  const placar = LATERAL_BARRA
+    ? (c && (c.n > 0 || c.ms >= 60000) ? `📊 Neste ciclo: ${c.n} sinal(is) de entrada barrado(s) · ${latDur(c.ms)} com o filtro ligado\n` : `📊 Neste ciclo: nenhum sinal barrado até agora\n`)
+    : `📊 Modo visual: nenhum sinal é barrado, só o aviso 🧱${c && c.n > 0 ? ` (${c.n} teria(m) sido barrado(s) no modo bloqueia)` : ""}\n`;
   const b = indBtc(est), e = indEth(est);
   const vb = est.bloq ? `${votosTend(b)}/3 tendência` : `${votosLat(b)}/3 lateral`;
   const ve = est.bloq ? `${votosTend(e)}/3 tendência` : `${votosLat(e)}/3 lateral`;
   const linhas = `BTC: ${indTxt(b)} → ${vb}\nETH: ${indTxt(e)} → ${ve}\n`;
+  const rotuloEstado = LATERAL_BARRA ? "🛑 <b>BLOQUEANDO alertas de entrada</b>" : "🧱 <b>Lateral (aviso visual, sem barrar)</b>";
   return est.bloq
-    ? `${titulo}: 🛑 <b>BLOQUEANDO alertas de entrada</b> desde ${horaLocal(est.desde)}\n${linhas}Libera quando um dos dois tiver ${LATERAL_VOTOS} de 3 sinais de tendência (${latRegrasTend()})${velho}\n${placar}\n`
-    : `${titulo}: ✅ liberado\n${linhas}Bloqueia quando os dois tiverem ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()})${velho}\n${placar}\n`;
+    ? `${titulo}: ${rotuloEstado} desde ${horaLocal(est.desde)}\n${linhas}${LATERAL_BARRA ? `Libera quando BTC ou ETH tiver ${latQtdLibera()} (${latRegrasTend()}) · PREPARE e radares seguem, com aviso 🧱` : `Sai do estado lateral quando BTC ou ETH tiver ${latQtdLibera()} (${latRegrasTend()})`}${velho}\n${placar}\n`
+    : `${titulo}: ✅ liberado\n${linhas}${LATERAL_BARRA ? "Bloqueia" : "Marca lateral (sem barrar)"} quando os dois tiverem ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência${velho}\n${placar}\n`;
 }
 function lateralStatusTxt(est: LateralEst | null): string {
   if (!LATERAL_ON) return "🧱 Filtro lateral: desligado\n";
@@ -2785,7 +2840,9 @@ function lateralStatusTxt(est: LateralEst | null): string {
   const c = est.cont[String(painelFase().inicio)];
   const barr = c && c.n > 0 ? ` · ${c.n} barrado(s) no ciclo` : "";
   const velho = Date.now() - est.upd > 15 * 60000 ? ` · leitura das ${horaLocal(est.upd)}` : "";
-  const cab = est.bloq ? `🧱 Filtro lateral: 🛑 bloqueando desde ${horaLocal(est.desde)}` : `🧱 Filtro lateral: ✅ liberado`;
+  const cab = est.bloq
+    ? (LATERAL_BARRA ? `🧱 Filtro lateral: 🛑 bloqueando desde ${horaLocal(est.desde)}` : `🧱 Filtro lateral: lateral desde ${horaLocal(est.desde)} (modo visual, sem barrar)`)
+    : `🧱 Filtro lateral: ✅ liberado`;
   return `${cab}${barr}${velho}\n   BTC ${indTxt(indBtc(est))}\n   ETH ${indTxt(indEth(est))}\n`;
 }
 async function runLista(chatId: number | string) {
@@ -5639,7 +5696,7 @@ function montarConfig(): string {
   m += `🧭 <b>V26</b>\n• squeeze: faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica · volume das velas ≥ ${VOL_ACEL_RATIO}× (seco ≤ ${VOL_SECO_RATIO}×)\n• alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou passar de 2× o prazo\n• confiança: verde ≥ ${CONF_VERDE}/10 · amarelo ≥ ${CONF_AMARELO}/10\n• modo pump (${on(ESTRAT_PUMP)}): mín. confiança oportunidade ${CONF_MIN_OPORT} · reversão ${CONF_MIN_REVERSAO} · serrote ≥ ${SERROTE_MAX} trocas/4h barra · RSI máx LONG ${FILTRO_RSI_MAX_LONG} · limite ${LIMITE_LADO} por lado\n`;
   m += `\n${MINI_DIVISOR}\n`;
   m += `🧹 <b>Filtros</b> (${on(ALERT_FILTROS_ON)})\n• volume ≥ ${(FILTRO_VOL_MIN_USDT / 1e6).toFixed(1)}M USDT (antes do corte do pool) · ADX ≥ ${FILTRO_ADX_MIN}\n• ${ESTRAT_PUMP ? `RSI (modo pump, um lado só): LONG barrado acima de ${FILTRO_RSI_MAX_LONG} · SHORT barrado abaixo de ${FILTRO_RSI_MIN}` : `RSI entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX}`} · distância ≤ ${FILTRO_DIST_MAX_PCT}% (só nas listas)\n• amplitude mín. ${FILTRO_AMPLITUDE_MIN > 0 ? `${FILTRO_AMPLITUDE_MIN}%` : "desligada"}\n• 🚫 lista negra (${BLACKLIST_MOEDAS.size}): ${BLACKLIST_MOEDAS.size ? [...BLACKLIST_MOEDAS].sort().join(", ") : "nenhuma"}\n\n`;
-  m += `🧱 <b>V57 · filtro de mercado lateral</b> (${on(LATERAL_ON)})\n• BTC e ETH votam com 3 indicadores 15m: ADX · ER (Efficiency Ratio) · caixa (amplitude de ${LATERAL_JAN / 4}h em ATRs)\n• bloqueia alertas de ENTRADA quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) · libera quando um deles tem ${LATERAL_VOTOS} de 3 de tendência (${latRegrasTend()}) · no meio mantém o estado\n• alertas de posição aberta seguem normais · env: LATERAL_ADX_BLOQ/LIBERA, LATERAL_ER_BLOQ/LIBERA, LATERAL_AMP_BLOQ/LIBERA, LATERAL_JAN, LATERAL_VOTOS, LATERAL_BLOQ=0 desliga\n\n`;
+  m += `🧱 <b>V58 · filtro de mercado lateral</b> (${on(LATERAL_ON)} · modo ${LATERAL_MODO === "visual" ? "visual (sem barrar)" : "bloqueia"})\n• BTC e ETH votam com 3 indicadores 15m: ADX · ER (Efficiency Ratio) · caixa (amplitude de ${LATERAL_JAN / 4}h em ATRs)\n• ${LATERAL_BARRA ? `bloqueia o LIGUE AGORA e os alertas de ENTRADA quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência · libera quando um deles tem ${latQtdLibera()} (${latRegrasTend()}) · depois de liberar espera ${LATERAL_HOLD_MIN} min antes de bloquear de novo` : `modo visual: nada é barrado — todo alerta sai normal, com a nota 🧱 quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência`}\n• PREPARE e radares seguem passando, com aviso 🧱 · 📈 aviso quando um dos 3 sinais (ADX/ER/caixa, BTC ou ETH) sai da lateral, no máx. 1 a cada ${LATERAL_AVISO_MIN} min (${on(LATERAL_AVISO_ON)}) · alertas de posição aberta seguem normais · env: LATERAL_MODO=visual (só aviso, sem barrar), LATERAL_AVISO=0, LATERAL_AVISO_MIN, LATERAL_ADX_BLOQ/LIBERA, LATERAL_ER_BLOQ/LIBERA, LATERAL_AMP_BLOQ/LIBERA, LATERAL_JAN, LATERAL_VOTOS, LATERAL_VOTOS_LIBERA, LATERAL_HOLD_MIN, LATERAL_BLOQ=0 desliga\n\n`;
   m += `🎯 <b>Stop / alvo / trailing</b>\n• stop: faixa + ${STOP_ATR_MULT}×ATR · alvo RR ${ALVO_RR}:1\n• stop de reserva: ${STOP_ATR_RESERVA}×ATR\n• trailing (${on(PROT_LUCRO_ON)}): degrau de ${TRAIL_ATR_MULT}×ATR\n• RSI esticado: ≥ ${ESTICADO_RSI} (long) · ≤ ${100 - ESTICADO_RSI} (short)\n\n`;
   m += `🚨 <b>Risco</b> (${on(RISCO_ON)}): liquidação < ${RISCO_LIQ_PCT}% (crítico ${RISCO_LIQ_CRITICO_PCT}%) · prejuízo ≥ ${RISCO_PERDA_PCT}% (crítico ${RISCO_PERDA_CRITICA_PCT}%) · reenvio ${RISCO_COOLDOWN_MIN} min\n`;
   m += `\n${MINI_DIVISOR}\n`;
