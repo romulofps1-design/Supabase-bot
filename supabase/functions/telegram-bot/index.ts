@@ -2191,14 +2191,17 @@ async function checarAlertaFinal(
       continue;
     }
     // V57: mercado lateral (BTC e ETH sem tendência): barra o 🚨 (LIGUE AGORA); só sai pra quem tem posição do lado oposto. O PREPARE passa, com aviso 🧱
-    if (LATERAL_BARRA && lat?.bloq && modo === "aviso") {
+    if (lat?.bloq && modo === "aviso") {
       const contra = destinos.filter((ch) => posDe(ch, inst).some((p) => p.lado !== lado));
       if (!contra.length) {
-        latContar(lat, inst, lado);
-        console.log(`🧱 final ${inst} ${lado} (${modo}) barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
-        continue;
+        latContar(lat, inst, lado); // conta como "barrado" sempre (estatística), mesmo em modo visual
+        if (LATERAL_BARRA) {
+          console.log(`🧱 final ${inst} ${lado} (${modo}) barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
+          continue;
+        }
+      } else if (LATERAL_BARRA) {
+        destinos = contra;
       }
-      destinos = contra;
     }
     const tipoTxt = tipoTxtDe(s.tipo, s.lado);
     const ladoTxt = lado === "long" ? "LONG (compra)" : "SHORT (venda)";
@@ -2382,7 +2385,8 @@ async function runAlertaProativo() {
       }
     }
     // V57: com o filtro lateral ligado só o PREPARE (ainda não cruzou, sem LIGUE AGORA) passa; o resto da entrada fica barrado mais abaixo
-    const soPrepare = LATERAL_BARRA && lat.bloq && c.info.idadeCandles === null && !!c.aprox && !c.ligue;
+    const soPrepareCalc = lat.bloq && c.info.idadeCandles === null && !!c.aprox && !c.ligue; // seria "só PREPARE" se o filtro estivesse barrando
+    const soPrepare = LATERAL_BARRA && soPrepareCalc; // efeito real: só vale quando o filtro realmente barra
     const cruzou = ladoAtual(c.info) === c.lado;
     const chatsContra = ALERT_CHAT_IDS.filter((ch) => cruzou && posDe(ch, inst).some((p) => p.lado !== c.lado));
     const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
@@ -2436,10 +2440,13 @@ async function runAlertaProativo() {
       console.log(`₿ ${inst} LONG de reversão/fundo barrado: BTC ${confRes.btcVar.toFixed(1)}% na última hora (limite -${BTC_BLOQ_REV_PCT}%)`);
       continue;
     }
-    if (LATERAL_BARRA && lat.bloq && !contraPos && !soPrepare) {
-      if (latContar(lat, inst, c.lado)) barradosLat++;
-      console.log(`🧱 ${inst} ${c.lado} barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
-      continue;
+    const barradoPeloLateral = lat.bloq && !contraPos && !soPrepareCalc; // seria barrado pelo filtro, independente do modo
+    if (barradoPeloLateral) {
+      if (latContar(lat, inst, c.lado)) barradosLat++; // conta sempre (estatística), mesmo em modo visual
+      if (LATERAL_BARRA) {
+        console.log(`🧱 ${inst} ${c.lado} barrado: mercado lateral (BTC ADX ${fmtAdx(lat.btc)} · ETH ADX ${fmtAdx(lat.eth)})`);
+        continue;
+      }
     }
     const ligarTxt = c.aprox
       ? (c.ligue
