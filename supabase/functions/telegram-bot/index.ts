@@ -1,4 +1,4 @@
-// telegram-bot V58 (V57 + painel do dia atualiza mesmo com todo mundo em silêncio/pausa, chamado antes do corte por todosSil) (V57 = V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
+// telegram-bot V62 (V61 + quando o ADX sobe mas o DI oculto (V60) mostra que quem puxa é o lado oposto ao do robô, a linha vira \"ADX subindo, mas puxado pelo lado oposto (+0)\" em vez de sumir — some da lista de motivos, sem nunca citar +DI/−DI) (V61 = V60 + ADX mínimo por moeda descido de 18 para 15 (FILTRO_ADX_MIN), pra pegar sinal mais cedo agora que o DI oculto (V60) já filtra falso cruzamento por trás; ADX do filtro de mercado lateral (BTC/ETH) continua em 18, sem mudança (LATERAL_ADX_BLOQ/LIBERA); X_ADX_FRACO (texto do BTC no painel) desamarrado de FILTRO_ADX_MIN, próprio env, também 18) (V60 = V59 + +DI/−DI calculado por trás do ADX, sem aparecer em nenhuma mensagem: em continuação, se a força do ADX vem do lado oposto ao do robô, o ADX forte vale +1 em vez de +2 e o ADX subindo não pontua; em reversão nada muda; DI_OCULTO=0 desliga, DI_GAP_MIN=5 é a folga mínima entre +DI e −DI) (V59 = V58 + aviso 📉 quando o mercado ENTRA em lateral (espelho do 📈 saindo; mesmo intervalo de 30 min; LATERAL_AVISO_ENTROU=0 desliga); linha ⚠️ no /analise quando a moeda já esticou ≥3× ATR a favor do robô e nenhum radar de reversão acendeu (entrada tardia); o \"FIM DO RESUMO DO DIA\" se apaga sozinho depois de 24h, PAINEL_FIM_APAGAR_H=0 desliga) (V58 = V57 + painel do dia atualiza mesmo com todo mundo em silêncio/pausa, chamado antes do corte por todosSil) (V57 = V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
 // telegram-bot V56 (V55 + revisão dos filtros: volume mínimo aplicado ANTES do corte top-N nos pools de alerta e das listas (moeda ilíquida não gasta mais vaga); /config descreve o RSI do modo pump como ele roda (LONG só barra acima de FILTRO_RSI_MAX_LONG, SHORT só abaixo de FILTRO_RSI_MIN) e o volume em M; serrote: textos dizem "trocas em 4h" (entrar/sair da faixa conta) e o limiar do aviso/penalidade segue SERROTE_MAX; X_ADX_FRACO segue FILTRO_ADX_MIN; log único dos campos de volume do ticker pra conferir a unidade)
 // telegram-bot V55 (V54 + painel do dia de 21h a 21h: 1 mensagem editada a cada hora, BTC subindo/caindo, comparação desde as 21h e desde as 8h, vira "FIM DO RESUMO DO DIA" na virada; agenda econômica: aviso 60 e 15 min antes de dado de alto impacto (CPI, payroll, FOMC...) pra evitar operar; bloco "agenda de hoje" no resumo da manhã e "amanhã" no da noite (sem mensagem extra, sem duplicar); /agenda; cache em memória + Supabase e aviso quando a fonte está fora)
 // telegram-bot V54 (V53 + /robo: emoji 🪙 no nome da moeda no lugar da bolinha 🟢/🔴 de PnL (colidia com o emoji de estado da linha de baixo); rótulo "LIGUE AGORA" único (os alertas diziam "LIGUE O ROBÔ AGORA" no corpo e "LIGUE AGORA" no título e no /help); linha de PnL própria com 😎 (ganhando) / 🤧 (perdendo) e liq em linha separada; nos outros lugares (/analise, /agora, alertas de posição e de proteção) o PnL da posição ganhou ➕/➖ na frente (não quebra mais no celular) e dica de stop alinhada ao trailing (não manda mais "stop na entrada" quando o trailing já manda travar ganho); coerência do repique, sem mudar o nome: limiares do marcador alinhados ao pool (FUNDO_TOQUE_PICO_MIN/
@@ -75,7 +75,7 @@ const CONF_LISTA_TOP = numEnv("CONF_LISTA_TOP", "5"); // V54: quantas moedas de 
 const OPORT_POOL = 40;
 const PAIRS_CACHE_MS = 30 * 60 * 1000;
 let FILTRO_VOL_MIN_USDT = numEnv("FILTRO_VOL_MIN_USDT", "1000000");
-let FILTRO_ADX_MIN = numEnv("FILTRO_ADX_MIN", "18");
+let FILTRO_ADX_MIN = numEnv("FILTRO_ADX_MIN", "15"); // V61: era 18 — com o DI oculto (V60) filtrando falso cruzamento por trás, dá pra descer o piso e pegar antecipação sem tanto ruído
 // V57: filtro de mercado lateral (BTC + ETH), com duas faixas pra não ficar ligando/desligando em cima do limite.
 // Bloqueia quando os DOIS estão com ADX < LATERAL_ADX_BLOQ; só libera quando UM deles chega a >= LATERAL_ADX_LIBERA.
 const LATERAL_ON = (Deno.env.get("LATERAL_BLOQ") || "1") !== "0";
@@ -93,6 +93,7 @@ const LATERAL_VOTOS = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS",
 const LATERAL_VOTOS_LIBERA = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS_LIBERA", "1")))); // votos de TENDÊNCIA (em um ativo) pra liberar
 const LATERAL_AVISO_ON = (Deno.env.get("LATERAL_AVISO") || "1") !== "0"; // aviso quando um dos 3 sinais sai da lateral (com o filtro bloqueando)
 const LATERAL_AVISO_MIN = numEnv("LATERAL_AVISO_MIN", "30"); // intervalo mínimo entre dois desses avisos
+const LATERAL_AVISO_ENTROU_ON = (Deno.env.get("LATERAL_AVISO_ENTROU") || "1") !== "0"; // V59: aviso quando o mercado ENTRA em lateral (espelho do aviso de saída; mesmo intervalo mínimo LATERAL_AVISO_MIN)
 const LATERAL_HOLD_MIN = numEnv("LATERAL_HOLD_MIN", "30"); // depois de liberar, espera esse tempo antes de poder bloquear de novo (evita piscar)
 // V58: LATERAL_MODO decide o que o filtro FAZ quando detecta lateral: "bloqueia" (padrão, comportamento V57) barra
 // o LIGUE AGORA e os alertas de entrada; "visual" mantém a leitura/estado/contadores normais, mas não barra nada —
@@ -871,7 +872,7 @@ function calcRSI(closes: number[], period = 14): number {
   if (mediaPerda === 0) return mediaGanho === 0 ? 50 : 100;
   return 100 - 100 / (1 + mediaGanho / mediaPerda);
 }
-type InfoFiltravel = IndicadorInfo & { ddPico?: number; altaVale?: number; top?: FundoRes | null; adx: number; rsi: number; atr: number; adxAntes?: number; volRatio?: number | null; trocas?: number; bottom?: FundoRes | null; rangeRel?: number };
+type InfoFiltravel = IndicadorInfo & { diDom?: "long" | "short" | null; ddPico?: number; altaVale?: number; top?: FundoRes | null; adx: number; rsi: number; atr: number; adxAntes?: number; volRatio?: number | null; trocas?: number; bottom?: FundoRes | null; rangeRel?: number };
 // V36: tamanho das últimas 6 velas em relação ao típico da moeda (≤ 0.7 = velas minúsculas)
 function rangeRelDe(h: number[], l: number[], c: number[]): number | undefined {
   const n = c.length;
@@ -1579,7 +1580,7 @@ async function calcIndicadorFiltro(instId: string): Promise<InfoFiltravel | null
   if (FUNDO_ON) { try { bottom = calcFundoPre(d, info, atr, adx, adxAntes); } catch (e) { console.log("⚠️ calcFundoPre falhou", instId, e); } }
   let top: FundoRes | null = null;
   if (TOPO_ON) { try { top = calcTopoPre(d, info, atr, adx, adxAntes); } catch (e) { console.log("⚠️ calcTopoPre falhou", instId, e); } }
-  return { ...info, adx, adxAntes, rsi: calcRSI(d.c, 14), atr, volRatio: volAcel(d.v), trocas: contarTrocas(d.c), bottom, ddPico: ddDoPico(d.h, info.preco), altaVale: altaDoVale(d.l, info.preco), top, rangeRel: rangeRelDe(d.h, d.l, d.c) };
+  return { ...info, adx, adxAntes, diDom: xDiDominante(d.h, d.l, d.c, 14), rsi: calcRSI(d.c, 14), atr, volRatio: volAcel(d.v), trocas: contarTrocas(d.c), bottom, ddPico: ddDoPico(d.h, info.preco), altaVale: altaDoVale(d.l, info.preco), top, rangeRel: rangeRelDe(d.h, d.l, d.c) };
 }
 type MotivoDescarte = "volume" | "adx" | "rsi" | "dist" | "serrote";
 function motivoDescarte(x: InfoFiltravel, volUsdt: number, checaDist: boolean, lado?: "long" | "short"): MotivoDescarte | null {
@@ -2515,7 +2516,7 @@ const X_TZ_OFFSET_H = numEnv("TZ_OFFSET_H", "-3");
 const X_JANELA_FORTE = 1.15;
 const X_JANELA_FRACA = 0.85;
 const X_ADX_FORTE = 25;
-const X_ADX_FRACO = FILTRO_ADX_MIN; // V56: era 18 fixo; agora segue FILTRO_ADX_MIN (mesma env)
+const X_ADX_FRACO = numEnv("X_ADX_FRACO", "18"); // V61: desamarrado de FILTRO_ADX_MIN — o piso da moeda pode ser 15, mas o texto do BTC no painel continua chamando de "lateral" só abaixo de 18, igual ao filtro de mercado
 const X_MOEDAS_MERCADO = ["BTC-USDT", "ETH-USDT", "SOL-USDT"];
 type XVelas = { t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[] };
 function xMediana(a: number[]) {
@@ -2596,6 +2597,26 @@ function xAdxSerie(h: number[], l: number[], c: number[], p = 14): number[] {
   out.push(a);
   for (let i = p; i < dx.length; i++) { a = (a * (p - 1) + dx[i]) / p; out.push(a); }
   return out;
+}
+// V60: +DI/−DI (mesmo suavizado de Wilder do ADX). Uso INTERNO e oculto: o ADX continua aparecendo igual nas mensagens,
+// o DI só decide quem "puxa" a força — nunca é mostrado. xAdxSerie não foi alterada (o valor do ADX é idêntico ao de antes).
+const DI_OCULTO_ON = (Deno.env.get("DI_OCULTO") || "1") !== "0";
+const DI_GAP_MIN = numEnv("DI_GAP_MIN", "5"); // diferença mínima |+DI − −DI| pra dizer que um lado domina (abaixo disso = null, sem opinião)
+function xDiDominante(h: number[], l: number[], c: number[], p = 14): "long" | "short" | null {
+  const n = c.length;
+  if (n < p * 3) return null;
+  const tr: number[] = [0], pdm: number[] = [0], mdm: number[] = [0];
+  for (let i = 1; i < n; i++) {
+    const up = h[i] - h[i - 1], dn = l[i - 1] - l[i];
+    pdm.push(up > dn && up > 0 ? up : 0);
+    mdm.push(dn > up && dn > 0 ? dn : 0);
+    tr.push(Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1])));
+  }
+  const suav = (a: number[]) => { let s = a.slice(1, p + 1).reduce((x, y) => x + y, 0); for (let i = p + 1; i < a.length; i++) s = s - s / p + a[i]; return s; };
+  const T = suav(tr), P = suav(pdm), M = suav(mdm);
+  if (!(T > 0)) return null;
+  const pdi = (P / T) * 100, mdi = (M / T) * 100;
+  return Math.abs(pdi - mdi) < DI_GAP_MIN ? null : pdi > mdi ? "long" : "short";
 }
 function xDistancia(preco: number, topo: number, fundo: number) {
   if (preco > topo) return { distAbs: ((preco - topo) / topo) * 100, regiao: "acima, já cruzou" };
@@ -2721,12 +2742,12 @@ type LatInd = { adx: number | null; er: number | null; amp: number | null };
 type LateralEst = {
   bloq: boolean; desde: number; flip: number; btc: number | null; eth: number | null; upd: number; dadoT: number; // btc/eth = ADX
   btcEr: number | null; btcAmp: number | null; ethEr: number | null; ethAmp: number | null;
-  tend: string[]; avisoT: number; // sinais (ex.: "BTC|ER") que estavam em tendência na última leitura, e hora do último aviso de saída da lateral
+  tend: string[]; avisoT: number; avisoEntrouT: number; // sinais (ex.: "BTC|ER") que estavam em tendência na última leitura, hora do último aviso de SAÍDA da lateral e do último aviso de ENTRADA
   cont: Record<string, { n: number; ms: number }>; // por ciclo do painel (chave = início do ciclo em ms): sinais barrados e tempo bloqueado
   hk: string[]; hora: number; // chaves moeda|lado já contadas na hora atual (conta 1x por hora, não a cada rodada de 2 min)
   sujo?: boolean;
 };
-const lateralNovo = (): LateralEst => ({ bloq: false, desde: Date.now(), flip: 0, btc: null, eth: null, upd: Date.now(), dadoT: 0, btcEr: null, btcAmp: null, ethEr: null, ethAmp: null, tend: [], avisoT: 0, cont: {}, hk: [], hora: 0 });
+const lateralNovo = (): LateralEst => ({ bloq: false, desde: Date.now(), flip: 0, btc: null, eth: null, upd: Date.now(), dadoT: 0, btcEr: null, btcAmp: null, ethEr: null, ethAmp: null, tend: [], avisoT: 0, avisoEntrouT: 0, cont: {}, hk: [], hora: 0 });
 const fmtAdx = (x: number | null) => (x === null ? "?" : x.toFixed(1));
 const latCiclo = (est: LateralEst, inicio = painelFase().inicio) => (est.cont[String(inicio)] ??= { n: 0, ms: 0 });
 const votosLat = (x: LatInd) => Number(x.adx !== null && x.adx < LATERAL_ADX_BLOQ) + Number(x.er !== null && x.er < LATERAL_ER_BLOQ) + Number(x.amp !== null && x.amp < LATERAL_AMP_BLOQ);
@@ -2789,7 +2810,25 @@ async function avaliarLateral(SB: any): Promise<LateralEst> {
     if (ids.some(Boolean)) { est.avisoT = agora; await lateralSalvar(SB, est); }
     console.log(`📈 saiu da lateral: ${novos.join(", ")} → ${est.bloq ? "ainda bloqueando" : "liberado"} (aviso ${ids.some(Boolean) ? "enviado" : "não confirmado"})`);
   }
+  // V59: espelho do aviso de saída — o filtro acabou de virar false → true (BTC e ETH entraram em lateral). Mesmo intervalo mínimo (LATERAL_AVISO_MIN), contador próprio
+  const querAvisoEntrou = LATERAL_AVISO_ENTROU_ON && est.bloq && !antes && agora - est.avisoEntrouT >= LATERAL_AVISO_MIN * 60000;
+  if (querAvisoEntrou) {
+    const msg = msgEntrouLateral(est);
+    const ids = await Promise.all(ALERT_CHAT_IDS.filter((ch) => !silChat(ch)).map((ch) => enviarAlertaMoeda(SB, ch, "LATERAL_IN", msg).catch(() => null)));
+    if (ids.some(Boolean)) { est.avisoEntrouT = agora; await lateralSalvar(SB, est); }
+    console.log(`📉 entrou na lateral: BTC ${votosLat(indBtc(est))}/3 · ETH ${votosLat(indEth(est))}/3 (aviso ${ids.some(Boolean) ? "enviado" : "não confirmado"})`);
+  }
   return est;
+}
+// V59: aviso quando o mercado ENTRA em lateral (BTC e ETH com sinais de lateral) — espelho do msgSaiuLateral
+function msgEntrouLateral(est: LateralEst): string {
+  const b = indBtc(est), e = indEth(est);
+  return `📉 <b>Mercado entrando em lateral</b>\n${DIVISOR}\n\n` +
+    `BTC: ${indTxt(b)} → ${votosLat(b)}/3 lateral\nETH: ${indTxt(e)} → ${votosLat(e)}/3 lateral\n\n` +
+    (LATERAL_BARRA
+      ? `🛑 O filtro passa a bloquear o LIGUE AGORA até liberar (precisa de ${latQtdLibera()} em BTC ou ETH).`
+      : `🧱 Aviso visual: nenhum alerta é barrado, mas BTC e ETH perderam direção.`) +
+    `\n<i>Sem tendência, o cruzamento tende a ser falso. Considere desligar o robô nas moedas sem posição e confirme no gráfico.</i>`;
 }
 // V57: aviso quando um dos 3 sinais (ADX/ER/caixa, de BTC ou ETH) sai da lateral e chega no valor de tendência, com o filtro bloqueando
 function msgSaiuLateral(est: LateralEst, novos: string[]): string {
@@ -3392,7 +3431,7 @@ async function runAgora(chatId: number | string, entrada: string) {
   const topA = TOPO_ON ? calcTopoPre(d15, info, atr, adx, adxAntes) : null;
   const ex = await extrasConfianca(instId, fo, apChega);
   const { conf } = pontuar({
-    info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1, ...ex,
+    info, lado, adx, adxDif: adx - adxAntes, diDom: xDiDominante(d15.h, d15.l, d15.c, 14), rsi, volUsdt: v ? v.volUsdt : null, trocas, h1, ...ex,
     btcAdx: btc ? btc.adx : null, fo, volRatio, apChega,
     tipo: tipoDoLado(lado, pct, devolveuMovimento({ ddPico: ddDoPico(d15.h, info.preco), altaVale: altaDoVale(d15.l, info.preco) }, lado)), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
   });
@@ -3447,7 +3486,7 @@ async function snapshotComparar(
   const h1 = d1h ? calcIndicadorDeCloses(instId, d1h.c) : null;
   const ex = await extrasConfianca(instId, fo, apChega);
   const { conf, total } = pontuar({
-    info, lado, adx, adxDif: adx - adxAntes, rsi, volUsdt: v ? v.volUsdt : null, trocas, h1, ...ex,
+    info, lado, adx, adxDif: adx - adxAntes, diDom: xDiDominante(d15.h, d15.l, d15.c, 14), rsi, volUsdt: v ? v.volUsdt : null, trocas, h1, ...ex,
     btcAdx: btc ? btc.adx : null, fo, volRatio, apChega,
     tipo: tipoDoLado(lado, pct, devolveuMovimento({ ddPico: ddDoPico(d15.h, info.preco), altaVale: altaDoVale(d15.l, info.preco) }, lado)), pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
   });
@@ -3546,7 +3585,7 @@ async function runAnalise(chatId: number | string, entrada: string) {
     fundingTendencia(instId, fo ?? { funding: null, oiChg: null }), confiabilidadeMoeda(instId), xRegimeCacheEth(), ethVar1h(), getBookImbalance(instId),
   ]);
   const { motivos, total, veredito, conf } = pontuar({
-    info, lado, adx, adxDif, rsi, volUsdt, trocas, h1, btcAdx: btc ? btc.adx : null, perfil, fo, volRatio, chegadaForte, apChega, tipo: setup?.tipo ?? null, pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
+    info, lado, adx, adxDif, diDom: xDiDominante(d15.h, d15.l, d15.c, 14), rsi, volUsdt, trocas, h1, btcAdx: btc ? btc.adx : null, perfil, fo, volRatio, chegadaForte, apChega, tipo: setup?.tipo ?? null, pct24: pct, bottom: bottomA, top: topA, btcVar: btcV,
     fundingTend: fundingTendA, confiabInst: confiabInstA, ethAdx: ethRegA ? ethRegA.adx : null, ethVar: ethVA, bookImb: bookImbA,
   });
   let invalida: string;
@@ -3575,15 +3614,26 @@ async function runAnalise(chatId: number | string, entrada: string) {
   let fora = `\n${DIVISOR}\n🚪 <b>PARA QUEM ESTÁ DE FORA</b>\n<i>robô desligado: vale ligar agora?</i>\n`;
   fora += subTitulo("🔌 Ligar o robô?") + ligarRoboTxt({ info, lado, vivo, apChega, conf, entradaRobo });
   fora += subTitulo("🧮 Por quê") + motivosTxt(motivos);
+  let radarMostrado = false; // V59: pra saber se o meio-termo "esticou mas nenhum radar de reversão acendeu" precisa do aviso ⚠️
   const quedaA = pct !== null ? quedaEfetiva(pct, Math.max(v ? v.dd : 0, ddPicoA)) : ddPicoA;
   if (bottomA && quedaA >= FUNDO_QUEDA_MIN && ladoAtual(info) !== "long") {
+    radarMostrado = true;
     const finA = await fundoFinal(bottomA, instId, fo);
     fora += `\n🟢 <b>Radar de fundo</b> (${pct !== null ? quedaTxt(pct, quedaA) : `recuou ${quedaA.toFixed(1)}% desde a máxima recente`})\n${fundoTxt(finA)}\n`;
   }
   const altaA = pct !== null ? altaEfetiva(pct, Math.max(v ? v.up : 0, altaValeA)) : altaValeA;
   if (topA && altaA >= TOPO_ALTA_MIN && ladoAtual(info) !== "short") {
+    radarMostrado = true;
     const finT = await topoFinal(topA, instId, fo);
     fora += `\n🔴 <b>Radar de topo</b> (${pct !== null ? altaTxt(pct, altaA) : `subiu ${altaA.toFixed(1)}% desde a mínima recente`})\n${topoTxt(finT)}\n`;
+  }
+  // V59: meio-termo — o preço já está fora da faixa, esticado (≥ 3× ATR) a favor do lado do robô, e nenhum radar de reversão acendeu:
+  // não é reversão, e entrar agora seria continuação tardia. Antes esse "esticada" ficava só dentro da pontuação.
+  if (!radarMostrado && ladoAtual(info) === lado && atr > 0) {
+    const dEst = lado === "long" ? (info.preco - info.topo) / atr : (info.fundo - info.preco) / atr;
+    if (dEst >= 3) {
+      fora += `\n⚠️ <b>Já esticou</b> ${dEst.toFixed(1)}× ATR além da faixa${dEst >= 5 ? " (muito esticada)" : ""} e nenhum radar de reversão acendeu: <i>não é reversão nem continuação segura — ligar agora é entrada tardia.</i>\n`;
+    }
   }
   fora += subTitulo("📍 Onde está");
   fora += `${indicadorTxt(info)}\n${idadeTxt(info.idadeCandles)}\nfech. 15m ${fmtPrice(info.preco)} | topo ${nTopo} | fundo ${nFundo}\n`;
@@ -3646,6 +3696,7 @@ type CtxPontos = {
   tipo?: "oportunidade" | "reversao" | null; pct24?: number | null; bottom?: FundoRes | null; top?: FundoRes | null; btcVar?: number | null;
   velSinal?: VelSinal; fundingTend?: FundingTend; confiabInst?: ConfiabInfo | null;
   ethAdx?: number | null; ethVar?: number | null; bookImb?: number | null;
+  diDom?: "long" | "short" | null; // V60: lado que domina pelo +DI/−DI (oculto, só pesa na pontuação)
 };
 // V43: CONFIANCA_TOTAL_MIN/MAX são o piso e o teto reais de `total` em pontuar(), somando TODOS os add()
 // possíveis (1H, ADX, RSI, volume, idade do cruzamento, velocidade, chegada em janela forte, squeeze,
@@ -3770,10 +3821,13 @@ function pontuar(x: CtxPontos) {
   else if (lado1h === null) add(0, "1H: preço dentro da faixa (sem tendência definida)");
   else if (lado1h === lado) add(2, `1H alinhada com o ${lado === "long" ? "LONG" : "SHORT"}`);
   else add(-2, `1H CONTRA (1H está ${lado1h === "long" ? "acima" : "abaixo"} da faixa)`);
-  if (adx >= X_ADX_FORTE) add(2, `ADX ${adx.toFixed(1)} (tendência forte)`);
+  // V60 (oculto): em continuação, se o +DI/−DI diz que a força vem do lado OPOSTO ao do robô, o ADX alto não conta a favor
+  // (o texto e o número do ADX ficam iguais; só o peso muda). Em reversão não se aplica: a tendência velha é contra por definição.
+  const diContra = DI_OCULTO_ON && tipo !== "reversao" && x.diDom != null && x.diDom !== lado;
+  if (adx >= X_ADX_FORTE) add(diContra ? 1 : 2, `ADX ${adx.toFixed(1)} (tendência forte)`);
   else if (adx >= FILTRO_ADX_MIN) add(1, `ADX ${adx.toFixed(1)} (moderado)`);
   else add(-2, `ADX ${adx.toFixed(1)} (lateral, cruzamentos falham mais)`);
-  if (adxDif > 0.5) add(1, "ADX subindo");
+  if (adxDif > 0.5) { if (diContra) add(0, "ADX subindo, mas puxado pelo lado oposto"); else add(1, "ADX subindo"); }
   else if (adxDif < -0.5) add(-1, "ADX caindo");
   if (ESTRAT_PUMP && tipo === "reversao" && lado === "short") {
     if (rsi < FILTRO_RSI_MIN) add(-2, `RSI ${rsi.toFixed(0)} já muito baixo (queda esticada)`);
@@ -3926,7 +3980,7 @@ async function calcConfiancaAlerta(c: Setup, volUsdt: number | null, perfil: XPe
     const fundingTend = await fundingTendencia(inst, fo);
     const confiabInst = await confiabilidadeMoeda(inst);
     const r = pontuar({
-      info: c.info, lado: c.lado, adx: f.adx ?? 0, adxDif: (f.adx ?? 0) - (f.adxAntes ?? f.adx ?? 0), rsi: f.rsi ?? 50,
+      info: c.info, lado: c.lado, adx: f.adx ?? 0, adxDif: (f.adx ?? 0) - (f.adxAntes ?? f.adx ?? 0), diDom: f.diDom ?? null, rsi: f.rsi ?? 50,
       volUsdt, trocas: f.trocas ?? 0, h1, btcAdx: btc ? btc.adx : null, perfil, fo, volRatio: f.volRatio ?? null,
       chegadaForte: chegadaEmJanelaForte(ap, perfil), apChega: ap, tipo: c.tipo, pct24: c.pct, bottom: f.bottom ?? null, top: f.top ?? null, btcVar: btcV,
       velSinal: velSinal ?? null, fundingTend, confiabInst, ethAdx: ethReg ? ethReg.adx : null, ethVar: ethV, bookImb,
@@ -4692,6 +4746,7 @@ const PAINEL_MIN = numEnv("PAINEL_MIN", "60");
 const PAINEL_PIN = (Deno.env.get("PAINEL_PIN") || "1") !== "0";
 const PAINEL_BTC_PCT = numEnv("PAINEL_BTC_PCT", "0.3");
 const PAINEL_ROW = "_PAINEL_";
+const PAINEL_FIM_APAGAR_H = numEnv("PAINEL_FIM_APAGAR_H", "24"); // V59: o "🏁 FIM DO RESUMO DO DIA" some sozinho depois de X horas (0 = nunca apaga)
 type PainelBase = { t: number; btc: number | null; adx: number | null };
 type PainelEstado = { key: string; inicio: number; ids: Record<string, number>; base: PainelBase; base8?: PainelBase; upd: number; fim?: boolean };
 type PainelSnap = { btc: number; p1: number | null; p4: number | null; p24: number | null; adx: number | null };
@@ -4803,7 +4858,9 @@ async function checarPainel(SB: any) {
     await painelAtualizar(SB, est, true);
     est.fim = true;
     await painelSalvar(SB, est);
-    console.log(`🏁 painel ${est.key} encerrado`);
+    // V59: agenda a exclusão do FIM DO RESUMO (usa o mesmo autoapagar do cron) pra o do dia anterior não acumular no chat
+    if (PAINEL_FIM_APAGAR_H > 0) for (const ch of ALERT_CHAT_IDS) { const id = est.ids[ch]; if (id) await agendarAutoApagar(SB, ch, id, PAINEL_FIM_APAGAR_H * 3600000); }
+    console.log(`🏁 painel ${est.key} encerrado${PAINEL_FIM_APAGAR_H > 0 ? ` (some em ${PAINEL_FIM_APAGAR_H}h)` : ""}`);
   }
   // 2) sem painel neste ciclo: cria
   if (!est || est.key !== fase.key) {
