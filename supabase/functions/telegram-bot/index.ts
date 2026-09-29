@@ -507,8 +507,51 @@ async function iaRegistrarUso(SB: any, provedor: "gemini" | "claude"): Promise<n
     return nova;
   } catch (e) { console.log("⚠️ iaRegistrarUso falhou", e); return 0; }
 }
-async function chamarGemini(sistema: string, usuario: string): Promise<string | null> { const k = Deno.env.get("GEMINI_API_KEY"); if (!k) return null; try { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash"}:generateContent`, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": k }, body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: usuario }] }], generationConfig: { maxOutputTokens: 2000 } }) }); if (!r.ok) { console.log("Gemini falhou", r.status); return null; } const j = await r.json(); const t = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim(); return t || null; } catch (e) { console.log("Gemini erro", e); return null; } }
-async function chamarClaude(sistema: string, usuario: string): Promise<string | null> { const k = Deno.env.get("ANTHROPIC_API_KEY"); if (!k) return null; try { const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "content-type": "application/json", "x-api-key": k, "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: Deno.env.get("CLAUDE_MODEL") || "claude-haiku-4-5-20251001", max_tokens: 600, system: sistema, messages: [{ role: "user", content: usuario }] }) }); if (!r.ok) { console.log("Claude falhou", r.status); return null; } const j = await r.json(); const t = (j?.content || []).map((b: any) => b.text || "").join("").trim(); return t || null; } catch (e) { console.log("Claude erro", e); return null; } }
+const IA_TIMEOUT_MS = numEnv("IA_TIMEOUT_MS", "90000"); // corta a chamada da IA depois disso (evita a função ser derrubada pelo limite do Supabase sem avisar)
+const IA_MAX_TOKENS_GEMINI = numEnv("IA_MAX_TOKENS_GEMINI", "4000");
+async function chamarGemini(sistema: string, usuario: string): Promise<string | null> {
+  const k = Deno.env.get("GEMINI_API_KEY"); if (!k) return null;
+  const modelo = Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`;
+  // modelos 3.x "pensam" antes de responder: nível LOW deixa mais rápido e evita gastar o limite de saída só pensando.
+  // GEMINI_THINKING=off desliga esse ajuste.
+  const usaThinking = modelo.startsWith("gemini-3") && (Deno.env.get("GEMINI_THINKING") || "low").toLowerCase() !== "off";
+  const chamar = (comThinking: boolean) => fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": k },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: sistema }] },
+      contents: [{ role: "user", parts: [{ text: usuario }] }],
+      generationConfig: { maxOutputTokens: IA_MAX_TOKENS_GEMINI, ...(comThinking ? { thinkingConfig: { thinkingLevel: "LOW" } } : {}) },
+    }),
+    signal: AbortSignal.timeout(IA_TIMEOUT_MS),
+  });
+  try {
+    let r = await chamar(usaThinking);
+    if (!r.ok && r.status === 400 && usaThinking) { console.log("Gemini 400 com thinkingLevel - tentando sem"); r = await chamar(false); }
+    if (!r.ok) { console.log("Gemini falhou", r.status, (await r.text().catch(() => "")).slice(0, 200)); return null; }
+    const j = await r.json();
+    const cand = j?.candidates?.[0];
+    const t = (cand?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || "").join("").trim();
+    if (!t) console.log("Gemini vazio", cand?.finishReason || j?.promptFeedback?.blockReason || "sem motivo");
+    return t || null;
+  } catch (e) { console.log("Gemini erro", e); return null; }
+}
+async function chamarClaude(sistema: string, usuario: string): Promise<string | null> {
+  const k = Deno.env.get("ANTHROPIC_API_KEY"); if (!k) return null;
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": k, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: Deno.env.get("CLAUDE_MODEL") || "claude-haiku-4-5-20251001", max_tokens: 600, system: sistema, messages: [{ role: "user", content: usuario }] }),
+      signal: AbortSignal.timeout(IA_TIMEOUT_MS),
+    });
+    if (!r.ok) { console.log("Claude falhou", r.status, (await r.text().catch(() => "")).slice(0, 200)); return null; }
+    const j = await r.json();
+    const t = (j?.content || []).map((b: any) => b.text || "").join("").trim();
+    return t || null;
+  } catch (e) { console.log("Claude erro", e); return null; }
+}
 async function runIA(chatId: number | string, moeda: string, extra: string, prov: "gemini" | "claude") {
   const nome = prov === "gemini" ? "Gemini" : "Claude";
   const secret = prov === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
@@ -534,7 +577,9 @@ async function runIA(chatId: number | string, moeda: string, extra: string, prov
     const restante = Math.max(0, limite - usoDepois);
     if (restante <= IA_AVISO_RESTANTE) rodape = `\n\n⚠️ <i>Restam ${restante} consulta${restante === 1 ? "" : "s"} do ${nome} hoje (limite diário ${limite}).</i>`;
   }
-  await sendTelegram(chatId, `${cab}\n${limpo(resp).slice(0, 3500)}${rodape}`);
+  // a IA responde em Markdown; o Telegram do bot usa HTML. Escapa primeiro (limpo) e só depois cria as tags.
+  const md = (t: string) => limpo(t).replace(/\*\*(.+?)\*\*/gs, "<b>$1</b>").replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>").replace(/^\s*[*-]\s+/gm, "• ");
+  await sendTelegram(chatId, `${cab}\n${md(resp.slice(0, 3500))}${rodape}`);
 }
 // V47: avisos de deriva das escalas (confFundo/pontuar) e de outros erros "silenciosos" só iam pro
 // console.log do Deno Deploy — ninguém vê a menos que entre no painel de logs por acaso. avisarAdmin()
