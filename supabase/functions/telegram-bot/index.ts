@@ -1,4 +1,4 @@
-// telegram-bot V63 (V62 + o radar de fundo/topo (a nota "Sinal de fundo/topo: X/10" do /analise, /fundo, /topo) agora também olha book e inclinação da faixa, igual a pontuação principal já fazia — antes só via funding/OI/BTC, então podia sair baixo mesmo com book e inclinação já sinalizando reversão junto; no /analise, no /fundo e no /topo a inclinação entra (já calculada ali); nas listas em massa (fundoLista/topoLista) só o book entra por enquanto, sem inclinação, pra não pesar a varredura de todas as moedas) (V62 = V61 + quando o ADX sobe mas o DI oculto (V60) mostra que quem puxa é o lado oposto ao do robô, a linha vira "ADX subindo, mas puxado pelo lado oposto (+0)" em vez de sumir — some da lista de motivos, sem nunca citar +DI/−DI) (V61 = V60 + ADX mínimo por moeda descido de 18 para 15 (FILTRO_ADX_MIN), pra pegar sinal mais cedo agora que o DI oculto (V60) já filtra falso cruzamento por trás; ADX do filtro de mercado lateral (BTC/ETH) continua em 18, sem mudança (LATERAL_ADX_BLOQ/LIBERA); X_ADX_FRACO (texto do BTC no painel) desamarrado de FILTRO_ADX_MIN, próprio env, também 18) (V60 = V59 + +DI/−DI calculado por trás do ADX, sem aparecer em nenhuma mensagem: em continuação, se a força do ADX vem do lado oposto ao do robô, o ADX forte vale +1 em vez de +2 e o ADX subindo não pontua; em reversão nada muda; DI_OCULTO=0 desliga, DI_GAP_MIN=5 é a folga mínima entre +DI e −DI) (V59 = V58 + aviso 📉 quando o mercado ENTRA em lateral (espelho do 📈 saindo; mesmo intervalo de 30 min; LATERAL_AVISO_ENTROU=0 desliga); linha ⚠️ no /analise quando a moeda já esticou ≥3× ATR a favor do robô e nenhum radar de reversão acendeu (entrada tardia); o "FIM DO RESUMO DO DIA" se apaga sozinho depois de 24h, PAINEL_FIM_APAGAR_H=0 desliga) (V58 = V57 + painel do dia atualiza mesmo com todo mundo em silêncio/pausa, chamado antes do corte por todosSil) (V57 = V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
+// telegram-bot V64 (V63 + comandos /pergunta MOEDA (IA Gemini) e /veredito MOEDA (IA Claude): pegam o texto completo do /analise e mandam pra IA escolhida, que responde em cima dele; secrets GEMINI_API_KEY e ANTHROPIC_API_KEY, cada comando usa só o seu provedor) (V63 = V62 + o radar de fundo/topo (a nota "Sinal de fundo/topo: X/10" do /analise, /fundo, /topo) agora também olha book e inclinação da faixa, igual a pontuação principal já fazia — antes só via funding/OI/BTC, então podia sair baixo mesmo com book e inclinação já sinalizando reversão junto; no /analise, no /fundo e no /topo a inclinação entra (já calculada ali); nas listas em massa (fundoLista/topoLista) só o book entra por enquanto, sem inclinação, pra não pesar a varredura de todas as moedas) (V62 = V61 + quando o ADX sobe mas o DI oculto (V60) mostra que quem puxa é o lado oposto ao do robô, a linha vira "ADX subindo, mas puxado pelo lado oposto (+0)" em vez de sumir — some da lista de motivos, sem nunca citar +DI/−DI) (V61 = V60 + ADX mínimo por moeda descido de 18 para 15 (FILTRO_ADX_MIN), pra pegar sinal mais cedo agora que o DI oculto (V60) já filtra falso cruzamento por trás; ADX do filtro de mercado lateral (BTC/ETH) continua em 18, sem mudança (LATERAL_ADX_BLOQ/LIBERA); X_ADX_FRACO (texto do BTC no painel) desamarrado de FILTRO_ADX_MIN, próprio env, também 18) (V60 = V59 + +DI/−DI calculado por trás do ADX, sem aparecer em nenhuma mensagem: em continuação, se a força do ADX vem do lado oposto ao do robô, o ADX forte vale +1 em vez de +2 e o ADX subindo não pontua; em reversão nada muda; DI_OCULTO=0 desliga, DI_GAP_MIN=5 é a folga mínima entre +DI e −DI) (V59 = V58 + aviso 📉 quando o mercado ENTRA em lateral (espelho do 📈 saindo; mesmo intervalo de 30 min; LATERAL_AVISO_ENTROU=0 desliga); linha ⚠️ no /analise quando a moeda já esticou ≥3× ATR a favor do robô e nenhum radar de reversão acendeu (entrada tardia); o "FIM DO RESUMO DO DIA" se apaga sozinho depois de 24h, PAINEL_FIM_APAGAR_H=0 desliga) (V58 = V57 + painel do dia atualiza mesmo com todo mundo em silêncio/pausa, chamado antes do corte por todosSil) (V57 = V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
 // telegram-bot V56 (V55 + revisão dos filtros: volume mínimo aplicado ANTES do corte top-N nos pools de alerta e das listas (moeda ilíquida não gasta mais vaga); /config descreve o RSI do modo pump como ele roda (LONG só barra acima de FILTRO_RSI_MAX_LONG, SHORT só abaixo de FILTRO_RSI_MIN) e o volume em M; serrote: textos dizem "trocas em 4h" (entrar/sair da faixa conta) e o limiar do aviso/penalidade segue SERROTE_MAX; X_ADX_FRACO segue FILTRO_ADX_MIN; log único dos campos de volume do ticker pra conferir a unidade)
 // telegram-bot V55 (V54 + painel do dia de 21h a 21h: 1 mensagem editada a cada hora, BTC subindo/caindo, comparação desde as 21h e desde as 8h, vira "FIM DO RESUMO DO DIA" na virada; agenda econômica: aviso 60 e 15 min antes de dado de alto impacto (CPI, payroll, FOMC...) pra evitar operar; bloco "agenda de hoje" no resumo da manhã e "amanhã" no da noite (sem mensagem extra, sem duplicar); /agenda; cache em memória + Supabase e aviso quando a fonte está fora)
 // telegram-bot V54 (V53 + /robo: emoji 🪙 no nome da moeda no lugar da bolinha 🟢/🔴 de PnL (colidia com o emoji de estado da linha de baixo); rótulo "LIGUE AGORA" único (os alertas diziam "LIGUE O ROBÔ AGORA" no corpo e "LIGUE AGORA" no título e no /help); linha de PnL própria com 😎 (ganhando) / 🤧 (perdendo) e liq em linha separada; nos outros lugares (/analise, /agora, alertas de posição e de proteção) o PnL da posição ganhou ➕/➖ na frente (não quebra mais no celular) e dica de stop alinhada ao trailing (não manda mais "stop na entrada" quando o trailing já manda travar ganho); coerência do repique, sem mudar o nome: limiares do marcador alinhados ao pool (FUNDO_TOQUE_PICO_MIN/
@@ -480,6 +480,61 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
   } catch (e) { console.log("Erro sendTelegram", e); }
   if (id && typeof chatId === "number" && !opts?.semUi) await uiRegistrar(chatId, id).catch(() => {});
   return id;
+}
+const IA_TABELA = "ia_uso";
+const IA_LIMITE_DIARIO_GEMINI = numEnv("IA_LIMITE_DIARIO_GEMINI", "0"); // 0 = sem limite
+const IA_LIMITE_DIARIO_CLAUDE = numEnv("IA_LIMITE_DIARIO_CLAUDE", "0"); // 0 = sem limite
+const IA_AVISO_RESTANTE = numEnv("IA_AVISO_RESTANTE", "5"); // avisa quando faltar isso ou menos
+function iaDiaHoje(): string { return new Date(Date.now() + X_TZ_OFFSET_H * 3600000).toISOString().slice(0, 10); }
+// Lê o uso de hoje sem gravar nada (usado pra decidir se ainda dá pra consultar antes de gastar chamada de API).
+async function iaUsoHoje(SB: any, provedor: "gemini" | "claude"): Promise<number> {
+  if (!SB) return 0;
+  try {
+    const { data } = await SB.from(IA_TABELA).select("contagem").eq("dia", iaDiaHoje()).eq("provedor", provedor).maybeSingle();
+    return data?.contagem ?? 0;
+  } catch (e) { console.log("⚠️ iaUsoHoje falhou", e); return 0; }
+}
+// Soma 1 ao contador do dia (upsert manual: lê, soma, grava — sem transação, mas o volume de uso é baixo o
+// suficiente pra corrida entre requisições ser um risco desprezível aqui).
+async function iaRegistrarUso(SB: any, provedor: "gemini" | "claude"): Promise<number> {
+  if (!SB) return 0;
+  const dia = iaDiaHoje();
+  try {
+    const { data } = await SB.from(IA_TABELA).select("contagem").eq("dia", dia).eq("provedor", provedor).maybeSingle();
+    const nova = (data?.contagem ?? 0) + 1;
+    const { error } = await SB.from(IA_TABELA).upsert({ dia, provedor, contagem: nova }, { onConflict: "dia,provedor" });
+    if (error) console.log("⚠️ iaRegistrarUso upsert falhou", error.message);
+    return nova;
+  } catch (e) { console.log("⚠️ iaRegistrarUso falhou", e); return 0; }
+}
+async function chamarGemini(sistema: string, usuario: string): Promise<string | null> { const k = Deno.env.get("GEMINI_API_KEY"); if (!k) return null; try { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash"}:generateContent`, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": k }, body: JSON.stringify({ systemInstruction: { parts: [{ text: sistema }] }, contents: [{ role: "user", parts: [{ text: usuario }] }], generationConfig: { maxOutputTokens: 2000 } }) }); if (!r.ok) { console.log("Gemini falhou", r.status); return null; } const j = await r.json(); const t = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim(); return t || null; } catch (e) { console.log("Gemini erro", e); return null; } }
+async function chamarClaude(sistema: string, usuario: string): Promise<string | null> { const k = Deno.env.get("ANTHROPIC_API_KEY"); if (!k) return null; try { const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "content-type": "application/json", "x-api-key": k, "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: Deno.env.get("CLAUDE_MODEL") || "claude-haiku-4-5-20251001", max_tokens: 600, system: sistema, messages: [{ role: "user", content: usuario }] }) }); if (!r.ok) { console.log("Claude falhou", r.status); return null; } const j = await r.json(); const t = (j?.content || []).map((b: any) => b.text || "").join("").trim(); return t || null; } catch (e) { console.log("Claude erro", e); return null; } }
+async function runIA(chatId: number | string, moeda: string, extra: string, prov: "gemini" | "claude") {
+  const nome = prov === "gemini" ? "Gemini" : "Claude";
+  const secret = prov === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
+  if (!Deno.env.get(secret)) { await sendTelegram(chatId, `⚠️ ${secret} não está configurada no Supabase, então não dá pra usar o ${nome}.`); return; }
+  const limite = prov === "gemini" ? IA_LIMITE_DIARIO_GEMINI : IA_LIMITE_DIARIO_CLAUDE;
+  const SB = getSupabase();
+  if (limite > 0) {
+    const usoAntes = await iaUsoHoje(SB, prov);
+    if (usoAntes >= limite) { await sendTelegram(chatId, `⛔ Limite diário do ${nome} atingido (${usoAntes}/${limite} hoje). Volta a funcionar amanhã, ou aumente ${prov === "gemini" ? "IA_LIMITE_DIARIO_GEMINI" : "IA_LIMITE_DIARIO_CLAUDE"} nos Secrets.`); return; }
+  }
+  let partes: string[] = []; await runAnalise(chatId, moeda, (p) => { partes = p; }); if (!partes.length) return;
+  const ctx = partes.join("\n").replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").slice(0, 12000);
+  const sistema = "Você responde só com base na análise fornecida, em português, de forma curta e direta. Se a análise não trouxer a informação pedida, diga que não consta. Não invente números e não dê recomendação de investimento.";
+  const pedido = extra ? extra : "Dê um veredito curto: o cenário está a favor de ligar o robô agora, de esperar ou de evitar? Cite os 2 ou 3 motivos principais e o principal risco.";
+  const usuario = `ANÁLISE:\n${ctx}\n\nPEDIDO: ${pedido}`;
+  const resp = prov === "gemini" ? await chamarGemini(sistema, usuario) : await chamarClaude(sistema, usuario);
+  const limpo = (t: string) => t.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" } as any)[c]);
+  const cab = `${prov === "gemini" ? "🤖" : "⚖️"} <b>${nome} · ${limpo(moeda).slice(0, 20).toUpperCase()}</b>`;
+  if (!resp) { await sendTelegram(chatId, `${cab}\n⚠️ O ${nome} não respondeu agora (limite, crédito ou erro). Tente de novo daqui a pouco.`); return; }
+  let rodape = "";
+  if (limite > 0) {
+    const usoDepois = await iaRegistrarUso(SB, prov);
+    const restante = Math.max(0, limite - usoDepois);
+    if (restante <= IA_AVISO_RESTANTE) rodape = `\n\n⚠️ <i>Restam ${restante} consulta${restante === 1 ? "" : "s"} do ${nome} hoje (limite diário ${limite}).</i>`;
+  }
+  await sendTelegram(chatId, `${cab}\n${limpo(resp).slice(0, 3500)}${rodape}`);
 }
 // V47: avisos de deriva das escalas (confFundo/pontuar) e de outros erros "silenciosos" só iam pro
 // console.log do Deno Deploy — ninguém vê a menos que entre no painel de logs por acaso. avisarAdmin()
@@ -3555,7 +3610,7 @@ async function runComparar(chatId: number | string, entradaA: string, entradaB: 
   }
   await sendTelegram(chatId, cortar(msg), [...botaoAnalisar(a.instId), ...botaoAnalisar(b.instId)]);
 }
-async function runAnalise(chatId: number | string, entrada: string) {
+async function runAnalise(chatId: number | string, entrada: string, capturar?: (p: string[]) => void) {
   const instId = await resolverPar(entrada);
   if (!instId) { await sendTelegram(chatId, `⚠️ Não achei a moeda "${entrada.replace(/[<>&]/g, "").slice(0, 20)}" na lista de futuros. Exemplo: /analise ONE`); return; }
   const [d15, d1h, vars, perfil, btc, fo, vivo, btcV, posLista] = await Promise.all([
@@ -3706,6 +3761,7 @@ async function runAnalise(chatId: number | string, entrada: string) {
   } catch { }
   rodape += `${rodape ? "\n" : ""}<i>Estatístico, não é recomendação.</i>`;
 
+  if (capturar) { capturar([cab, fora, dentro, rodape]); return; }
   await enviarPartes(chatId, [cab, fora, dentro, rodape]);
 }
 type Motivo = { pts: number; txt: string };
@@ -5725,6 +5781,12 @@ function textoAjuda(chatId: number | string, modoAtual: Modo, remetente: number 
     : "🔎 /analise ONE — veredito, \"ligar o robô?\" (PREPARE / LIGUE AGORA) e guia pra quem está de fora e pra quem já está dentro\n" +
       "📸 /agora ONE — retrato rápido: tempo até o fechamento, distância às duas linhas, confiança e se já tocou e recuou (pra decidir \"ligo agora ou não?\" sem ler o /analise inteiro)\n" +
       "⚖️ /comparar MOEDA1 MOEDA2 — roda o mesmo cálculo de confiança do /agora nas duas e mostra lado a lado, com o veredito de qual sinal está mais forte agora\n";
+  t += `${MINI_DIVISOR}\n<b>🧠 Perguntar à IA</b>\n`;
+  t += c
+    ? `🤖 /pergunta ONE [pergunta] — Gemini\n⚖️ /veredito ONE [pergunta] — Claude\n🎓 /estudo — checklist antes de ligar o robô\n`
+    : "🤖 /pergunta ONE [pergunta] — roda o /analise da moeda e manda pro Gemini responder; sem pergunta, ele dá um veredito curto (ligar, esperar ou evitar)\n" +
+      "⚖️ /veredito ONE [pergunta] — igual o /pergunta, mas usa o Claude\n" +
+      "🎓 /estudo — checklist com os 7 pontos pra conferir no /analise antes de decidir ligar o robô\n";
   t += `${MINI_DIVISOR}\n`;
   t += c
     ? `🚀 /oportunidade · 🔄 /reversao — perto do Indicador, a favor/contra o dia\n`
@@ -5766,6 +5828,26 @@ function textoAjuda(chatId: number | string, modoAtual: Modo, remetente: number 
   }
   return t;
 }
+function textoEstudo(): string {
+  let t = `🎓 <b>CHECKLIST — antes de ligar o robô</b>\n${DIVISOR}\n\n`;
+  t += `Baseado no que já sai no /analise. Leia de cima pra baixo antes de decidir.\n\n`;
+  t += `${MINI_DIVISOR}\n<b>1. Cruzou há quanto tempo?</b>\n`;
+  t += `Olha "cruzou há ~X min" ou "cruzada há Xh Ymin (já passou)". Fresco (dentro de 2 velas) = ok. Já passou = é o caso de atraso — redobre a atenção nos próximos pontos.\n\n`;
+  t += `${MINI_DIVISOR}\n<b>2. Apareceu a linha ⚠️ "já esticou"?</b>\n`;
+  t += `Se sim, o preço já foi longe demais a favor do robô sem nenhum radar de reversão ter acendido — nem continuação segura, nem reversão. É o sinal mais direto de "não é hora".\n\n`;
+  t += `${MINI_DIVISOR}\n<b>3. Apareceu "ADX subindo, mas puxado pelo lado oposto"?</b>\n`;
+  t += `Se essa frase está na lista de motivos, o ADX está enganando: a força de verdade é do lado contrário. Não bloqueia sozinho, mas pesa contra.\n\n`;
+  t += `${MINI_DIVISOR}\n<b>4. Tem radar de fundo ou topo aceso?</b>\n`;
+  t += `Se sim, o esticado ali é sinal de possível reversão, não de continuação — decisão diferente do item 2 (que é quando NENHUM radar acendeu).\n\n`;
+  t += `${MINI_DIVISOR}\n<b>5. O filtro de lateral está bloqueando?</b>\n`;
+  t += `Olha se apareceu o aviso de mercado lateral (BTC/ETH). Se sim, o cruzamento tende a ser falso — segure antes de ligar.\n\n`;
+  t += `${MINI_DIVISOR}\n<b>6. Funding e BTC/ETH estão a favor ou contra?</b>\n`;
+  t += `Funding esticado do mesmo lado do robô = multidão lotada, risco de virada brusca. BTC/ETH puxando forte contra = mais um motivo pra esperar.\n\n`;
+  t += `${MINI_DIVISOR}\n<b>7. A confiança geral do /analise está alta?</b>\n`;
+  t += `Depois de olhar os pontos específicos, confira se a pontuação final bate com o que os itens acima sugeriram. Se todo o resto aponta cautela mas a nota ainda saiu alta, vale entender por quê antes de confiar cegamente no número.\n\n`;
+  t += `${DIVISOR}\n<i>Estatístico, não é recomendação. Rode /analise MOEDA e volte aqui pra conferir item por item.</i>`;
+  return t;
+}
 function montarConfig(): string {
   const on = (b: boolean) => (b ? "ligado" : "desligado");
   const tz = `UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}`;
@@ -5795,6 +5877,7 @@ function montarConfig(): string {
   m += `⏱ Cron: aviso se parar > ${CRON_AVISO_MIN} min (/status alerta > ${CRON_ALERTA_MIN} min) · trava contra sobreposição ${(CRON_LOCK_TIMEOUT_MS / 1000).toFixed(0)}s\n`;
   m += `🎯 Antecipação: auto-calibração ${on(AUTO_CALIB_ON)} a cada ${AUTO_CALIB_INTERVALO_H}h (janela ${AUTO_CALIB_DIAS}d, mín. ${ANTEC_CALIB_MIN} amostras) · confiabilidade por moeda: mín. ${CONFIAB_MIN_AMOSTRA} em até ${CONFIAB_JANELA_N} últimas previsões\n`;
   m += `\n${MINI_DIVISOR}\n`;
+  m += `🧠 <b>IA (/pergunta e /veredito)</b>\n• Gemini: ${Deno.env.get("GEMINI_API_KEY") ? "chave configurada ✅" : "SEM chave (GEMINI_API_KEY) ⚠️"}${IA_LIMITE_DIARIO_GEMINI > 0 ? ` · limite ${IA_LIMITE_DIARIO_GEMINI}/dia` : " · sem limite diário"}\n• Claude: ${Deno.env.get("ANTHROPIC_API_KEY") ? "chave configurada ✅" : "SEM chave (ANTHROPIC_API_KEY) ⚠️"}${IA_LIMITE_DIARIO_CLAUDE > 0 ? ` · limite ${IA_LIMITE_DIARIO_CLAUDE}/dia` : " · sem limite diário"}\n• aviso quando faltar ≤ ${IA_AVISO_RESTANTE} consultas · env: IA_LIMITE_DIARIO_GEMINI, IA_LIMITE_DIARIO_CLAUDE (0 = sem limite), IA_AVISO_RESTANTE, GEMINI_MODEL, CLAUDE_MODEL\n\n`;
   m += `👥 <b>Acesso</b>: ${ALLOWED_CHAT_IDS.length} chat(s) autorizado(s) · ${ALERT_CHAT_IDS.length} recebem alertas${ALERT_EXCLUIR.length ? ` (${ALERT_EXCLUIR.length} excluído(s))` : ""} · ${Object.keys(BLOFIN_USERS).length + (BLOFIN_LEGADO ? 1 : 0)} com chave BloFin\n`;
   m += `🔑 Admin: <b>${ADMIN_CHAT_ID || "não definido"}</b>\n`;
   if (!adminFixo) m += `⚠️ <i>Admin vem do 1º ID de ALLOWED_CHAT_IDS. Fixe ADMIN_CHAT_ID nos Secrets para não mudar se você reordenar a lista.</i>\n`;
@@ -5955,6 +6038,17 @@ Deno.serve(async (req) => {
     }
     if (text.startsWith("/lista")) {
       await comAguarde("🔍 Montando a lista de acompanhamento, aguarde...", () => runLista(chatId));
+      return new Response("ok");
+    }
+    if (text.startsWith("/pergunta") || text.startsWith("/veredito")) {
+      const prov: "gemini" | "claude" = text.startsWith("/veredito") ? "claude" : "gemini";
+      const [, moeda, ...resto] = text.split(/\s+/);
+      if (!moeda) { await sendTelegram(chatId, prov === "gemini" ? "🤖 Use: /pergunta MOEDA (ex.: /pergunta one). Se quiser, acrescente uma pergunta: /pergunta one vale ligar agora?" : "⚖️ Use: /veredito MOEDA (ex.: /veredito one). Se quiser, acrescente uma pergunta: /veredito one vale ligar agora?"); return new Response("ok"); }
+      await comAguarde(prov === "gemini" ? "🤖 Analisando e consultando o Gemini, aguarde..." : "⚖️ Analisando e consultando o Claude, aguarde...", () => runIA(chatId, moeda, resto.join(" ").trim(), prov));
+      return new Response("ok");
+    }
+    if (text.startsWith("/estudo")) {
+      await sendTelegram(chatId, textoEstudo());
       return new Response("ok");
     }
     if (text.startsWith("/analise") || text.startsWith("/análise")) {
