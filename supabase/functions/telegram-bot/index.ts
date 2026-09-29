@@ -564,7 +564,7 @@ async function runIA(chatId: number | string, moeda: string, extra: string, prov
   }
   let partes: string[] = []; await runAnalise(chatId, moeda, (p) => { partes = p; }); if (!partes.length) return;
   const ctx = partes.join("\n").replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").slice(0, 12000);
-  const sistema = "Você responde só com base na análise fornecida, em português, de forma curta e direta. Se a análise não trouxer a informação pedida, diga que não consta. Não invente números e não dê recomendação de investimento.";
+  const sistema = "Você responde só com base na análise fornecida, em português, de forma curta e direta. Se a análise não trouxer a informação pedida, diga que não consta. Não invente números e não dê recomendação de investimento. Sempre mostre os DOIS lados: os pontos a favor e os riscos ou sinais de atenção que constarem na análise (radar de topo ou fundo, notas de topo e fundo, RSI, distância da faixa, quanto o preço já devolveu da máxima), mesmo que o quadro geral pareça positivo ou negativo. Não omita um risco só porque a tendência é forte. Cite os números da análise que sustentam cada ponto.";
   const pedido = extra ? extra : "Dê um veredito curto: o cenário está a favor de ligar o robô agora, de esperar ou de evitar? Cite os 2 ou 3 motivos principais e o principal risco.";
   const usuario = `ANÁLISE:\n${ctx}\n\nPEDIDO: ${pedido}`;
   const resp = prov === "gemini" ? await chamarGemini(sistema, usuario) : await chamarClaude(sistema, usuario);
@@ -578,7 +578,7 @@ async function runIA(chatId: number | string, moeda: string, extra: string, prov
     if (restante <= IA_AVISO_RESTANTE) rodape = `\n\n⚠️ <i>Restam ${restante} consulta${restante === 1 ? "" : "s"} do ${nome} hoje (limite diário ${limite}).</i>`;
   }
   // a IA responde em Markdown; o Telegram do bot usa HTML. Escapa primeiro (limpo) e só depois cria as tags.
-  const md = (t: string) => limpo(t).replace(/\*\*(.+?)\*\*/gs, "<b>$1</b>").replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>").replace(/^\s*[*-]\s+/gm, "• ");
+  const md = (t: string) => limpo(t).replace(/\*\*(.+?)\*\*/gs, "<b>$1</b>").replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>").replace(/^\s*[*-]\s+/gm, "• ").replace(/(?<![\w*])\*(?!\s)([^*\n]+?)\*(?![\w*])/g, "<i>$1</i>");
   await sendTelegram(chatId, `${cab}\n${md(resp.slice(0, 3500))}${rodape}`);
 }
 // V47: avisos de deriva das escalas (confFundo/pontuar) e de outros erros "silenciosos" só iam pro
