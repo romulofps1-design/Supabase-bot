@@ -3093,7 +3093,11 @@ const PLACAR_HORIZONTES = [15, 60, 240, 1440];
 const colH = (m: number) => (m < 60 ? `preco_${m}m` : `preco_${m / 60}h`);
 const rotH = (m: number) => (m < 60 ? `${m}m` : `${m / 60}h`);
 const PLACAR_RETRO_DIAS = Math.max(0, Math.min(numEnv("PLACAR_RETRO_DIAS", "4"), Math.floor((CANDLES_LIMIT_PRECISO * TF_MIN) / 1440) - 1));
-const PLACAR_MAX_RETRO = 40;
+const PLACAR_MAX_RETRO = numEnv("PLACAR_MAX_RETRO", "150"); // V61: era 40 fixo; o horizonte de 15m só entra no placar via retroativo, então 40/rodada deixava a amostra de 15m bem menor que a de 1h/4h/24h
+// V61: MFE/MAE por janela curta (quanto andou a favor/contra em 15, 30 e 60 min desde a entrada). Precisa das colunas do ALTER TABLE em
+// migracao-v61.sql; sem elas o bot segue igual (detecta pelo select *).
+const JAN_MFE_MIN = [15, 30, 60];
+let _placarTemJanMfe = false;
 let _placarTem15m = true;
 const PLACAR_MAX_CONFERE = 60;
 const ANALISE_TARDE_CANDLES = 8;
@@ -3196,6 +3200,7 @@ async function conferirPlacar(SB: any) {
     if (rr.error) console.log("⚠️ conferirPlacar (retroativo 15m):", rr.error.message);
     else { const ids = new Set(((data || []) as any[]).map((x) => x.id)); retro = ((rr.data || []) as any[]).filter((x) => !ids.has(x.id)); }
   }
+  { const a0 = (data && data[0]) || retro[0]; if (a0) _placarTemJanMfe = "mfe_15m" in (a0 as any); }
   const pend = [...((data || []) as any[]), ...retro].filter((r) =>
     (modoEntrada && r.ent_status == null) ||
     HOR.some((m) => r[colH(m)] == null && agora >= t0De(r) + m * 60000));
@@ -3230,8 +3235,24 @@ async function conferirPlacar(SB: any) {
         let k = -1;
         for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] + TF_MIN * 60000 <= tH) { k = i; break; } }
         if (k < 0) continue;
+        if (d.t[k] + TF_MIN * 60000 <= t0) continue; // V61: a vela do horizonte ainda não saiu na API; sem isso gravava o preço da própria entrada (retorno = só a taxa)
         upd[colH(m)] = d.c[k];
         if (m >= 60) maiorTH = Math.max(maiorTH, tH);
+      }
+      if (_placarTemJanMfe && p0 > 0) {
+        for (const w of JAN_MFE_MIN) {
+          if (r[`mfe_${w}m`] != null || agora < t0 + w * 60000) continue;
+          const tW = t0 + w * 60000;
+          let mx = -Infinity, mn = Infinity;
+          for (let i = 0; i < d.t.length; i++) {
+            const fim = d.t[i] + TF_MIN * 60000;
+            if (fim > t0 && fim <= tW) { mx = Math.max(mx, d.h[i]); mn = Math.min(mn, d.l[i]); }
+          }
+          if (!isFinite(mx) || !isFinite(mn)) continue;
+          const up = ((mx - p0) / p0) * 100, dn = ((p0 - mn) / p0) * 100;
+          upd[`mfe_${w}m`] = Math.max(0, r.lado === "long" ? up : dn);
+          upd[`mae_${w}m`] = Math.max(0, r.lado === "long" ? dn : up);
+        }
       }
       if (maiorTH === 0 && Object.keys(upd).length === 0) continue;
       if (maiorTH > 0) {
@@ -3274,15 +3295,70 @@ function achaEntradaCompressao(d: XVelas, jd: { suprema: number; j6: number }[],
   }
   return kUlt >= kA + ENTRADA_MAX_CANDLES ? { st: "nao_entrou" } : { st: "pendente" };
 }
+// V61: helpers estatísticos. A média simples do placar era dominada por poucos casos extremos (ex.: 15m com -9,9% / +91% de média),
+// então o placar agora mostra a MEDIANA (e o detalhe de 15m mostra também a média aparada e o profit factor).
+const _med = (a: number[]): number => {
+  if (!a.length) return NaN;
+  const s = [...a].sort((x, y) => x - y), n = s.length;
+  return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+};
+const _mediaAparada = (a: number[], p = 0.1): number => {
+  if (!a.length) return NaN;
+  const s = [...a].sort((x, y) => x - y), cut = a.length >= 10 ? Math.floor(a.length * p) : 0;
+  const m = s.slice(cut, s.length - cut);
+  return m.reduce((t, x) => t + x, 0) / m.length;
+};
+const _profitFactor = (a: number[]): number => {
+  const g = a.filter((x) => x > 0).reduce((t, x) => t + x, 0), l = -a.filter((x) => x < 0).reduce((t, x) => t + x, 0);
+  return l > 0 ? g / l : g > 0 ? Infinity : NaN;
+};
+const _sg = (x: number, d = 2) => (isFinite(x) ? `${x >= 0 ? "+" : ""}${x.toFixed(d)}%` : "—");
 function linhaStats(rows: any[]): string {
   const partes = PLACAR_HORIZONTES.map((h) => {
     const rs = rows.map((r) => retornoLog(r, h)).filter((x): x is number => x !== null);
     if (!rs.length) return `${rotH(h)}: —`;
     const ac = rs.filter((x) => x > 0).length;
-    const med = rs.reduce((s, x) => s + x, 0) / rs.length;
-    return `${rotH(h)}: ${Math.round((ac / rs.length) * 100)}% (${ac}/${rs.length}) ${med >= 0 ? "+" : ""}${med.toFixed(2)}%`;
+    return `${rotH(h)}: ${Math.round((ac / rs.length) * 100)}% (${ac}/${rs.length}) ${_sg(_med(rs))}`;
   });
   return partes.join(" · ");
+}
+// V61: detalhe do horizonte de 15m só com alertas FRESCOS (cruzou agora), que é o que o robô de fato opera em 15m.
+function placar15mTxt(rows: any[]): string {
+  const ok = (r: any) => !ehFinalLog(r) && (r.ent_status == null || r.ent_status === "entrou");
+  const item = (r: any) => ({ r, x: retornoLog(r, 15) });
+  const frescos = rows.filter((r) => ok(r) && r.fresco === true).map(item).filter((o): o is { r: any; x: number } => o.x !== null);
+  const velhos = rows.filter((r) => ok(r) && r.fresco !== true).map(item).filter((o): o is { r: any; x: number } => o.x !== null);
+  if (!frescos.length) return "";
+  const lin = (nome: string, its: { r: any; x: number }[]) => {
+    if (!its.length) return "";
+    const xs = its.map((o) => o.x), ac = xs.filter((x) => x > 0).length, pf = _profitFactor(xs);
+    return `<b>${nome}</b> (n=${xs.length})\nacerto ${Math.round((ac / xs.length) * 100)}% · mediana ${_sg(_med(xs))} · aparada ${_sg(_mediaAparada(xs))} · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"}\n\n`;
+  };
+  let m = `⏱️ <b>DETALHE 15m — só alertas frescos</b>\n${DIVISOR}\n<i>retorno em 15 min desde o fechamento da vela do cruzamento, já com a taxa. PF = ganhos ÷ perdas (acima de 1 é lucro). Aparada = média sem os 10% mais extremos de cada ponta.</i>\n\n`;
+  m += lin("Frescos (todos)", frescos);
+  m += lin("Não frescos (comparação)", velhos);
+  m += lin("🟢 Confiança ≥ " + CONF_VERDE, frescos.filter((o) => o.r.conf != null && Number(o.r.conf) >= CONF_VERDE));
+  m += lin("🟡 Confiança " + CONF_AMARELO + "–" + (CONF_VERDE - 1), frescos.filter((o) => o.r.conf != null && Number(o.r.conf) >= CONF_AMARELO && Number(o.r.conf) < CONF_VERDE));
+  m += lin("🔴 Confiança < " + CONF_AMARELO, frescos.filter((o) => o.r.conf != null && Number(o.r.conf) < CONF_AMARELO));
+  m += lin("🚀 Oportunidade", frescos.filter((o) => o.r.tipo === "oportunidade"));
+  m += lin("🔄 Reversão", frescos.filter((o) => o.r.tipo === "reversao"));
+  m += lin("🟢 LONG", frescos.filter((o) => o.r.lado === "long"));
+  m += lin("🔴 SHORT", frescos.filter((o) => o.r.lado === "short"));
+  m += lin("💪 ADX ≥ 25", frescos.filter((o) => o.r.adx != null && Number(o.r.adx) >= 25));
+  m += lin("😐 ADX < 25", frescos.filter((o) => o.r.adx != null && Number(o.r.adx) < 25));
+  // MFE/MAE por janela (só existe pra alertas novos, depois do ALTER TABLE)
+  const jan = JAN_MFE_MIN.map((w) => {
+    const g = rows.filter((r) => ok(r) && r.fresco === true && r[`mfe_${w}m`] != null && r[`mae_${w}m`] != null);
+    if (g.length < 5) return "";
+    const mf = _med(g.map((r) => Number(r[`mfe_${w}m`]))), ma = _med(g.map((r) => Number(r[`mae_${w}m`])));
+    return `${w}m: a favor ${mf.toFixed(2)}% · contra ${ma.toFixed(2)}% (n=${g.length})`;
+  }).filter(Boolean);
+  if (jan.length) m += `↕️ <b>Quanto andou (mediana, frescos)</b>\n${jan.join("\n")}\n<i>o movimento a favor precisa passar de ~3× o custo (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% + slippage) e ficar acima do movimento contra pra valer a entrada</i>\n\n`;
+  const ord = [...frescos].sort((a, b) => a.x - b.x);
+  const fmtI = (o: { r: any; x: number }) => `${String(o.r.instid)} ${o.r.lado === "long" ? "L" : "S"} ${_sg(o.x)}`;
+  m += `🔎 <b>Extremos (confira se são dado ruim)</b>\npiores: ${ord.slice(0, 5).map(fmtI).join(" · ")}\nmelhores: ${ord.slice(-5).reverse().map(fmtI).join(" · ")}\n\n`;
+  if (frescos.length < 30) m += `⚠️ <i>Só ${frescos.length} frescos com 15m conferido: ruído domina, não tire conclusão ainda.</i>\n`;
+  return m;
 }
 async function runPlacar(chatId: number | string, dias: number) {
   const SB = getSupabase();
@@ -3318,7 +3394,7 @@ async function runPlacar(chatId: number | string, dias: number) {
     ["🟢 LONG", (r) => r.lado === "long" && !(r.tipo === "compressao" && r.ent_status !== "entrou")],
     ["🔴 SHORT", (r) => r.lado === "short" && !(r.tipo === "compressao" && r.ent_status !== "entrou")], // V54: mesmo filtro do LONG (compressão sem rompimento não tem lado)
   ];
-  let msg = `📊 <b>PLACAR DOS ALERTAS</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${rows.length} alerta(s), ${comResultado} já conferidos\n<i>acerto = preço andou a favor do lado que o robô abriria, contado desde o FECHAMENTO da vela que cruzou a linha (entrada do robô); % = retorno médio já descontada a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta)</i>\n\n`;
+  let msg = `📊 <b>PLACAR DOS ALERTAS</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${rows.length} alerta(s), ${comResultado} já conferidos\n<i>acerto = preço andou a favor do lado que o robô abriria, contado desde o FECHAMENTO da vela que cruzou a linha (entrada do robô); % = retorno MEDIANO já descontada a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta)</i>\n\n`;
   msg += `<b>Geral</b>\n${linhaStats(rows)}\n\n`;
   for (const [nome, fn] of grupos) {
     const g = rows.filter(fn);
@@ -3347,6 +3423,7 @@ async function runPlacar(chatId: number | string, dias: number) {
   if (comResultado < 30) msg += `⚠️ <i>Amostra pequena (${comResultado} conferidos): ainda não tire conclusões.</i>\n`;
   msg += `<i>Já desconta a taxa da BloFin; não considera funding, stop nem o tamanho da posição. Uso: /placar 30 (30 dias)</i>`;
   await sendTelegram(chatId, cortar(msg));
+  try { const t15 = placar15mTxt(rows); if (t15) await sendTelegram(chatId, cortar(t15)); } catch (e) { console.log("⚠️ placar15m:", e); }
 }
 async function resolverPar(entrada: string): Promise<string | null> {
   let s = entrada.toUpperCase().replace(/[^A-Z0-9-]/g, "");
