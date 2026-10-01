@@ -1,3 +1,4 @@
+// telegram-bot V70 (V69 + notícias SÓ em português do Brasil: tradução pelo Gemini guardada no cache (campo pt) e usada no /noticia, no bloco do painel e no aviso automático; sem tradução nunca mostra inglês (avisa que a tradução está indisponível e deixa o link do original) · filtro de mercado lateral reorganizado: o mínimo é um só (ADX ≥ 18 · ER ≥ 0.25 · caixa ≥ 3×ATR), LIBERADO com 2 de 3 requisitos no mínimo em BTC ou ETH (LATERAL_VOTOS_LIBERA=2), aviso automático 👀 "querendo sair da lateral" quando 1 requisito atinge o mínimo e 📈 "saindo da lateral" quando 2 atingem; bloco do /resumo mostra cada requisito com ✅/❌)
 // telegram-bot V69 (V68 + resumo/painel do dia reorganizado em seções (⚠️ Atenção: agenda e notícias · 📈 Mercado · 💼 Carteira · 🔥 Horários) e fechamento do ciclo com o 15m em destaque, resultado real, lista curta e comparativo; novo /noticia (falas do Trump via espelho RSS do Truth Social + manchetes de cripto/macro, filtradas por palavra-chave, com tradução opcional pelo Gemini), bloco de notícias no painel e aviso automático de post do Trump de alto impacto) (V68 = V67 + placar sem duplicata e sem entrada inválida: (1) alerta de RETESTE de cruzamento velho (idade > ALERT_RETESTE_MAX_CANDLES, padrão 16 velas = 4h) não sai mais, exceto aviso de proteção pra quem tem posição contra; (2) conferirPlacar marca ent_status='repetido' quando já existe outro alerta da mesma moeda+lado+ent_em (fica só o 1º no placar; /placar, /15min, /saida e resumos ignoram os repetidos); (3) ent_em fora da janela (mais de ENT_MAX_ATRASO_H=48h antes do alerta, ou depois do limite de espera) vira ent_status='invalido' em vez de gravar entrada com data absurda, ex.: XMR 2024)
 // telegram-bot V67 (V66 + fallbacks OKX/Binance spot só valem se o preço bater com BloFin/Bybit/Binance (divergência máx. 25%, FALLBACK_DIV_MAX) OKX desligada por padrão (FALLBACK_OKX=1 religa) e QNT-USDT nunca usa fallback (FALLBACK_BLOQ); corrige preço/preco_15m errados no placar quando as corretoras principais falhavam) (V66 = V65 + placar de 15m separado do /placar: novo comando /15min (o /placar, o /analise e o resumo da noite passam a mostrar só 1h/4h/24h; a coleta do preco_15m continua igual); novo comando /saida N: simula a saída real do robô (fecha no cruzamento contrário da faixa ou no stop de SAIDA_STOP_ATR×ATR, e uma variante com trailing por degraus de TRAIL_ATR_MULT×ATR) e mostra R médio, profit factor, "sem os 3 melhores" e duração; sem coluna nova no Supabase) (V65 = V64 + placar com horizonte de 15 min (coluna preco_15m em alertas_log: rode o ALTER TABLE antes de publicar), somado a 1h/4h/24h no /placar, no /analise (alertas anteriores) e no resumo da noite; alertas antigos ainda ao alcance das velas são preenchidos retroativamente) (V64 = V63 + comandos /pergunta MOEDA (IA Gemini) e /veredito MOEDA (IA Claude): pegam o texto completo do /analise e mandam pra IA escolhida, que responde em cima dele; secrets GEMINI_API_KEY e ANTHROPIC_API_KEY, cada comando usa só o seu provedor) (V63 = V62 + o radar de fundo/topo (a nota "Sinal de fundo/topo: X/10" do /analise, /fundo, /topo) agora também olha book e inclinação da faixa, igual a pontuação principal já fazia — antes só via funding/OI/BTC, então podia sair baixo mesmo com book e inclinação já sinalizando reversão junto; no /analise, no /fundo e no /topo a inclinação entra (já calculada ali); nas listas em massa (fundoLista/topoLista) só o book entra por enquanto, sem inclinação, pra não pesar a varredura de todas as moedas) (V62 = V61 + quando o ADX sobe mas o DI oculto (V60) mostra que quem puxa é o lado oposto ao do robô, a linha vira "ADX subindo, mas puxado pelo lado oposto (+0)" em vez de sumir — some da lista de motivos, sem nunca citar +DI/−DI) (V61 = V60 + ADX mínimo por moeda descido de 18 para 15 (FILTRO_ADX_MIN), pra pegar sinal mais cedo agora que o DI oculto (V60) já filtra falso cruzamento por trás; ADX do filtro de mercado lateral (BTC/ETH) continua em 18, sem mudança (LATERAL_ADX_BLOQ/LIBERA); X_ADX_FRACO (texto do BTC no painel) desamarrado de FILTRO_ADX_MIN, próprio env, também 18) (V60 = V59 + +DI/−DI calculado por trás do ADX, sem aparecer em nenhuma mensagem: em continuação, se a força do ADX vem do lado oposto ao do robô, o ADX forte vale +1 em vez de +2 e o ADX subindo não pontua; em reversão nada muda; DI_OCULTO=0 desliga, DI_GAP_MIN=5 é a folga mínima entre +DI e −DI) (V59 = V58 + aviso 📉 quando o mercado ENTRA em lateral (espelho do 📈 saindo; mesmo intervalo de 30 min; LATERAL_AVISO_ENTROU=0 desliga); linha ⚠️ no /analise quando a moeda já esticou ≥3× ATR a favor do robô e nenhum radar de reversão acendeu (entrada tardia); o "FIM DO RESUMO DO DIA" se apaga sozinho depois de 24h, PAINEL_FIM_APAGAR_H=0 desliga) (V58 = V57 + painel do dia atualiza mesmo com todo mundo em silêncio/pausa, chamado antes do corte por todosSil) (V57 = V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
 // telegram-bot V56 (V55 + revisão dos filtros: volume mínimo aplicado ANTES do corte top-N nos pools de alerta e das listas (moeda ilíquida não gasta mais vaga); /config descreve o RSI do modo pump como ele roda (LONG só barra acima de FILTRO_RSI_MAX_LONG, SHORT só abaixo de FILTRO_RSI_MIN) e o volume em M; serrote: textos dizem "trocas em 4h" (entrar/sair da faixa conta) e o limiar do aviso/penalidade segue SERROTE_MAX; X_ADX_FRACO segue FILTRO_ADX_MIN; log único dos campos de volume do ticker pra conferir a unidade)
@@ -102,17 +103,18 @@ let FILTRO_ADX_MIN = numEnv("FILTRO_ADX_MIN", "15"); // V61: era 18 — com o DI
 // Bloqueia quando os DOIS estão com ADX < LATERAL_ADX_BLOQ; só libera quando UM deles chega a >= LATERAL_ADX_LIBERA.
 const LATERAL_ON = (Deno.env.get("LATERAL_BLOQ") || "1") !== "0";
 const LATERAL_ADX_BLOQ = numEnv("LATERAL_ADX_BLOQ", "18");
-const LATERAL_ADX_LIBERA = Math.max(numEnv("LATERAL_ADX_LIBERA", "20"), LATERAL_ADX_BLOQ);
+const LATERAL_ADX_LIBERA = LATERAL_ADX_BLOQ; // V70: o mínimo é um só (antes eram duas faixas, 18 e 20)
 // V57: 2 confirmações além do ADX (mesma ideia de duas faixas): ER = Efficiency Ratio de Kaufman (deslocamento líquido ÷ caminho percorrido
 // nas últimas LATERAL_JAN velas 15m; perto de 0 = vai e vem, perto de 1 = tendência) e "caixa" = amplitude máx−mín das mesmas velas em ATRs.
 // Cada ativo vota com os 3 indicadores; bloqueia com LATERAL_VOTOS (2) de 3 nos DOIS ativos (e nenhum sinal de tendência) e libera com LATERAL_VOTOS_LIBERA (1) de 3 de tendência em UM deles.
 const LATERAL_ER_BLOQ = numEnv("LATERAL_ER_BLOQ", "0.25");
-const LATERAL_ER_LIBERA = Math.max(numEnv("LATERAL_ER_LIBERA", "0.35"), LATERAL_ER_BLOQ);
+const LATERAL_ER_LIBERA = LATERAL_ER_BLOQ; // V70: idem (antes 0.25 e 0.35)
 const LATERAL_AMP_BLOQ = numEnv("LATERAL_AMP_BLOQ", "3");
-const LATERAL_AMP_LIBERA = Math.max(numEnv("LATERAL_AMP_LIBERA", "4"), LATERAL_AMP_BLOQ);
+const LATERAL_AMP_LIBERA = LATERAL_AMP_BLOQ; // V70: idem (antes 3 e 4)
 const LATERAL_JAN = Math.max(4, Math.round(numEnv("LATERAL_JAN", "16")));
 const LATERAL_VOTOS = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS", "2")))); // votos de LATERAL (nos dois ativos) pra bloquear
-const LATERAL_VOTOS_LIBERA = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS_LIBERA", "1")))); // votos de TENDÊNCIA (em um ativo) pra liberar
+const LATERAL_VOTOS_LIBERA = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS_LIBERA", "2")))); // V70: requisitos NO MÍNIMO (em um ativo) pra liberar — padrão agora 2 de 3
+const LATERAL_VOTOS_QUER = Math.min(3, Math.max(1, Math.round(numEnv("LATERAL_VOTOS_QUER", "1")))); // V70: requisitos no mínimo que disparam o aviso 👀 \"querendo sair da lateral\" (enquanto ainda não liberou)
 const LATERAL_AVISO_ON = (Deno.env.get("LATERAL_AVISO") || "1") !== "0"; // aviso quando um dos 3 sinais sai da lateral (com o filtro bloqueando)
 const LATERAL_AVISO_MIN = numEnv("LATERAL_AVISO_MIN", "30"); // intervalo mínimo entre dois desses avisos
 const LATERAL_AVISO_ENTROU_ON = (Deno.env.get("LATERAL_AVISO_ENTROU") || "1") !== "0"; // V59: aviso quando o mercado ENTRA em lateral (espelho do aviso de saída; mesmo intervalo mínimo LATERAL_AVISO_MIN)
@@ -3002,15 +3004,19 @@ async function avaliarLateral(SB: any): Promise<LateralEst> {
   }
   const novos = tendAgora.filter((k) => !est.tend.includes(k));
   est.tend = tendAgora;
-  const querAviso = LATERAL_AVISO_ON && antes && novos.length > 0 && agora - est.avisoT >= LATERAL_AVISO_MIN * 60000; // só quando estava lateral (bloqueando) na leitura anterior
+  // V70: dois avisos. 👀 "querendo sair": ainda lateral, mas 1 requisito (de BTC ou ETH) chegou no mínimo (só quando surge sinal novo, com intervalo LATERAL_AVISO_MIN).
+  //      📈 "saindo": liberou (2 de 3 no mínimo em BTC ou ETH). Mudança de estado: não espera o intervalo e substitui o aviso 👀 (mesma chave LATERAL).
+  const nMax = Math.max(0, ...inds.map((x) => votosTend(x)));
+  const liberou = LATERAL_AVISO_ON && antes && !est.bloq && nMax >= LATERAL_VOTOS_LIBERA;
+  const querSair = LATERAL_AVISO_ON && antes && est.bloq && novos.length > 0 && nMax >= LATERAL_VOTOS_QUER && nMax < LATERAL_VOTOS_LIBERA && agora - est.avisoT >= LATERAL_AVISO_MIN * 60000;
   const c = latCiclo(est);
   console.log(`🧱 lateral: BTC ${ib ? `${indTxt(ib)} (${votosLat(ib)}/3 lateral, ${votosTend(ib)}/3 tendência)` : "sem dado"} | ETH ${ie ? `${indTxt(ie)} (${votosLat(ie)}/3 lateral, ${votosTend(ie)}/3 tendência)` : "sem dado"} → ${est.bloq ? "BLOQUEANDO" : "liberado"}${est.bloq !== antes ? " (mudou agora)" : ""} | votos bloqueia ${LATERAL_VOTOS}/3 · libera ${LATERAL_VOTOS_LIBERA}/3 | ciclo: ${c.n} barrado(s)`);
   await lateralSalvar(SB, est);
-  if (querAviso) {
-    const msg = msgSaiuLateral(est, novos);
+  if (liberou || querSair) {
+    const msg = liberou ? msgSaiuLateral(est) : msgQuerSairLateral(est, novos);
     const ids = await Promise.all(ALERT_CHAT_IDS.filter((ch) => !silChat(ch)).map((ch) => enviarAlertaMoeda(SB, ch, "LATERAL", msg).catch(() => null)));
     if (ids.some(Boolean)) { est.avisoT = agora; await lateralSalvar(SB, est); }
-    console.log(`📈 saiu da lateral: ${novos.join(", ")} → ${est.bloq ? "ainda bloqueando" : "liberado"} (aviso ${ids.some(Boolean) ? "enviado" : "não confirmado"})`);
+    console.log(`${liberou ? "📈 saindo da lateral (liberado)" : "👀 querendo sair da lateral"}: ${(liberou ? est.tend : novos).join(", ")} (aviso ${ids.some(Boolean) ? "enviado" : "não confirmado"})`);
   }
   // V59: espelho do aviso de saída — o filtro acabou de virar false → true (BTC e ETH entraram em lateral). Mesmo intervalo mínimo (LATERAL_AVISO_MIN), contador próprio
   const querAvisoEntrou = LATERAL_AVISO_ENTROU_ON && est.bloq && !antes && agora - est.avisoEntrouT >= LATERAL_AVISO_MIN * 60000;
@@ -3032,19 +3038,35 @@ function msgEntrouLateral(est: LateralEst): string {
       : `🧱 Aviso visual: nenhum alerta é barrado, mas BTC e ETH perderam direção.`) +
     `\n<i>Sem tendência, o cruzamento tende a ser falso. Considere desligar o robô nas moedas sem posição e confirme no gráfico.</i>`;
 }
-// V57: aviso quando um dos 3 sinais (ADX/ER/caixa, de BTC ou ETH) sai da lateral e chega no valor de tendência, com o filtro bloqueando
-function msgSaiuLateral(est: LateralEst, novos: string[]): string {
-  const desc = (k: string) => {
-    const [n, i] = k.split("|");
-    const x = n === "BTC" ? indBtc(est) : indEth(est);
-    const v = i === "ADX" ? `ADX ${fmtAdx(x.adx)} (≥ ${LATERAL_ADX_LIBERA})` : i === "ER" ? `ER ${x.er === null ? "?" : x.er.toFixed(2)} (≥ ${LATERAL_ER_LIBERA})` : `caixa ${x.amp === null ? "?" : x.amp.toFixed(1)}×ATR (≥ ${LATERAL_AMP_LIBERA})`;
-    return `• ${n}: ${v}`;
-  };
+// V70: marca ✅ quando o requisito está no mínimo (ou acima), ❌ quando ainda está lateral, ❔ sem dado
+const latOk = (v: number | null, min: number) => (v === null ? "❔" : v >= min ? "✅" : "❌");
+const latDetalhe = (x: LatInd) => `ADX ${fmtAdx(x.adx)} ${latOk(x.adx, LATERAL_ADX_LIBERA)} · ER ${x.er === null ? "?" : x.er.toFixed(2)} ${latOk(x.er, LATERAL_ER_LIBERA)} · caixa ${x.amp === null ? "?" : x.amp.toFixed(1)}×ATR ${latOk(x.amp, LATERAL_AMP_LIBERA)}`;
+const latLinhaAtivo = (nome: string, x: LatInd) => `<b>${nome}</b> — ${votosTend(x)}/3 no mínimo\n   ${latDetalhe(x)}\n`;
+const latDescSinal = (est: LateralEst, k: string) => {
+  const [n, i] = k.split("|");
+  const x = n === "BTC" ? indBtc(est) : indEth(est);
+  const v = i === "ADX" ? `ADX ${fmtAdx(x.adx)} (≥ ${LATERAL_ADX_LIBERA})` : i === "ER" ? `ER ${x.er === null ? "?" : x.er.toFixed(2)} (≥ ${LATERAL_ER_LIBERA})` : `caixa ${x.amp === null ? "?" : x.amp.toFixed(1)}×ATR (≥ ${LATERAL_AMP_LIBERA})`;
+  return `• ${n}: ${v}`;
+};
+// V70: LIBEROU — pelo menos LATERAL_VOTOS_LIBERA (2) dos 3 requisitos no mínimo em BTC ou ETH
+function msgSaiuLateral(est: LateralEst): string {
   const b = indBtc(est), e = indEth(est);
-  return `📈 <b>Mercado saindo da lateral</b>\n${DIVISOR}\n\n${novos.map(desc).join("\n")}\n\n` +
-    `BTC: ${indTxt(b)} → ${votosTend(b)}/3 tendência\nETH: ${indTxt(e)} → ${votosTend(e)}/3 tendência\n\n` +
-    (est.bloq ? `🛑 O filtro ainda bloqueia: precisa de ${latQtdLibera()} em BTC ou ETH.` : `✅ Filtro liberado: o LIGUE AGORA e os alertas de entrada voltam ao normal.`) +
+  const nb = votosTend(b), ne = votosTend(e), quem = nb >= ne ? "BTC" : "ETH";
+  return `📈 <b>Mercado saindo da lateral</b>\n${DIVISOR}\n\n` +
+    `${quem} já tem <b>${Math.max(nb, ne)} de 3</b> requisitos no mínimo.\n\n` +
+    `<i>Mínimo: ${latRegrasTend()}</i>\n${latLinhaAtivo("BTC", b)}${latLinhaAtivo("ETH", e)}\n` +
+    (LATERAL_BARRA ? `✅ Filtro liberado: o LIGUE AGORA e os alertas de entrada voltam ao normal.` : `✅ Liberado: o aviso 🧱 de mercado lateral sai dos alertas.`) +
     `\n<i>O mercado pode estar começando a andar. Confirme no gráfico antes de ligar o robô.</i>`;
+}
+// V70: QUERENDO SAIR — ainda lateral, mas um requisito já chegou no mínimo (precisa de LATERAL_VOTOS_LIBERA pra liberar)
+function msgQuerSairLateral(est: LateralEst, novos: string[]): string {
+  const b = indBtc(est), e = indEth(est);
+  const nMax = Math.max(votosTend(b), votosTend(e)), falta = Math.max(1, LATERAL_VOTOS_LIBERA - nMax);
+  return `👀 <b>Mercado querendo sair da lateral</b>\n${DIVISOR}\n\n` +
+    `${novos.length === 1 ? "1 requisito chegou" : `${novos.length} requisitos chegaram`} no mínimo:\n${novos.map((k) => latDescSinal(est, k)).join("\n")}\n\n` +
+    `<i>Mínimo: ${latRegrasTend()}</i>\n${latLinhaAtivo("BTC", b)}${latLinhaAtivo("ETH", e)}\n` +
+    `🧱 Ainda lateral: falta${falta > 1 ? "m" : ""} ${falta} requisito${falta > 1 ? "s" : ""} em BTC ou ETH pra liberar (precisa de ${LATERAL_VOTOS_LIBERA} de 3).` +
+    `\n<i>Pode ser só o começo de um movimento. Ainda não confie em cruzamento novo; confirme no gráfico.</i>`;
 }
 // conta 1 sinal barrado (1x por moeda|lado por hora). Devolve true se contou agora.
 function latContar(est: LateralEst, inst: string, lado: string): boolean {
@@ -3060,7 +3082,7 @@ function latContar(est: LateralEst, inst: string, lado: string): boolean {
 const latDur = (ms: number) => { const m = Math.round(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}` : `${m} min`; };
 const latRegras = () => `ADX &lt; ${LATERAL_ADX_BLOQ} · ER &lt; ${LATERAL_ER_BLOQ} · caixa ${LATERAL_JAN / 4}h &lt; ${LATERAL_AMP_BLOQ}×ATR`; // &lt; porque a mensagem vai em HTML do Telegram
 const latRegrasTend = () => `ADX ≥ ${LATERAL_ADX_LIBERA} · ER ≥ ${LATERAL_ER_LIBERA} · caixa ≥ ${LATERAL_AMP_LIBERA}×ATR`;
-const latQtdLibera = () => (LATERAL_VOTOS_LIBERA === 1 ? "algum sinal de tendência" : `${LATERAL_VOTOS_LIBERA} de 3 sinais de tendência`);
+const latQtdLibera = () => `${LATERAL_VOTOS_LIBERA} de 3 requisitos no mínimo`; // V70
 // V57: aviso colado nos PREPARE/radares que passam enquanto o filtro bloqueia (o LIGUE AGORA fica barrado)
 let _latBloq = false;
 const notaLat = () => (!_latBloq ? "" : LATERAL_BARRA
@@ -3076,14 +3098,19 @@ function lateralTxt(est: LateralEst | null, inicio: number): string {
   const placar = LATERAL_BARRA
     ? (c && (c.n > 0 || c.ms >= 60000) ? `📊 Neste ciclo: ${c.n} sinal(is) de entrada barrado(s) · ${latDur(c.ms)} com o filtro ligado\n` : `📊 Neste ciclo: nenhum sinal barrado até agora\n`)
     : `📊 Modo visual: nenhum sinal é barrado, só o aviso 🧱${c && c.n > 0 ? ` (${c.n} teria(m) sido barrado(s) no modo bloqueia)` : ""}\n`;
+  // V70: tudo em "requisitos no mínimo" (ADX ≥ · ER ≥ · caixa ≥). Liberado = pelo menos LATERAL_VOTOS_LIBERA em BTC ou ETH.
   const b = indBtc(est), e = indEth(est);
-  const vb = est.bloq ? `${votosTend(b)}/3 tendência` : `${votosLat(b)}/3 lateral`;
-  const ve = est.bloq ? `${votosTend(e)}/3 tendência` : `${votosLat(e)}/3 lateral`;
-  const linhas = `BTC: ${indTxt(b)} → ${vb}\nETH: ${indTxt(e)} → ${ve}\n`;
-  const rotuloEstado = LATERAL_BARRA ? "🛑 <b>BLOQUEANDO alertas de entrada</b>" : "🧱 <b>Lateral (aviso visual, sem barrar)</b>";
-  return est.bloq
-    ? `${titulo}: ${rotuloEstado} desde ${horaLocal(est.desde)}\n${linhas}${LATERAL_BARRA ? `Libera quando BTC ou ETH tiver ${latQtdLibera()} (${latRegrasTend()}) · PREPARE e radares seguem, com aviso 🧱` : `Sai do estado lateral quando BTC ou ETH tiver ${latQtdLibera()} (${latRegrasTend()})`}${velho}\n${placar}\n`
-    : `${titulo}: ✅ liberado\n${linhas}${LATERAL_BARRA ? "Bloqueia" : "Marca lateral (sem barrar)"} quando os dois tiverem ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência${velho}\n${placar}\n`;
+  const nb = votosTend(b), ne = votosTend(e), nMax = Math.max(nb, ne), quem = nb >= ne ? "BTC" : "ETH";
+  const rotuloLat = LATERAL_BARRA ? "🛑 <b>BLOQUEANDO alertas de entrada</b>" : "🧱 <b>Lateral (aviso visual, sem barrar)</b>";
+  const estado = !est.bloq
+    ? `✅ <b>liberado</b>${nMax >= LATERAL_VOTOS_LIBERA ? ` — ${quem} com ${nMax} de 3 no mínimo` : ""}`
+    : nMax >= LATERAL_VOTOS_QUER
+      ? `${rotuloLat} · 🟡 <b>querendo sair</b> (${quem} com ${nMax} de 3 no mínimo) desde ${horaLocal(est.desde)}`
+      : `${rotuloLat} desde ${horaLocal(est.desde)}`;
+  const regra = est.bloq
+    ? `Libera quando BTC ou ETH tiver ${LATERAL_VOTOS_LIBERA} de 3 no mínimo${LATERAL_BARRA ? " · PREPARE e radares seguem, com aviso 🧱" : ""}`
+    : `${LATERAL_BARRA ? "Volta a bloquear" : "Volta a marcar lateral"} quando BTC e ETH ficarem com até ${3 - LATERAL_VOTOS} de 3 no mínimo`;
+  return `${titulo}: ${estado}\n<i>Mínimo: ${latRegrasTend()}</i>\n${latLinhaAtivo("BTC", b)}${latLinhaAtivo("ETH", e)}${regra}${velho}\n${placar}\n`;
 }
 function lateralStatusTxt(est: LateralEst | null): string {
   if (!LATERAL_ON) return "🧱 Filtro lateral: desligado\n";
@@ -3091,8 +3118,10 @@ function lateralStatusTxt(est: LateralEst | null): string {
   const c = est.cont[String(painelFase().inicio)];
   const barr = c && c.n > 0 ? ` · ${c.n} barrado(s) no ciclo` : "";
   const velho = Date.now() - est.upd > 15 * 60000 ? ` · leitura das ${horaLocal(est.upd)}` : "";
+  const nMaxSt = Math.max(votosTend(indBtc(est)), votosTend(indEth(est)));
+  const quer = est.bloq && nMaxSt >= LATERAL_VOTOS_QUER ? ` · 🟡 querendo sair (${nMaxSt} de 3 no mínimo)` : "";
   const cab = est.bloq
-    ? (LATERAL_BARRA ? `🧱 Filtro lateral: 🛑 bloqueando desde ${horaLocal(est.desde)}` : `🧱 Filtro lateral: lateral desde ${horaLocal(est.desde)} (modo visual, sem barrar)`)
+    ? (LATERAL_BARRA ? `🧱 Filtro lateral: 🛑 bloqueando desde ${horaLocal(est.desde)}${quer}` : `🧱 Filtro lateral: lateral desde ${horaLocal(est.desde)} (modo visual, sem barrar)${quer}`)
     : `🧱 Filtro lateral: ✅ liberado`;
   return `${cab}${barr}${velho}\n   BTC ${indTxt(indBtc(est))}\n   ETH ${indTxt(indEth(est))}\n`;
 }
@@ -5289,7 +5318,7 @@ async function agEstudoBloco(SB: any): Promise<string> {
 const NOTICIAS_ON = (Deno.env.get("NOTICIAS") || "1") !== "0";
 type NtTipo = "trump" | "cripto";
 type NtFeed = { nome: string; url: string; tipo: NtTipo };
-type NtItem = { id: string; ts: number; fonte: string; tipo: NtTipo; texto: string; link: string; forte: boolean };
+type NtItem = { id: string; ts: number; fonte: string; tipo: NtTipo; texto: string; link: string; forte: boolean; pt?: string }; // pt = tradução PT-BR (Gemini), guardada no cache
 const NT_FEEDS_PADRAO = "Trump (Truth Social)|https://trumpstruth.org/feed|trump;CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss/|cripto;Cointelegraph|https://cointelegraph.com/rss|cripto";
 const NT_FEEDS: NtFeed[] = (Deno.env.get("NOTICIAS_FEEDS") || NT_FEEDS_PADRAO).split(";").map((s) => s.trim()).filter(Boolean).map((s) => {
   const [nome, url, tipo] = s.split("|").map((x) => x.trim());
@@ -5307,6 +5336,8 @@ const NOTICIAS_CACHE_MIN = numEnv("NOTICIAS_CACHE_MIN", "5");
 const NOTICIAS_JANELA_H = numEnv("NOTICIAS_JANELA_H", "12");
 const NOTICIAS_PAINEL_H = numEnv("NOTICIAS_PAINEL_H", "6");
 const NOTICIAS_TRADUZIR_ON = (Deno.env.get("NOTICIAS_TRADUZIR") || "1") !== "0";
+const NT_TRAD_LOTE = numEnv("NOTICIAS_TRAD_LOTE", "15"); // V70: máx. de manchetes traduzidas por chamada do Gemini
+const NT_SEM_PT = "🌐 tradução indisponível agora — toque em \"ver original\"."; // V70: nunca mostra o texto em inglês
 const NOTICIAS_ALERTA_ON = (Deno.env.get("NOTICIAS_ALERTA") || "1") !== "0";
 const NT_ALERTA_TIPOS = (Deno.env.get("NOTICIAS_ALERTA_TIPOS") || "trump,cripto").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const NOTICIAS_ALERTA_MAX_MIN = numEnv("NOTICIAS_ALERTA_MAX_MIN", "30");
@@ -5433,28 +5464,45 @@ async function buscarNoticias(SB: any): Promise<{ itens: NtItem[] | null; velho:
   const limite = Date.now() - 72 * 3600000;
   const vistos = new Set<string>();
   const itens = ntSemDuplicatas(todos.filter((i) => i.ts >= limite && !vistos.has(i.id) && vistos.add(i.id))).sort((a, b) => b.ts - a.ts).slice(0, 80);
+  // V70: a tradução já traduzida não se refaz (vem do cache anterior) e as manchetes de alto impacto do painel/aviso são traduzidas aqui, uma vez só
+  const ptPorId = new Map<string, string>();
+  for (const src of [doBanco, _ntCache]) src?.itens.forEach((i) => { if (i.pt) ptPorId.set(i.id, i.pt); });
+  itens.forEach((i) => { const t = ptPorId.get(i.id); if (t) i.pt = t; });
+  await ntTraduzirFaltantes(SB, itens.filter((i) => i.forte && i.ts >= Date.now() - NOTICIAS_PAINEL_H * 3600000));
   _ntCache = { t: Date.now(), itens, falhas };
   try { await upsertLinha(SB, NT_CACHE_ROW, { last_status: JSON.stringify({ v: NT_CACHE_V, ..._ntCache }), last_alert_at: new Date().toISOString() }); } catch (e) { console.log("⚠️ notícias: não salvei o cache", e); }
   return { itens, velho: false, falhas };
 }
-// Tradução opcional pelo Gemini (uma chamada só pros itens mostrados). Respeita o limite diário de IA; se falhar, o texto fica no original.
-async function ntTraduzir(SB: any, itens: NtItem[]): Promise<Map<number, string>> {
-  const mapa = new Map<number, string>();
-  if (!NOTICIAS_TRADUZIR_ON || !Deno.env.get("GEMINI_API_KEY") || !itens.length) return mapa;
+// V70: tradução pelo Gemini para o português do Brasil. Traduz só quem ainda não tem `pt` (até NT_TRAD_LOTE por chamada), grava o resultado
+// no próprio item (e, via ntSalvarCache, no cache do Supabase) e devolve quantas traduziu. Respeita o limite diário de IA; se falhar, o item
+// fica sem `pt` e as telas mostram NT_SEM_PT em vez do texto em inglês.
+async function ntTraduzirFaltantes(SB: any, itens: NtItem[]): Promise<number> {
+  if (!NOTICIAS_TRADUZIR_ON || !Deno.env.get("GEMINI_API_KEY")) return 0;
+  const falta = itens.filter((i) => !i.pt).slice(0, Math.max(1, NT_TRAD_LOTE));
+  if (!falta.length) return 0;
   try {
-    if (IA_LIMITE_DIARIO_GEMINI > 0 && (await iaUsoHoje(SB, "gemini")) >= IA_LIMITE_DIARIO_GEMINI) return mapa;
-    const sistema = "Você traduz textos do inglês para o português do Brasil, de forma fiel e curta, sem comentar. Responda só com as traduções, uma por linha, no formato \"N. tradução\", mantendo a numeração. Se um texto já estiver em português, repita-o como está.";
-    const usuario = itens.map((it, i) => `${i + 1}. ${ntCortar(it.texto, 450)}`).join("\n");
-    const resp = await Promise.race([chamarGemini(sistema, usuario), new Promise<null>((r) => setTimeout(() => r(null), 25000))]);
-    if (!resp) return mapa;
+    if (IA_LIMITE_DIARIO_GEMINI > 0 && (await iaUsoHoje(SB, "gemini")) >= IA_LIMITE_DIARIO_GEMINI) return 0;
+    const sistema = "Você traduz manchetes e posts do inglês para o português do Brasil (pt-BR), de forma fiel e curta, sem comentar. Mantenha nomes próprios, siglas e tickers (BTC, SEC, CFTC...). Responda só com as traduções, uma por linha, no formato \"N. tradução\", mantendo a numeração. Se um texto já estiver em português, repita-o como está. Nunca responda em inglês.";
+    const usuario = falta.map((it, i) => `${i + 1}. ${ntCortar(it.texto, 450)}`).join("\n");
+    const resp = await Promise.race([chamarGemini(sistema, usuario), new Promise<null>((r) => setTimeout(() => r(null), 20000))]);
+    if (!resp) return 0;
     await iaRegistrarUso(SB, "gemini");
+    let n = 0;
     for (const linha of resp.split("\n")) {
       const m = linha.match(/^\s*(\d+)[.)]\s*(.+)$/);
-      if (m) { const i = Number(m[1]) - 1; if (i >= 0 && i < itens.length) mapa.set(i, m[2].trim()); }
+      if (!m) continue;
+      const i = Number(m[1]) - 1, t = m[2].trim();
+      if (i >= 0 && i < falta.length && t) { falta[i].pt = t; n++; }
     }
-  } catch (e) { console.log("⚠️ notícias: tradução falhou", e); }
-  return mapa;
+    return n;
+  } catch (e) { console.log("⚠️ notícias: tradução falhou", e); return 0; }
 }
+// grava o cache atual (com as traduções novas) pra outra execução do cron não traduzir de novo
+async function ntSalvarCache(SB: any) {
+  if (!_ntCache) return;
+  try { await upsertLinha(SB, NT_CACHE_ROW, { last_status: JSON.stringify({ v: NT_CACHE_V, ..._ntCache }), last_alert_at: new Date().toISOString() }); } catch (e) { console.log("⚠️ notícias: não salvei o cache", e); }
+}
+const ntPt = (it: NtItem) => it.pt ?? NT_SEM_PT;
 // /noticia [trump|cripto] [horas]
 async function runNoticia(chatId: number | string, arg: string) {
   const SB = getSupabase();
@@ -5473,12 +5521,12 @@ async function runNoticia(chatId: number | string, arg: string) {
   const lista = itens.filter((i) => i.ts >= lim && (!tipo || i.tipo === tipo)).sort((a, b) => Number(b.forte) - Number(a.forte) || b.ts - a.ts).slice(0, 8);
   let msg = `📰 <b>NOTÍCIAS QUE MEXEM COM O MERCADO</b>\n<i>últimas ${horas}h${tipo === "trump" ? " · só Trump" : tipo === "cripto" ? " · só cripto/macro" : ""}</i>\n${DIVISOR}\n\n`;
   if (!lista.length) msg += `✅ Nenhuma notícia relevante nesse período.\n<i>Tente /noticia 24 para ampliar a janela.</i>\n`;
-  const trad = await ntTraduzir(SB, lista);
-  lista.forEach((it, i) => {
-    const txt = ntCortar(trad.get(i) ?? it.texto, it.tipo === "trump" ? 380 : 280);
-    msg += `${it.forte ? "🔴" : "🟡"} <b>${ntQuando(it.ts)}</b> · ${agEsc(it.fonte)}\n${it.tipo === "trump" ? `“${agEsc(txt)}”` : agEsc(txt)}\n${it.link ? `<a href="${agEsc(it.link)}">ver original</a>\n` : ""}\n`;
+  if ((await ntTraduzirFaltantes(SB, lista)) > 0) await ntSalvarCache(SB);
+  lista.forEach((it) => {
+    const txt = ntCortar(ntPt(it), it.tipo === "trump" ? 380 : 280);
+    msg += `${it.forte ? "🔴" : "🟡"} <b>${ntQuando(it.ts)}</b> · ${agEsc(it.fonte)}\n${it.tipo === "trump" && it.pt ? `“${agEsc(txt)}”` : agEsc(txt)}\n${it.link ? `<a href="${agEsc(it.link)}">ver original</a>\n` : ""}\n`;
   });
-  if (lista.length) msg += `<i>🔴 = palavra de alto impacto (tarifa, Fed/juros, cripto, sanções, guerra...) · 🟡 = relevante.${trad.size ? " Tradução automática: o link leva ao original." : ""}</i>\n`;
+  if (lista.length) msg += `<i>🔴 = palavra de alto impacto (tarifa, Fed/juros, cripto, sanções, guerra...) · 🟡 = relevante.${lista.some((it) => it.pt) ? " Tradução automática: o link leva ao original." : ""}</i>\n`;
   msg += `<i>O filtro é por palavra-chave: pode deixar passar algo ou mostrar post sem importância. Posts podem ser apagados ou desmentidos, e a 1ª reação do preço costuma reverter. Não é recomendação.</i>`;
   if (falhas.length) msg += `\n<i>⚠️ fonte(s) fora do ar agora: ${agEsc(falhas.join(", "))}${velho ? " — mostrando o último cache" : ""}</i>`;
   await sendTelegram(chatId, cortar(msg));
@@ -5491,9 +5539,10 @@ async function ntBlocoPainel(SB: any): Promise<string> {
     if (!itens) return `📰 ⚠️ <b>Não consegui ler as notícias</b> — confira Trump, Fed e cripto manualmente antes de operar.\n`;
     const lim = Date.now() - NOTICIAS_PAINEL_H * 3600000;
     const fortes = itens.filter((i) => i.forte && i.ts >= lim).sort((a, b) => b.ts - a.ts).slice(0, 3);
+    if ((await ntTraduzirFaltantes(SB, fortes)) > 0) await ntSalvarCache(SB);
     let t = `📰 <b>Notícias — últimas ${NOTICIAS_PAINEL_H}h</b>\n`;
     if (!fortes.length) t += `✅ Nada de alto impacto. <i>(/noticia mostra o resto)</i>\n`;
-    for (const i of fortes) t += `• <b>${ntQuando(i.ts)}</b> ${agEsc(i.fonte.split(" (")[0])}: ${agEsc(ntCortar(i.texto, 110))}\n`;
+    for (const i of fortes) t += `• <b>${ntQuando(i.ts)}</b> ${agEsc(i.fonte.split(" (")[0])}: ${agEsc(ntCortar(ntPt(i), 110))}\n`;
     return t + (velho ? `<i>⚠️ fontes fora do ar — dados do último cache</i>\n` : "");
   } catch (e) { console.log("⚠️ notícias (painel)", e); return ""; }
 }
@@ -5524,14 +5573,17 @@ async function checarNoticias(SB: any) {
   }
   const destinos = ALERT_CHAT_IDS.filter((c) => !silChat(c));
   if (!destinos.length) return;
+  if ((await ntTraduzirFaltantes(SB, novos.filter((i) => !_ntEnviados.has(i.id)))) > 0) await ntSalvarCache(SB);
   let mudou = false;
   for (const it of novos) {
     if (_ntEnviados.has(it.id)) continue;
+    // V70: sem tradução ainda: espera até 6 min (3 rodadas); depois avisa mesmo assim, sem o texto em inglês
+    if (!it.pt && NOTICIAS_TRADUZIR_ON && Deno.env.get("GEMINI_API_KEY") && agora - it.ts < 6 * 60000) continue;
     const tok = it.tipo === "cripto" ? ntTokens(it.texto) : [];
     if (tok.length && _ntSigs.some((x) => agora - x.t < 48 * 3600000 && ntParecido(x.k, tok))) { _ntEnviados.add(it.id); mudou = true; continue; } // mesma notícia de outra fonte: já avisei
     const lista = it.tipo === "cripto" ? _ntEnviosCripto : _ntEnvios, lim = it.tipo === "cripto" ? NOTICIAS_ALERTA_MAX_HORA_CRIPTO : NOTICIAS_ALERTA_MAX_HORA;
     if (lista.filter((t) => agora - t < 3600000).length >= lim) continue;
-    const msg = `📰 <b>NOTÍCIA — ${agEsc(it.fonte)}</b> · ${horaLocal(it.ts)}\n${DIVISOR}\n\n${it.tipo === "trump" ? `“${agEsc(ntCortar(it.texto, 500))}”` : `<b>${agEsc(ntCortar(it.texto, 500))}</b>`}\n\n${it.link ? `<a href="${agEsc(it.link)}">ver original</a>\n\n` : ""}⚠️ <i>Palavra de alto impacto (tarifa, juros/Fed, cripto, sanções, guerra...). A 1ª reação do preço costuma ser exagerada e pode reverter: espere a vela fechar antes de confiar em cruzamento novo. Pode ser apagado ou desmentido depois. /noticia traduz e mostra as outras.</i>`;
+    const msg = `📰 <b>NOTÍCIA — ${agEsc(it.fonte)}</b> · ${horaLocal(it.ts)}\n${DIVISOR}\n\n${it.tipo === "trump" && it.pt ? `“${agEsc(ntCortar(ntPt(it), 500))}”` : `<b>${agEsc(ntCortar(ntPt(it), 500))}</b>`}\n\n${it.link ? `<a href="${agEsc(it.link)}">ver original</a>\n\n` : ""}⚠️ <i>Palavra de alto impacto (tarifa, juros/Fed, cripto, sanções, guerra...). A 1ª reação do preço costuma ser exagerada e pode reverter: espere a vela fechar antes de confiar em cruzamento novo. Pode ser apagado ou desmentido depois. /noticia mostra as outras.</i>`;
     const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `NOTICIA_${it.ts}`, cortar(msg))));
     if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima rodada
     _ntEnviados.add(it.id);
@@ -6539,6 +6591,21 @@ function textoHelp(chatId: number | string): string {
     t += "\n";
   }
 
+  if (LATERAL_ON) {
+    t += `${MINI_DIVISOR}\n<b>🧱 Filtro de mercado lateral</b>\n`;
+    t += `Lateral = mercado sem direção: o cruzamento tende a ser falso. O bot mede BTC e ETH (15m) com 3 requisitos; cada um que chega no mínimo vale ✅: ADX ≥ ${LATERAL_ADX_LIBERA} · ER ≥ ${LATERAL_ER_LIBERA} · caixa ${LATERAL_JAN / 4}h ≥ ${LATERAL_AMP_LIBERA}×ATR.\n`;
+    t += `• 🛑 Lateral: BTC e ETH com no máximo ${3 - LATERAL_VOTOS} de 3 no mínimo.\n`;
+    t += `• 👀 Querendo sair: ${LATERAL_VOTOS_QUER} requisito chegou no mínimo → aviso automático, mas ainda não confie.\n`;
+    t += `• ✅ Liberado: ${LATERAL_VOTOS_LIBERA} de 3 no mínimo em BTC ou ETH → aviso automático 📈 "saindo da lateral".\n`;
+    t += `Modo ${LATERAL_BARRA ? "bloqueia: o LIGUE AGORA fica barrado enquanto estiver lateral" : "visual: nada é barrado, os alertas só ganham a nota 🧱"}. Estado e números agora: /resumo · como funciona em detalhe: /estudo.\n\n`;
+  }
+
+  if (NOTICIAS_ON) {
+    t += `${MINI_DIVISOR}\n<b>📰 Notícias</b>\n`;
+    t += `Falas do Trump e manchetes de cripto/macro que mexem no mercado, sempre em português do Brasil${NOTICIAS_TRADUZIR_ON ? " (traduzidas pelo Gemini)" : ""}. Aparecem no /resumo e no /noticia, e o bot avisa sozinho quando sai algo de alto impacto.\n`;
+    t += `Se a tradução não estiver disponível, o texto em inglês não aparece: vem só o link "ver original". Espere a vela fechar antes de confiar em cruzamento depois de uma notícia.\n\n`;
+  }
+
   if (SILENCIO_ON) {
     t += `${MINI_DIVISOR}\n<b>🌙 Silêncio</b>\n`;
     t += `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local)${SILENCIO_PROTECAO ? ": só passa alerta de proteção de posição aberta" : ""}.\n\n`;
@@ -6566,7 +6633,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🤖 /pergunta ONE [pergunta]", "Gemini", "roda o /analise da moeda e manda pro Gemini responder; sem pergunta, ele dá um veredito curto (ligar, esperar ou evitar)"],
     ["🧠 /veredito ONE [pergunta]", "Claude", "igual o /pergunta, mas usa o Claude"],
     ["🏆 /melhor [pergunta]", "Gemini compara as moedas da varredura", "roda as varreduras de oportunidade e reversão e pede pro Gemini comparar e dizer qual moeda está mais bem posicionada agora (filtro inicial; confirme com /pergunta)"],
-    ["🎓 /estudo", "checklist antes de ligar o robô", "checklist com os 8 pontos pra conferir no /analise antes de decidir ligar o robô"],
+    ["🎓 /estudo", "checklist + como funciona o filtro de lateral", "checklist com os 8 pontos pra conferir no /analise antes de decidir ligar o robô, e a aula do filtro de mercado lateral (o que é, os 3 requisitos e os estados)"],
   ]);
 
   const varreduras: [string, string, string][] = [
@@ -6614,25 +6681,37 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   return t;
 }
 function textoEstudo(blocoAgenda = ""): string {
-  let t = `🎓 <b>CHECKLIST — antes de ligar o robô</b>\n${DIVISOR}\n\n`;
-  t += `Baseado no que já sai no /analise. Leia de cima pra baixo antes de decidir.\n\n`;
-  t += `${MINI_DIVISOR}\n<b>1. Cruzou há quanto tempo?</b>\n`;
-  t += `Olha "cruzou há ~X min" ou "cruzada há Xh Ymin (já passou)". Fresco (dentro de 2 velas) = ok. Já passou = é o caso de atraso — redobre a atenção nos próximos pontos.\n\n`;
-  t += `${MINI_DIVISOR}\n<b>2. Apareceu a linha ⚠️ "já esticou"?</b>\n`;
-  t += `Se sim, o preço já foi longe demais a favor do robô sem nenhum radar de reversão ter acendido — nem continuação segura, nem reversão. É o sinal mais direto de "não é hora".\n\n`;
-  t += `${MINI_DIVISOR}\n<b>3. Apareceu "ADX subindo, mas puxado pelo lado oposto"?</b>\n`;
-  t += `Se essa frase está na lista de motivos, o ADX está enganando: a força de verdade é do lado contrário. Não bloqueia sozinho, mas pesa contra.\n\n`;
-  t += `${MINI_DIVISOR}\n<b>4. Tem radar de fundo ou topo aceso?</b>\n`;
-  t += `Se sim, o esticado ali é sinal de possível reversão, não de continuação — decisão diferente do item 2 (que é quando NENHUM radar acendeu).\n\n`;
-  t += `${MINI_DIVISOR}\n<b>5. O filtro de lateral está bloqueando?</b>\n`;
-  t += `Olha se apareceu o aviso de mercado lateral (BTC/ETH). Se sim, o cruzamento tende a ser falso — segure antes de ligar.\n\n`;
-  t += `${MINI_DIVISOR}\n<b>6. Funding e BTC/ETH estão a favor ou contra?</b>\n`;
-  t += `Funding esticado do mesmo lado do robô = multidão lotada, risco de virada brusca. BTC/ETH puxando forte contra = mais um motivo pra esperar.\n\n`;
-  t += `${MINI_DIVISOR}\n<b>7. Tem dado econômico saindo ou que acabou de sair?</b>\n`;
-  t += `CPI, payroll, PCE e Fed movem o preço nos dois sentidos em segundos. Um cruzamento que aparece perto do dado costuma ser só a reação, não tendência. Depois que o dado sai, o bot compara o resultado com a projeção e avisa se veio acima ou abaixo do esperado.\n${blocoAgenda ? blocoAgenda : ""}\n`;
-  t += `${MINI_DIVISOR}\n<b>8. A confiança geral do /analise está alta?</b>\n`;
-  t += `Depois de olhar os pontos específicos, confira se a pontuação final bate com o que os itens acima sugeriram. Se todo o resto aponta cautela mas a nota ainda saiu alta, vale entender por quê antes de confiar cegamente no número.\n\n`;
-  t += `${DIVISOR}\n<i>Estatístico, não é recomendação. Rode /analise MOEDA e volte aqui pra conferir item por item.</i>`;
+  // V70: tudo numa mensagem só (≤ ~3,3k caracteres sem a agenda); itens curtos, separados por linha em branco
+  let t = `🎓 <b>CHECKLIST — antes de ligar o robô</b>\n${DIVISOR}\n`;
+  t += `Baseado no que já sai no /analise. Leia de cima pra baixo.\n\n`;
+  t += `<b>1. Cruzou há quanto tempo?</b>\nFresco (até 2 velas) = ok. \"Cruzada há Xh (já passou)\" é caso de atraso: redobre a atenção nos próximos pontos.\n\n`;
+  t += `<b>2. Apareceu ⚠️ \"já esticou\"?</b>\nO preço foi longe demais a favor do robô sem radar de reversão aceso: o sinal mais direto de \"não é hora\".\n\n`;
+  t += `<b>3. \"ADX subindo, mas puxado pelo lado oposto\"?</b>\nO ADX engana: a força real é do lado contrário. Não bloqueia sozinho, mas pesa contra.\n\n`;
+  t += `<b>4. Radar de fundo ou topo aceso?</b>\nSe sim, o esticado é sinal de possível reversão, não de continuação (diferente do item 2).\n\n`;
+  t += `<b>5. O filtro de lateral está bloqueando?</b>\nSe apareceu o aviso 🧱, o cruzamento tende a ser falso: segure. Aula completa no fim 📚\n\n`;
+  t += `<b>6. Funding e BTC/ETH a favor ou contra?</b>\nFunding esticado do seu lado = multidão lotada, risco de virada brusca. BTC/ETH fortes contra = espere.\n\n`;
+  t += `<b>7. Dado econômico saindo ou que acabou de sair?</b>\nCPI, payroll, PCE e Fed movem o preço nos dois sentidos. Cruzamento perto do dado costuma ser só a reação, não tendência.\n${blocoAgenda ? blocoAgenda : ""}\n`;
+  t += `<b>8. A confiança do /analise está alta?</b>\nConfira se a nota bate com os itens acima. Se tudo pede cautela e a nota saiu alta, entenda por quê.\n\n`;
+  t += textoAulaLateral();
+  t += `${DIVISOR}\n<i>Estatístico, não é recomendação.</i>`;
+  return t;
+}
+// V70: aula do filtro de mercado lateral (o que é e como funciona). Texto fixo, usa os mínimos em uso. O estado AGORA fica no /resumo.
+function textoAulaLateral(): string {
+  if (!LATERAL_ON) return "";
+  let t = `${DIVISOR}\n📚 <b>ENTENDENDO O FILTRO DE LATERAL</b>\n${DIVISOR}\n`;
+  t += `Lateral = preço indo e voltando sem direção; aí o cruzamento do robô costuma ser falso. O bot mede <b>BTC e ETH</b> (15m) com 3 requisitos, e cada um que chega no mínimo ganha ✅:\n`;
+  t += `• <b>ADX ≥ ${LATERAL_ADX_LIBERA}</b> — força da tendência\n`;
+  t += `• <b>ER ≥ ${LATERAL_ER_LIBERA}</b> — eficiência: perto de 0 o preço vai e volta, perto de 1 anda reto\n`;
+  t += `• <b>Caixa ≥ ${LATERAL_AMP_LIBERA}×ATR</b> — quanto o preço andou nas últimas ${LATERAL_JAN / 4}h; menos que isso = preso numa caixa\n\n`;
+  t += `<b>Estados</b> (BTC e ETH têm de 0 a 3 ✅):\n`;
+  t += `🛑 <b>Lateral</b> — BTC e ETH com até ${3 - LATERAL_VOTOS} de 3 ✅. ${LATERAL_BARRA ? "O LIGUE AGORA fica barrado." : "Os alertas saem com a nota 🧱."}\n`;
+  t += `🟡 <b>Querendo sair</b> — ${LATERAL_VOTOS_QUER} ✅ chegou. Aviso 👀 automático; ainda não confie.\n`;
+  t += `✅ <b>Liberado</b> — ${LATERAL_VOTOS_LIBERA} de 3 ✅ em BTC <i>ou</i> ETH. Aviso 📈 automático.\n`;
+  t += `Depois de liberar, espera ${LATERAL_HOLD_MIN} min antes de marcar lateral de novo (evita piscar).\n\n`;
+  t += `<b>Modo atual: ${LATERAL_BARRA ? "bloqueia" : "visual"}</b> — ${LATERAL_BARRA ? "enquanto lateral, o LIGUE AGORA e as entradas ficam barrados (PREPARE e radares seguem)." : "nada é barrado, a decisão é sua."}\n`;
+  t += `<b>Na prática:</b> lateral → segure · querendo sair → espere a vela fechar · liberado → siga o checklist.\n`;
+  t += `Estado agora: /resumo\n`;
   return t;
 }
 function montarConfig(): string {
@@ -6785,7 +6864,7 @@ Deno.serve(async (req) => {
         await sendTelegram(chatId, textoBoasVindas(chatId, modoAtual));
         await sendTelegram(chatId, "⌨️ Atalhos fixos ativados aqui embaixo 👇");
       } else if (text === "/help") {
-        for (const parte of dividirTexto(textoHelp(chatId))) await sendTelegram(chatId, parte);
+        for (const parte of dividirTexto(textoHelp(chatId), 4090)) await sendTelegram(chatId, parte); // V70: 4090 (antes 3800): uma mensagem só quando cabe
       } else {
         // em partes se passar do limite do Telegram (modo Novato fica perto de 4k caracteres)
         for (const parte of dividirTexto(textoComandos(chatId, modoAtual, remetente))) await sendTelegram(chatId, parte);
@@ -6833,7 +6912,7 @@ Deno.serve(async (req) => {
       return new Response("ok");
     }
     if (text.startsWith("/estudo")) {
-      await sendTelegram(chatId, textoEstudo(await agEstudoBloco(getSupabase())));
+      for (const parte of dividirTexto(textoEstudo(await agEstudoBloco(getSupabase())), 4090)) await sendTelegram(chatId, parte); // V70: cabe numa mensagem só (só divide se a agenda do dia deixar passar de 4090)
       return new Response("ok");
     }
     if (text.startsWith("/analise") || text.startsWith("/análise")) {
