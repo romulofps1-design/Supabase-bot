@@ -2,7 +2,7 @@
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
 // já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V74 (V73 + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// telegram-bot V74 (V73 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
 // auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
 // telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
 // com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
@@ -785,7 +785,7 @@ async function fetchBinanceSpotRows(instId: string, bar: string, limit: number):
   return null;
 }
 function barToMs(bar: string): number {
-  const map: Record<string, number> = { "1m":60000,"3m":180000,"5m":300000,"15m":900000,"30m":1800000,"1H":3600000,"2H":7200000,"4H":14400000,"6H":21600000,"12H":43200000,"1D":86400000 };
+  const map: Record<string, number> = { "1m":60000,"3m":180000,"5m":300000,"15m":900000,"30m":1800000,"1H":3600000,"2H":7200000,"4H":14400000,"6H":21600000,"12H":43200000,"1D":86400000,"1W":604800000 };
   return map[bar] || 900000;
 }
 async function getCandles(instId: string, bar: string, limit: number = CANDLES_LIMIT_PADRAO) {
@@ -2640,6 +2640,8 @@ async function runAlertaProativo() {
   if (todosSil) console.log(`🌙 todos em silêncio/pausa: só alertas de proteção (${nPos} posição(ões) aberta(s))`);
   const lat = await avaliarLateral(SB).catch((e) => { console.log("⚠️ filtro lateral falhou (segue liberado)", e); return lateralNovo(); });
   _latBloq = lat.bloq;
+  // V74: divergência de RSI do BTC (1h/4h/diário/semanal); só reavalia quando fecha vela nova, então é leve
+  await checarDivergenciaBTC(SB).catch((e) => console.log("⚠️ divergência BTC falhou", e));
   const variacoes = await getVariacoes24h();
   // V56: com os filtros ligados, o volume mínimo entra ANTES do corte top-N (igual recuaram/repicaram), senão moeda ilíquida ocupa vaga e é descartada depois
   const baseMov = ALERT_FILTROS_ON ? variacoes.filter((v) => v.volUsdt >= FILTRO_VOL_MIN_USDT) : variacoes;
@@ -2854,13 +2856,14 @@ async function xCandles(instId: string, bar: string, limit: number): Promise<XVe
     } catch { break; }
   }
   try {
-    const iv = bar === "1H" ? "60" : bar.replace("m", "");
+    // V74: Bybit usa 240/D/W pro 4H/1D/1W (antes o 4H/1D/1W caíam em intervalo inválido e o fallback nunca funcionava)
+    const iv = bar === "1H" ? "60" : bar === "4H" ? "240" : bar === "1D" ? "D" : bar === "1W" ? "W" : bar.replace("m", "");
     const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${instId.replace("-", "")}&interval=${iv}&limit=${bar === "1H" ? 1000 : limit}`);
     const j = await r.json();
     if (j.result?.list?.length > 100) { marcaFonte("Bybit"); return fechada(monta(j.result.list.slice().reverse())); }
   } catch { }
   try {
-    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${instId.replace("-", "")}&interval=${bar === "1H" ? "1h" : bar}&limit=${bar === "1H" ? 1000 : limit}`);
+    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${instId.replace("-", "")}&interval=${/[HDW]$/.test(bar) ? bar.toLowerCase() : bar}&limit=${bar === "1H" ? 1000 : limit}`);
     const j = await r.json();
     if (Array.isArray(j) && j.length > 100) { marcaFonte("Binance"); return fechada(monta(j)); }
   } catch { }
@@ -3078,6 +3081,305 @@ async function lateralSalvar(SB: any, est: LateralEst) {
   for (const k of chaves.slice(0, Math.max(0, chaves.length - 2))) delete limpo.cont[k]; // guarda só o ciclo atual e o anterior
   await upsertLinha(SB, LATERAL_ROW, { last_status: JSON.stringify(limpo), last_alert_at: new Date(est.upd).toISOString() });
   est.sujo = false;
+}
+// ===== V74: divergência de RSI do BTC (1H, 4H, 1D, 1W) — parte pura (sem rede, testável) =====
+type DivTipo = "reg-alta" | "oc-alta" | "reg-baixa" | "oc-baixa";
+type DivPiv = { i: number; t: number; preco: number; rsi: number };
+type DivSinal = { tipo: DivTipo; p1: DivPiv; p2: DivPiv; atraso?: number };
+type DivCfg = { esq: number; dir: number; distMin: number; distMax: number; zBaixa: number; zAlta: number; zOc: number; difRsi: number; difPreco: number };
+const DIV_TIPOS: DivTipo[] = ["reg-alta", "oc-alta", "reg-baixa", "oc-baixa"];
+const divEhAlta = (t: DivTipo) => t === "reg-alta" || t === "oc-alta";
+
+// RSI de Wilder, uma saída por vela (NaN até haver `periodo` variações)
+function divRsiSerie(c: number[], periodo = 14): number[] {
+  const out: number[] = new Array(c.length).fill(NaN);
+  if (c.length < periodo + 1) return out;
+  let g = 0, p = 0;
+  for (let i = 1; i <= periodo; i++) { const d = c[i] - c[i - 1]; if (d >= 0) g += d; else p -= d; }
+  let mg = g / periodo, mp = p / periodo;
+  const rs = () => (mp === 0 ? (mg === 0 ? 50 : 100) : 100 - 100 / (1 + mg / mp));
+  out[periodo] = rs();
+  for (let i = periodo + 1; i < c.length; i++) {
+    const d = c[i] - c[i - 1];
+    mg = (mg * (periodo - 1) + (d > 0 ? d : 0)) / periodo;
+    mp = (mp * (periodo - 1) + (d < 0 ? -d : 0)) / periodo;
+    out[i] = rs();
+  }
+  return out;
+}
+
+// pivô = extremo da janela [i-esq, i+dir]; só existe depois de `dir` velas fechadas à direita (não repinta)
+function divPivos(h: number[], l: number[], rsi: number[], t: number[], esq: number, dir: number): { altos: DivPiv[]; baixos: DivPiv[] } {
+  const altos: DivPiv[] = [], baixos: DivPiv[] = [];
+  for (let i = esq; i <= h.length - 1 - dir; i++) {
+    if (!isFinite(rsi[i])) continue;
+    let alto = true, baixo = true;
+    for (let j = i - esq; j <= i + dir; j++) {
+      if (j === i) continue;
+      if (j < i ? h[j] >= h[i] : h[j] > h[i]) alto = false;
+      if (j < i ? l[j] <= l[i] : l[j] < l[i]) baixo = false;
+      if (!alto && !baixo) break;
+    }
+    if (alto) altos.push({ i, t: t[i], preco: h[i], rsi: rsi[i] });
+    if (baixo) baixos.push({ i, t: t[i], preco: l[i], rsi: rsi[i] });
+  }
+  return { altos, baixos };
+}
+
+// p1 = pivô anterior, p2 = pivô (ou candidato) mais novo
+function divCond(tipo: DivTipo, p1: DivPiv, p2: DivPiv, cfg: DivCfg): boolean {
+  const dp = (p2.preco - p1.preco) / p1.preco; // >0: p2 mais alto
+  const dr = p2.rsi - p1.rsi;                  // >0: RSI mais alto
+  switch (tipo) {
+    case "reg-alta":  return dp <= -cfg.difPreco && dr >= cfg.difRsi && p1.rsi <= cfg.zBaixa;   // preço fundo mais baixo, RSI mais alto, RSI do 1º fundo já baixo
+    case "oc-alta":   return dp >= cfg.difPreco && dr <= -cfg.difRsi && p2.rsi <= cfg.zOc;      // preço fundo mais alto, RSI mais baixo (continuação de alta)
+    case "reg-baixa": return dp >= cfg.difPreco && dr <= -cfg.difRsi && p1.rsi >= cfg.zAlta;    // preço topo mais alto, RSI mais baixo, RSI do 1º topo já alto
+    case "oc-baixa":  return dp <= -cfg.difPreco && dr >= cfg.difRsi && p2.rsi >= 100 - cfg.zOc; // preço topo mais baixo, RSI mais alto (continuação de baixa)
+  }
+}
+
+function divAnalisar(d: { t: number[]; h: number[]; l: number[]; c: number[] }, cfg: DivCfg): { conf: DivSinal[]; ant: DivSinal[]; rsi: number; n: number; rsiS: number[] } {
+  const n = d.c.length, rsi = divRsiSerie(d.c, 14);
+  const conf: DivSinal[] = [], ant: DivSinal[] = [];
+  if (n < 60) return { conf, ant, rsi: rsi[n - 1], n, rsiS: rsi };
+  const { altos, baixos } = divPivos(d.h, d.l, rsi, d.t, cfg.esq, cfg.dir);
+  const distOk = (a: DivPiv, b: DivPiv) => b.i - a.i >= cfg.distMin && b.i - a.i <= cfg.distMax;
+  // confirmados: só o par mais recente de cada lado; quem chama decide se ainda é "fresco" (atraso)
+  for (const [arr, tipos] of [[baixos, ["reg-alta", "oc-alta"]], [altos, ["reg-baixa", "oc-baixa"]]] as [DivPiv[], DivTipo[]][]) {
+    if (arr.length < 2) continue;
+    const p1 = arr[arr.length - 2], p2 = arr[arr.length - 1];
+    if (!distOk(p1, p2)) continue;
+    const atraso = (n - 1 - p2.i) - cfg.dir; // velas fechadas desde que o pivô se confirmou (0 = acabou de confirmar)
+    for (const tp of tipos) if (divCond(tp, p1, p2, cfg)) conf.push({ tipo: tp, p1, p2, atraso });
+  }
+  // antecipados: a última vela fechada é um extremo novo da janela (candidata a pivô) em divergência com o último pivô confirmado
+  const c = n - 1;
+  if (isFinite(rsi[c]) && c - cfg.esq >= 0) {
+    let novoBaixo = true, novoAlto = true;
+    for (let j = c - cfg.esq; j < c; j++) { if (d.l[j] <= d.l[c]) novoBaixo = false; if (d.h[j] >= d.h[c]) novoAlto = false; }
+    if (novoBaixo && baixos.length) {
+      const p1 = baixos[baixos.length - 1], p2: DivPiv = { i: c, t: d.t[c], preco: d.l[c], rsi: rsi[c] };
+      if (distOk(p1, p2)) for (const tp of ["reg-alta", "oc-alta"] as DivTipo[]) if (divCond(tp, p1, p2, cfg)) ant.push({ tipo: tp, p1, p2 });
+    }
+    if (novoAlto && altos.length) {
+      const p1 = altos[altos.length - 1], p2: DivPiv = { i: c, t: d.t[c], preco: d.h[c], rsi: rsi[c] };
+      if (distOk(p1, p2)) for (const tp of ["reg-baixa", "oc-baixa"] as DivTipo[]) if (divCond(tp, p1, p2, cfg)) ant.push({ tipo: tp, p1, p2 });
+    }
+  }
+  return { conf, ant, rsi: rsi[c], n, rsiS: rsi };
+}
+
+// ===== V74: divergência de RSI do BTC — estado, envio e cron =====
+// Alerta ANTECIPADO ("👀 possível": a última vela fechada já é um extremo novo com RSI divergente, mas o pivô ainda não se confirmou) e
+// CONFIRMADO ("✅": o pivô fechou DIV_PIV_DIR velas sem ser renovado), mais "❌ não se confirmou" quando o antecipado cai. Regular (reversão) e oculta (continuação),
+// altista e baixista, só em vela FECHADA (não repinta). Um aviso por divergência: o confirmado substitui o antecipado (mesma chave).
+const DIV_ON = (Deno.env.get("DIV_ON") ?? "1") !== "0";
+const DIV_TFS = (Deno.env.get("DIV_TFS") || "1H,4H,1D,1W").split(",").map((x) => x.trim().toUpperCase()).filter((x) => ["1H", "4H", "1D", "1W"].includes(x));
+const DIV_INST = "BTC-USDT";
+const DIV_ROW = "_DIV_BTC";
+const DIV_FETCH_MIN: Record<string, number> = { "1H": 10, "4H": 20, "1D": 60, "1W": 180 }; // de quanto em quanto tempo olha cada gráfico (só reavalia quando fecha vela nova)
+const DIV_APAGAR_MIN: Record<string, number> = { "1H": 720, "4H": 1440, "1D": 0, "1W": 0 }; // 0 = fica no chat (o Telegram só apaga mensagem com menos de 48h)
+const DIV_TF_NOME: Record<string, string> = { "1H": "1h", "4H": "4h", "1D": "diário", "1W": "semanal" };
+const DIV_PIV_ESQ = numEnv("DIV_PIV_ESQ", "5");
+const DIV_PIV_DIR = numEnv("DIV_PIV_DIR", "3");
+const DIV_ZONA = numEnv("DIV_ZONA", "40");        // regular altista: RSI do 1º fundo ≤ isto; regular baixista: RSI do 1º topo ≥ 100 − isto
+const DIV_ZONA_1H = numEnv("DIV_ZONA_1H", "35");  // no 1h a zona é mais rígida (diverge toda hora)
+const DIV_ZONA_OCULTA = numEnv("DIV_ZONA_OCULTA", "55");
+const DIV_RSI_DIF = numEnv("DIV_RSI_DIF", "1");
+const DIV_PRECO_DIF_PCT = numEnv("DIV_PRECO_DIF_PCT", "0.05");
+const DIV_DIST_MIN = numEnv("DIV_DIST_MIN", "6");
+const DIV_DIST_MAX = numEnv("DIV_DIST_MAX", "60");
+const DIV_JANELA_CONF = numEnv("DIV_JANELA_CONF", "2"); // confirmado só é "novo" até estas velas depois de confirmar (antes disso só se já tinha sido antecipado)
+const divCfg = (tf: string): DivCfg => {
+  const z = tf === "1H" ? DIV_ZONA_1H : DIV_ZONA;
+  return { esq: DIV_PIV_ESQ, dir: DIV_PIV_DIR, distMin: DIV_DIST_MIN, distMax: DIV_DIST_MAX, zBaixa: z, zAlta: 100 - z, zOc: DIV_ZONA_OCULTA, difRsi: DIV_RSI_DIF, difPreco: DIV_PRECO_DIF_PCT / 100 };
+};
+type DivPend = { tf: string; tipo: DivTipo; p1: DivPiv; p2: DivPiv; desde: number };
+type DivEvento = { t: number; tf: string; tipo: DivTipo; fase: "A" | "C" | "X"; preco: number; rsi: number };
+type DivEst = { fetch: Record<string, number>; barra: Record<string, number>; pend: Record<string, DivPend>; done: string[]; hist: DivEvento[] };
+const divNovo = (): DivEst => ({ fetch: {}, barra: {}, pend: {}, done: [], hist: [] });
+async function divLer(SB: any): Promise<DivEst | null> {
+  try {
+    const { data, error } = await SB.from(TAB).select("last_status").eq("instid", DIV_ROW).maybeSingle();
+    if (error) { console.log("⚠️ divergência BTC: leitura do estado falhou, pulo a rodada", error.message ?? error); return null; }
+    if (!data?.last_status) return divNovo();
+    try { return { ...divNovo(), ...JSON.parse(data.last_status) }; } catch { return divNovo(); }
+  } catch (e) { console.log("⚠️ divergência BTC: leitura do estado falhou", e); return null; }
+}
+async function divSalvar(SB: any, est: DivEst) {
+  est.done = est.done.slice(-150);
+  est.hist = est.hist.slice(-80);
+  await upsertLinha(SB, DIV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date().toISOString() });
+}
+// vela só vale se JÁ fechou de verdade: o xFechadas assume barras alinhadas ao UTC (a semanal abre na segunda e a diária pode abrir às 16h UTC)
+async function divVelas(tf: string): Promise<XVelas | null> {
+  const d = await xCandles(DIV_INST, tf, 300);
+  if (!d) return null;
+  const ms = barToMs(tf), agora = Date.now();
+  let n = d.t.length;
+  while (n > 0 && d.t[n - 1] + ms > agora) n--;
+  if (n < 100) return null;
+  return { t: d.t.slice(0, n), o: d.o.slice(0, n), h: d.h.slice(0, n), l: d.l.slice(0, n), c: d.c.slice(0, n), v: d.v.slice(0, n) };
+}
+const divDH = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
+const DIV_TXT: Record<DivTipo, { nome: string; icone: string; ponta: string; preco: string; rsi: string; sentido: string }> = {
+  "reg-alta": { nome: "ALTISTA regular", icone: "🟢", ponta: "fundo", preco: "mais baixo", rsi: "mais alto", sentido: "possível reversão pra cima" },
+  "oc-alta": { nome: "ALTISTA oculta", icone: "🟢", ponta: "fundo", preco: "mais alto", rsi: "mais baixo", sentido: "continuação da alta" },
+  "reg-baixa": { nome: "BAIXISTA regular", icone: "🔴", ponta: "topo", preco: "mais alto", rsi: "mais baixo", sentido: "possível reversão pra baixo" },
+  "oc-baixa": { nome: "BAIXISTA oculta", icone: "🔴", ponta: "topo", preco: "mais baixo", rsi: "mais alto", sentido: "continuação da baixa" },
+};
+function divMsg(fase: "A" | "C" | "X", tf: string, tipo: DivTipo, p1: DivPiv, p2: DivPiv, preco: number, rsiAtual: number, atraso = 0): string {
+  const x = DIV_TXT[tipo], nome = DIV_TF_NOME[tf] ?? tf;
+  const tit = fase === "A" ? `👀 <b>BTC · ${nome}</b> — possível divergência ${x.nome}`
+    : fase === "C" ? `✅ <b>BTC · ${nome}</b> — divergência ${x.nome} CONFIRMADA`
+    : `❌ <b>BTC · ${nome}</b> — divergência ${x.nome} não se confirmou`;
+  let m = `${tit}\n${DIVISOR}\n\n${x.icone} ${x.nome}: ${x.sentido}\n`;
+  m += `Preço fez ${x.ponta} ${x.preco}: ${fmtPrice(p1.preco)} (${divDH(p1.t)}) → ${fmtPrice(p2.preco)} (${divDH(p2.t)})\n`;
+  m += `RSI no ${x.ponta}: ${p1.rsi.toFixed(1)} → ${p2.rsi.toFixed(1)} (${x.rsi})\n`;
+  if (fase === "A") m += `\n⏳ Ainda NÃO confirmada: o ${x.ponta} só vale depois de ${DIV_PIV_DIR} velas ${nome} fechadas sem renovar o extremo. Se o preço seguir e o RSI acompanhar, eu aviso que não se confirmou.\n`;
+  else if (fase === "C") m += `\n${atraso > 0 ? `Confirmada há ${atraso} vela(s) ${nome}.` : `${x.ponta[0].toUpperCase()}${x.ponta.slice(1)} confirmado (${DIV_PIV_DIR} velas fechadas sem renovar).`}\n`;
+  else m += `\nO extremo foi renovado e o RSI acompanhou: a divergência deixou de existir.\n`;
+  m += `BTC ${fmtPrice(preco)} · RSI ${nome} ${isFinite(rsiAtual) ? rsiAtual.toFixed(1) : "—"}`;
+  if (LATERAL_ON) m += ` · filtro lateral: ${_latBloq ? "🧱 lateral" : "📶 tendência"}`;
+  return m;
+}
+async function divEnviar(SB: any, fase: "A" | "C" | "X", tf: string, tipo: DivTipo, p1: DivPiv, p2: DivPiv, preco: number, rsiAtual: number, atraso = 0): Promise<boolean> {
+  const dest = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
+  if (!dest.length) return false;
+  // 1h/4h: 1 mensagem por tipo (a nova substitui a velha, e some sozinha); diário/semanal: 1 por divergência (ficam no chat, são raras)
+  const chave = tf === "1D" || tf === "1W" ? `DIV_${tf}_${tipo}_${p1.t}` : `DIV_${tf}_${tipo}`;
+  const msg = divMsg(fase, tf, tipo, p1, p2, preco, rsiAtual, atraso);
+  const ids = await Promise.all(dest.map((ch) => enviarAlertaMoeda(SB, ch, chave, msg, undefined, DIV_APAGAR_MIN[tf] ?? 0).catch(() => null)));
+  return ids.some(Boolean);
+}
+async function checarDivergenciaBTC(SB: any): Promise<void> {
+  if (!DIV_ON || !DIV_TFS.length || !ALERT_CHAT_IDS.length) return;
+  const est = await divLer(SB);
+  if (!est) return;
+  const agora = Date.now();
+  let mudou = false;
+  for (const tf of DIV_TFS) {
+    if (agora - (est.fetch[tf] || 0) < (DIV_FETCH_MIN[tf] ?? 10) * 60000) continue;
+    const d = await divVelas(tf);
+    est.fetch[tf] = agora; mudou = true;
+    if (!d) { console.log(`⚠️ divergência BTC ${tf}: sem velas`); continue; }
+    const n = d.c.length, ultT = d.t[n - 1];
+    if (est.barra[tf] === ultT) continue; // nenhuma vela nova fechada desde a última avaliação
+    const a = divAnalisar(d, divCfg(tf));
+    const preco = d.c[n - 1];
+    let falhou = false;
+    for (const tp of DIV_TIPOS) {
+      const pends = Object.keys(est.pend).filter((k) => est.pend[k].tf === tf && est.pend[k].tipo === tp);
+      // 1) confirmada — nova (≤ DIV_JANELA_CONF velas) ou que eu já tinha antecipado (aí avisa mesmo atrasada)
+      const conf = a.conf.find((x) => x.tipo === tp);
+      if (conf) {
+        const kc = `${tf}|${tp}|${conf.p2.t}|C`;
+        const eraAntecipada = pends.some((k) => est.pend[k].p1.t === conf.p1.t);
+        if (!est.done.includes(kc) && ((conf.atraso ?? 0) <= DIV_JANELA_CONF || eraAntecipada)) {
+          if (await divEnviar(SB, "C", tf, tp, conf.p1, conf.p2, preco, a.rsi, conf.atraso ?? 0)) {
+            est.done.push(kc);
+            est.hist.push({ t: agora, tf, tipo: tp, fase: "C", preco, rsi: a.rsi });
+            for (const k of pends) if (est.pend[k].p1.t === conf.p1.t) delete est.pend[k];
+            mudou = true;
+            console.log(`📐 divergência BTC ${tf} ${tp} CONFIRMADA`);
+          } else falhou = true;
+        }
+      }
+      // 2) antecipada — candidata na última vela fechada
+      const ant = a.ant.find((x) => x.tipo === tp);
+      if (ant) {
+        const pk = `${tf}|${tp}|${ant.p1.t}`;
+        if (est.pend[pk]) { est.pend[pk].p2 = ant.p2; mudou = true; } // mesma divergência estendida (novo extremo, RSI ainda divergente): atualiza sem avisar de novo
+        else if (!est.done.includes(`${pk}|A`) && !est.done.includes(`${tf}|${tp}|${ant.p2.t}|C`)) {
+          if (await divEnviar(SB, "A", tf, tp, ant.p1, ant.p2, preco, a.rsi)) {
+            est.done.push(`${pk}|A`);
+            est.pend[pk] = { tf, tipo: tp, p1: ant.p1, p2: ant.p2, desde: agora };
+            est.hist.push({ t: agora, tf, tipo: tp, fase: "A", preco, rsi: a.rsi });
+            mudou = true;
+            console.log(`📐 divergência BTC ${tf} ${tp} antecipada`);
+          } else falhou = true;
+        }
+      }
+      // 3) antecipada que caiu: o extremo desde o 1º pivô JÁ virou pivô (DIV_PIV_DIR velas sem ser renovado) e a divergência não se confirmou
+      //    (o candidato antigo pode estar velho se a rodada atrasou; o que vale é onde está o extremo de verdade)
+      for (const k of Object.keys(est.pend).filter((kk) => est.pend[kk].tf === tf && est.pend[kk].tipo === tp)) {
+        const pe = est.pend[k];
+        if (ant && `${tf}|${tp}|${ant.p1.t}` === k) continue; // ainda divergindo
+        const i1 = d.t.lastIndexOf(pe.p1.t);
+        if (i1 < 0) { delete est.pend[k]; mudou = true; continue; }
+        const alto = !divEhAlta(tp), arr = alto ? d.h : d.l;
+        let ie = i1 + 1;
+        for (let j = i1 + 1; j < n; j++) if (alto ? arr[j] > arr[ie] : arr[j] < arr[ie]) ie = j; // 1ª ocorrência do extremo (igual ao divPivos)
+        if (n - 1 - ie >= DIV_PIV_DIR) {
+          const p2: DivPiv = { i: ie, t: d.t[ie], preco: arr[ie], rsi: isFinite(a.rsiS[ie]) ? a.rsiS[ie] : pe.p2.rsi };
+          if (await divEnviar(SB, "X", tf, tp, pe.p1, p2, preco, a.rsi)) {
+            est.hist.push({ t: agora, tf, tipo: tp, fase: "X", preco, rsi: a.rsi });
+            delete est.pend[k]; mudou = true;
+            console.log(`📐 divergência BTC ${tf} ${tp} não se confirmou`);
+          } else falhou = true;
+        }
+      }
+    }
+    if (!falhou) est.barra[tf] = ultT; // se algum envio falhou (silêncio/Telegram), reavalia na próxima rodada em vez de perder o aviso
+  }
+  if (mudou) await divSalvar(SB, est);
+}
+// V74: contexto do BTC pro /analise (só leitura do estado salvo pelo checarDivergenciaBTC — não busca vela, não mexe na nota/confiança).
+// Mostra as antecipadas em aberto e as confirmadas recentes (janela por gráfico), e quantas estão a favor/contra o lado do robô daquela moeda.
+const DIV_VALE_H: Record<string, number> = { "1H": 12, "4H": 48, "1D": 7 * 24, "1W": 28 * 24 };
+function divBtcTexto(est: DivEst, lado: "long" | "short", agora: number): string {
+  const ordem = ["1W", "1D", "4H", "1H"];
+  const itens: { tf: string; tipo: DivTipo; fase: "A" | "C"; idadeH: number }[] = [];
+  for (const p of Object.values(est.pend || {})) itens.push({ tf: p.tf, tipo: p.tipo, fase: "A", idadeH: (agora - p.desde) / 3_600_000 });
+  const vistos = new Set<string>();
+  for (const e of [...(est.hist || [])].reverse()) { // mais nova primeiro: 1 confirmada por (gráfico, tipo)
+    if (e.fase !== "C") continue;
+    const k = `${e.tf}|${e.tipo}`, h = (agora - e.t) / 3_600_000;
+    if (vistos.has(k) || h > (DIV_VALE_H[e.tf] ?? 12)) continue;
+    vistos.add(k);
+    itens.push({ tf: e.tf, tipo: e.tipo, fase: "C", idadeH: h });
+  }
+  const aberto = new Set(itens.filter((i) => i.fase === "A").map((i) => `${i.tf}|${i.tipo}`));
+  const lista = itens.filter((i) => i.fase === "A" || !aberto.has(`${i.tf}|${i.tipo}`)) // antecipada em aberto de novo > confirmada velha do mesmo tipo
+    .sort((x, y) => ordem.indexOf(x.tf) - ordem.indexOf(y.tf));
+  if (!lista.length) return `📐 BTC: sem divergência de RSI ativa (1h, 4h, diário, semanal)\n`;
+  const idade = (h: number) => (h < 1 ? "agora" : h < 48 ? `há ${Math.round(h)}h` : `há ${Math.round(h / 24)}d`);
+  let m = `📐 <b>BTC — divergência de RSI</b>\n`;
+  m += lista.map((i) => `${DIV_TXT[i.tipo].icone} ${DIV_TF_NOME[i.tf] ?? i.tf} ${DIV_TXT[i.tipo].nome}: ${i.fase === "A" ? "👀 antecipada (não confirmada)" : `✅ confirmada ${idade(i.idadeH)}`}`).join("\n") + "\n";
+  const aFavor = lista.filter((i) => divEhAlta(i.tipo) === (lado === "long")).length, contra = lista.length - aFavor;
+  m += `Pro lado do robô (${lado === "long" ? "LONG" : "SHORT"}): ${aFavor} a favor · ${contra} contra${contra > aFavor ? " ⚠️" : ""}\n`;
+  return m;
+}
+async function divBtcLinha(SB: any, lado: "long" | "short"): Promise<string> {
+  if (!DIV_ON || !SB) return "";
+  try {
+    const { data, error } = await SB.from(TAB).select("last_status").eq("instid", DIV_ROW).maybeSingle();
+    if (error || !data?.last_status) return "";
+    return divBtcTexto({ ...divNovo(), ...JSON.parse(data.last_status) }, lado, Date.now());
+  } catch { return ""; }
+}
+async function runDiv(chatId: number | string) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const est = await divLer(SB);
+  if (!est) { await sendTelegram(chatId, "⚠️ Não consegui ler o estado das divergências agora."); return; }
+  const agoraPreco = await precoAoVivo(DIV_INST).catch(() => null);
+  let m = `📐 <b>DIVERGÊNCIA DE RSI — BTC</b>\n${DIVISOR}\n`;
+  m += DIV_ON ? `Gráficos: ${DIV_TFS.map((t) => DIV_TF_NOME[t] ?? t).join(", ") || "nenhum"} · pivô ${DIV_PIV_ESQ} velas à esquerda / ${DIV_PIV_DIR} à direita\n` : `⏸️ Desligado (DIV_ON=0)\n`;
+  const pend = Object.values(est.pend);
+  m += `\n⏳ <b>Antecipadas em aberto</b> (${pend.length})\n`;
+  m += pend.length ? pend.map((p) => `${DIV_TXT[p.tipo].icone} ${DIV_TF_NOME[p.tf] ?? p.tf} ${DIV_TXT[p.tipo].nome} · desde ${divDH(p.desde)}`).join("\n") + "\n" : "nenhuma\n";
+  const ult = est.hist.slice(-12).reverse();
+  m += `\n🧾 <b>Últimos avisos</b> (o que o BTC fez depois, no sentido do aviso)\n`;
+  if (!ult.length) m += "ainda nenhum\n";
+  else m += ult.map((e) => {
+    const alta = divEhAlta(e.tipo);
+    const mov = agoraPreco && e.preco > 0 ? ((agoraPreco - e.preco) / e.preco) * 100 * (alta ? 1 : -1) : NaN;
+    const fi = e.fase === "A" ? "👀" : e.fase === "C" ? "✅" : "❌";
+    return `${fi} ${DIV_TF_NOME[e.tf] ?? e.tf} ${DIV_TXT[e.tipo].nome} · ${divDH(e.t)} · BTC ${fmtPrice(e.preco)}${e.fase !== "X" && isFinite(mov) ? ` → ${mov >= 0 ? "+" : ""}${mov.toFixed(2)}% ${mov >= 0 ? "a favor" : "contra"}` : ""}`;
+  }).join("\n") + "\n";
+  m += `\n<i>Divergência é contexto, não entrada: em tendência forte o RSI diverge várias vezes antes do preço virar. "A favor" = na direção do aviso (altista sobe, baixista cai). Compare por gráfico antes de confiar.</i>`;
+  await sendTelegram(chatId, cortar(m));
 }
 async function avaliarLateral(SB: any): Promise<LateralEst> {
   const est = (await lateralLer(SB)) ?? lateralNovo();
@@ -4241,12 +4543,14 @@ async function runAnalise(chatId: number | string, entrada: string, capturar?: (
   const preco = vivo ?? info.preco;
   const SBseta = getSupabase();
   const seta = SBseta ? await setaGeral(SBseta, chatId, instId, conf, lado) : "";
+  const divBtc = await divBtcLinha(SBseta, lado); // V74: contexto do BTC (divergência de RSI), só leitura
 
   // ── 1) CABEÇALHO: veredito e números-chave ──
   let cab = `🔎 <b>ANÁLISE — ${instId}</b>\n${DIVISOR}\n\n`;
   cab += `${veredito} (${total >= 0 ? "+" : ""}${total} pts)\nConfiança: <b>${conf}/10</b> ${confEmoji(conf)}${seta ? `\nMovimento: ${seta}` : ""}\nRobô abriria: <b>${lado === "long" ? "LONG (compra)" : "SHORT (venda)"}</b>\n${placarFiltros(motivos)}\n`;
   cab += `💰 <b>${fmtPrice(preco)}</b>${vivo !== null ? " agora" : ""}${pct !== null ? ` · ${pct >= 0 ? "📈 +" : "📉 "}${pct.toFixed(2)}% (24h)` : ""}${volUsdt !== null ? ` · vol ${(volUsdt / 1e6).toFixed(2)}M` : ""}\n`;
   { const refP = vivo ?? preco; const distInd = refP ? Math.min(Math.abs(refP - info.topo), Math.abs(refP - info.fundo)) / refP * 100 : null; cab += `⏱ vela fecha em ~${finalRestMin()} min${distInd !== null ? ` · 📏 ${distInd.toFixed(2)}% do Indicador` : ""}\n`; }
+  if (divBtc) cab += `\n${divBtc}`;
 
   // ── 2) QUEM ESTÁ DE FORA ──
   const idadeC = info.idadeCandles;
@@ -6910,6 +7214,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
     ["🚪 /saida 7", "simula a saída real do robô", "simula a saída real (cruzamento contrário ou stop de 1×ATR, e variante com trailing): R médio, profit factor, sem os 3 melhores e duração; até 9 dias"],
+    ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso"],
     ["🧾 /meuplacar 7", "seus trades reais x alertas", "seus trades reais x alertas do bot (precisa da chave BloFin)"],
     ["🌅 /resumo", "painel do dia", "painel do dia (21h a 21h), atualizado a cada hora: agenda e notícias no topo, BTC (comparação desde as 21h e 8h), posições e janelas fortes; no fechamento das 21h vêm os 15m em destaque, seu resultado real e o comparativo com o ciclo anterior"],
     ["📰 /noticia", "falas do Trump e notícias que mexem no mercado", "últimas notícias de impacto: falas do Trump (espelho do Truth Social) e manchetes de cripto/macro, traduzidas pro português quando o Gemini está configurado; aceita /noticia trump, /noticia cripto e /noticia 24 (horas). Avisa sozinho quando o Trump posta algo de alto impacto"],
@@ -7210,6 +7515,10 @@ Deno.serve(async (req) => {
     if (text.startsWith("/15min")) {
       const dias = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
       await rodarEmBackground(run15min(chatId, dias));
+      return new Response("ok");
+    }
+    if (text === "/div" || text.startsWith("/div ") || text.startsWith("/div@")) {
+      await rodarEmBackground(runDiv(chatId));
       return new Response("ok");
     }
     if (text.startsWith("/saida")) {
