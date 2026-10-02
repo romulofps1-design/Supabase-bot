@@ -2,7 +2,7 @@
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
 // já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V74 (V73 + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// telegram-bot V74 (V73 + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
 // auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
 // telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
 // com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
@@ -216,6 +216,9 @@ const REPIQUE_MOV_ANTES_MIN = numEnv("REPIQUE_MOV_ANTES_MIN", String(Math.min(FU
 const REPIQUE_LADO_ATR = numEnv("REPIQUE_LADO_ATR", "1");
 const TOPO_COOLDOWN_MIN = numEnv("TOPO_COOLDOWN_MIN", "240");
 const TOPO_MAX_POR_RODADA = numEnv("TOPO_MAX_POR_RODADA", "2");
+// V74: quantas candidatas (já ordenadas por força) os radares de fundo/topo/compressão olham por rodada. O cooldown é checado DENTRO do laço, então
+// com janela de 8 (ou 6) as mesmas moedas fortes, em cooldown, bloqueavam as seguintes. O limite por rodada (*_MAX_POR_RODADA) continua mandando no spam.
+const RADAR_CAND_JANELA = numEnv("RADAR_CAND_JANELA", "20");
 const ALERT_POOL_ALTA = numEnv("ALERT_POOL_ALTA", "15");
 // V36: inclinação da faixa, medida em "velas típicas por vela" (quanto o meio da faixa anda por vela, dividido pelo movimento típico de uma vela da moeda)
 const INCLINA_JAN = numEnv("INCLINA_JAN", "8");
@@ -1361,7 +1364,7 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     cands.push({ info, pct: p.pct, queda });
   });
   cands.sort((a, b) => Number(!!b.info.bottom!.repique) - Number(!!a.info.bottom!.repique) || b.info.bottom!.pts - a.info.bottom!.pts);
-  const top = cands.slice(0, 8);
+  const top = cands.slice(0, RADAR_CAND_JANELA); // V74: janela maior que 8/6 — as de cima em cooldown ocupavam todas as vagas e as de baixo nunca saíam
   console.log(`🟢 radar de fundo: ${cands.length} candidata(s) com queda ≥ ${FUNDO_QUEDA_MIN}% e pré-filtro ≥ ${FUNDO_PRE_MIN} pts`);
   if (!top.length) return;
   const rowsMap = new Map<string, any>();
@@ -1583,7 +1586,7 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
     cands.push({ info, pct: p.pct, alta });
   });
   cands.sort((a, b) => Number(!!b.info.top!.repique) - Number(!!a.info.top!.repique) || b.info.top!.pts - a.info.top!.pts);
-  const top = cands.slice(0, 8);
+  const top = cands.slice(0, RADAR_CAND_JANELA); // V74: janela maior que 8/6 — as de cima em cooldown ocupavam todas as vagas e as de baixo nunca saíam
   console.log(`🔴 radar de topo: ${cands.length} candidata(s) com alta ≥ ${TOPO_ALTA_MIN}% e pré-filtro ≥ ${TOPO_PRE_MIN} pts`);
   if (!top.length) return;
   const rowsMap = new Map<string, any>();
@@ -1751,7 +1754,7 @@ async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: st
   cands.sort((a, b) => b.res.conf - a.res.conf || b.res.pts - a.res.pts);
   console.log(`🗜️ radar de compressão: ${cands.length} candidata(s) com confiança ≥ ${COMPRESS_CONF_MIN} (${pool.length} do pool + ${extras.length} do rodízio, cursor ${_compCursor}/${universo.length})`);
   if (!cands.length) return;
-  const top = cands.slice(0, 6);
+  const top = cands.slice(0, RADAR_CAND_JANELA); // V74: janela maior que 8/6 — as de cima em cooldown ocupavam todas as vagas e as de baixo nunca saíam
   const rowsMap = new Map<string, any>();
   try {
     const { data } = await SB.from(TAB).select("*").in("instid", top.map((c) => "_COMP_" + c.info.instId));
@@ -3187,6 +3190,11 @@ const latRegrasTend = () => `ADX ≥ ${LATERAL_ADX_LIBERA} · ER ≥ ${LATERAL_E
 const latQtdLibera = () => `${LATERAL_VOTOS_LIBERA} de 3 requisitos no mínimo`; // V70
 // V57: aviso colado nos PREPARE/radares que passam enquanto o filtro bloqueia (o LIGUE AGORA fica barrado)
 let _latBloq = false;
+// V74: estado do filtro lateral NO MOMENTO do alerta, gravado no fim do `status` do log (sem mexer no banco; tudo que lê o status usa includes()).
+// " 🧱" = saiu com o mercado lateral · " 📶" = saiu com tendência. Sem marca = alerta antigo (ou filtro desligado). Alimenta os grupos do /saida e dos placares.
+const LAT_MARCA = " 🧱", TEND_MARCA = " 📶";
+const marcaLatLog = (): string => (LATERAL_ON ? (_latBloq ? LAT_MARCA : TEND_MARCA) : "");
+const temMarca = (r: any, m: string): boolean => String(r?.status || "").includes(m);
 const notaLat = () => (!_latBloq ? "" : LATERAL_BARRA
   ? `\n\n🧱 <b>Mercado lateral</b> (BTC e ETH sem tendência): é só aviso antecipado — o LIGUE AGORA fica barrado até o filtro liberar.`
   : `\n\n🧱 <b>Mercado lateral</b> (BTC e ETH sem tendência): aviso visual — o filtro não está barrando nada, confirme no gráfico antes de ligar o robô.`);
@@ -3318,7 +3326,7 @@ async function registrarAlerta(SB: any, c: Setup, conf: number | null = null) {
   try {
     const f = c.info as Partial<InfoFiltravel>;
     await inserirLogAlerta(SB, {
-      instid: c.info.instId, lado: c.lado, tipo: c.tipo, status: c.status, fresco: c.fresco,
+      instid: c.info.instId, lado: c.lado, tipo: c.tipo, status: c.status + marcaLatLog(), fresco: c.fresco,
       idade_candles: c.info.idadeCandles, pct24: c.pct, preco: c.info.preco,
       adx: f.adx ?? null, rsi: f.rsi ?? null,
     }, conf);
@@ -3566,6 +3574,10 @@ function placar15mTxt(rows: any[]): string {
     lin("🟢 LONG", frescos.filter((o) => o.r.lado === "long")),
     lin("🔴 SHORT", frescos.filter((o) => o.r.lado === "short")),
   ]);
+  m += secao("Por mercado (filtro lateral)", [
+    lin("🧱 Em lateral", frescos.filter((o) => temMarca(o.r, LAT_MARCA))),
+    lin("📶 Com tendência", frescos.filter((o) => temMarca(o.r, TEND_MARCA))),
+  ]);
   m += secao("Por força da tendência (ADX)", [
     lin("💪 ADX ≥ 25", frescos.filter((o) => o.r.adx != null && Number(o.r.adx) >= 25)),
     lin("😐 ADX &lt; 25", frescos.filter((o) => o.r.adx != null && Number(o.r.adx) < 25)),
@@ -3580,7 +3592,9 @@ function placar15mTxt(rows: any[]): string {
   if (jan.length) m += `↕️ <b>Quanto andou (mediana, frescos)</b>\n${jan.join("\n")}\n<i>o movimento a favor precisa passar de ~3× o custo (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% + slippage) e ficar acima do movimento contra pra valer a entrada</i>\n\n`;
   const ord = [...frescos].sort((a, b) => a.x - b.x);
   const fmtI = (o: { r: any; x: number }) => `${String(o.r.instid)} ${o.r.lado === "long" ? "L" : "S"} ${_sg(o.x)}`;
-  m += `🔎 <b>Extremos (confira se são dado ruim)</b>\npiores: ${ord.slice(0, 5).map(fmtI).join(" · ")}\nmelhores: ${ord.slice(-5).reverse().map(fmtI).join(" · ")}\n\n`;
+  // V74: com poucos frescos (n<10) os 5 piores e os 5 melhores se sobrepunham (a mesma entrada saía nas duas listas): usa no máx. metade de cada lado
+  const kExt = Math.min(5, Math.floor(ord.length / 2));
+  if (kExt > 0) m += `🔎 <b>Extremos (confira se são dado ruim)</b>\npiores: ${ord.slice(0, kExt).map(fmtI).join(" · ")}\nmelhores: ${ord.slice(-kExt).reverse().map(fmtI).join(" · ")}\n\n`;
   if (frescos.length < 30) m += `⚠️ <i>Só ${frescos.length} frescos com 15m conferido: ruído domina, não tire conclusão ainda.</i>\n`;
   return m;
 }
@@ -3619,6 +3633,8 @@ async function runPlacar(chatId: number | string, dias: number) {
     ["🟡 Perto", (r) => String(r.status || "").includes("PERTO") && !String(r.status || "").includes("MUITO PERTO"), "Por frescor e distância"],
     ["💪 ADX ≥ 25", (r) => r.adx != null && Number(r.adx) >= 25, "Por força da tendência (ADX)"],
     ["😐 ADX &lt; 25", (r) => r.adx != null && Number(r.adx) < 25, "Por força da tendência (ADX)"],
+    ["🧱 Em lateral (filtro lateral ligado na hora)", (r) => temMarca(r, LAT_MARCA), "Por mercado (filtro lateral)"],
+    ["📶 Com tendência (filtro liberado na hora)", (r) => temMarca(r, TEND_MARCA), "Por mercado (filtro lateral)"],
     ["🟢 LONG", (r) => r.lado === "long" && !(r.tipo === "compressao" && r.ent_status !== "entrou"), "Por lado"],
     ["🔴 SHORT", (r) => r.lado === "short" && !(r.tipo === "compressao" && r.ent_status !== "entrou"), "Por lado"], // V54: mesmo filtro do LONG (compressão sem rompimento não tem lado)
   ];
@@ -3830,6 +3846,8 @@ async function runSaida(chatId: number | string, dias: number) {
     ["⌛ Não fresco", (x) => x.r.fresco !== true],
     ["🟢 LONG", (x) => x.r.lado === "long"],
     ["🔴 SHORT", (x) => x.r.lado === "short"],
+    ["🧱 Em lateral", (x) => temMarca(x.r, LAT_MARCA)],
+    ["📶 Com tendência", (x) => temMarca(x.r, TEND_MARCA)],
   ];
   const abertos = res.filter((x) => x.a.motivo === "aberto").length;
   let msg = `🚪 <b>SAÍDA REAL DO ROBÔ</b> — últimos ${dd} dia(s)\n${DIVISOR}\n${res.length} entrada(s) simuladas${abertos ? `, ${abertos} ainda aberta(s) (contadas ao preço atual)` : ""}${semHist ? `, ${semHist} sem velas suficientes` : ""}\n<i>Entrada = fechamento da vela do cruzamento. 1R = ${SAIDA_STOP_ATR}×ATR da entrada. A = sai no cruzamento contrário da faixa ou no stop. B = A + trailing por degraus de ${TRAIL_ATR_MULT}×ATR. Já desconta a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}%); sem funding.</i>\n\n`;
@@ -3837,17 +3855,30 @@ async function runSaida(chatId: number | string, dias: number) {
     const g = res.filter(fn);
     if (!g.length) continue;
     msg += `<b>${nome}</b> (n=${g.length})\nA: ${statsR(g.map((x) => x.a.r))}\nB: ${statsR(g.map((x) => x.b.r))}\n`;
-    if (nome === "Geral") {
+    const ehLatGrupo = nome.startsWith("🧱") || nome.startsWith("📶");
+    if (nome === "Geral" || ehLatGrupo) {
       const avg = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
       const comVirada = (xs: Res[]) => xs.filter((x) => x.c.flips > 0).length;
       const gc = g.filter((x) => !x.c.dup), gd = g.filter((x) => !x.d.dup);
       const noLimiteC = gc.filter((x) => x.c.bateuLimite).length, noLimiteD = gd.filter((x) => x.d.bateuLimite).length;
-      msg += `C (viradas, sem trailing): ${statsR(gc.map((x) => x.c.rTotal))} · ${avg(gc.map((x) => x.c.pernas)).toFixed(1)} perna(s)/entrada em média, ${comVirada(gc)} entrada(s) viraram pelo menos 1x${noLimiteC ? ` · ⚠️ ${noLimiteC} bateu(ram) no limite de 12 pernas (R real maior que o mostrado)` : ""}\n`;
+      msg += `C (viradas, sem trailing): ${statsR(gc.map((x) => x.c.rTotal))} · ${avg(gc.map((x) => x.c.pernas)).toFixed(1)} perna(s)/entrada em média, ${comVirada(gc)} entrada(s) viraram pelo menos 1x${noLimiteC ? ` · ⚠️ ${noLimiteC} bateu(ram) no limite de 12 pernas (o R real dessas pode ser diferente do mostrado)` : ""}\n`;
       msg += `D (viradas, com trailing): ${statsR(gd.map((x) => x.d.rTotal))} · ${avg(gd.map((x) => x.d.pernas)).toFixed(1)} perna(s)/entrada em média${noLimiteD ? ` · ⚠️ ${noLimiteD} bateu(ram) no limite` : ""}\n`;
-      const dupsC = g.length - gc.length;
-      if (dupsC) msg += `↪️ ${dupsC} entrada(s) já estavam dentro da cadeia de outra da mesma moeda e entram em C/D uma vez só\n`;
+      const dupsC = g.length - gc.length, dupsD = g.length - gd.length;
+      if (nome === "Geral" && (dupsC || dupsD)) msg += `↪️ ${dupsC === dupsD ? dupsC : `${dupsC} em C e ${dupsD} em D`} entrada(s) já estavam dentro da cadeia de outra da mesma moeda e entram em C/D uma vez só\n`;
     }
     msg += `\n`;
+  }
+  {
+    const gl = res.filter((x) => temMarca(x.r, LAT_MARCA) && !x.c.dup), gt = res.filter((x) => temMarca(x.r, TEND_MARCA) && !x.c.dup);
+    if (gl.length + gt.length > 0) {
+      const mR = (xs: Res[]) => xs.reduce((t, x) => t + x.c.rTotal, 0) / xs.length;
+      msg += `<i>🧱/📶 = filtro lateral no momento do alerta (só alertas novos; ${res.length - res.filter((x) => temMarca(x.r, LAT_MARCA) || temMarca(x.r, TEND_MARCA)).length} sem marca ficam fora desses dois grupos)</i>\n`;
+      if (gl.length >= 20 && gt.length >= 20) {
+        const dif = mR(gt) - mR(gl);
+        msg += `🧱 Leitura (cadeia C): em lateral ${mR(gl) >= 0 ? "+" : ""}${mR(gl).toFixed(2)}R/entrada (n=${gl.length}) vs com tendência ${mR(gt) >= 0 ? "+" : ""}${mR(gt).toFixed(2)}R (n=${gt.length}) → ${Math.abs(dif) < 0.3 ? "sem diferença clara: o filtro não mudaria muito" : dif > 0 ? "lateral rende pior: a favor de LATERAL_MODO=bloqueia" : "lateral NÃO rende pior: bloquear tiraria entradas boas"}\n`;
+      } else msg += `🧱 Leitura: amostra pequena (lateral n=${gl.length} · tendência n=${gt.length}); espere ao menos 20 de cada pra comparar.\n`;
+      msg += `\n`;
+    }
   }
   const durH = (x: Res) => (x.a.barras * TF_MIN) / 60;
   const mot = (m: string) => res.filter((x) => x.a.motivo === m).length;
@@ -5904,6 +5935,12 @@ async function painelAtualizar(SB: any, est: PainelEstado, fim: boolean): Promis
   for (const ch of ALERT_CHAT_IDS) {
     const id = est.ids[ch];
     if (id) {
+      if (fim && silChat(ch)) {
+        // V74: em horário de silêncio o fim continua sendo só uma edição (não notifica); mensagem nova só fora do silêncio
+        await editarTelegram(ch, id, await montarPainel(SB, ch, est, snap, true));
+        if (PAINEL_PIN) tgPost("unpinChatMessage", { chat_id: ch, message_id: id }).catch(() => {});
+        continue;
+      }
       if (fim) {
         // V74: o FIM DO RESUMO sai como mensagem NOVA (edição não notifica). Desafixa e apaga o painel velho só depois de o novo sair;
         // est.ids passa a apontar pra mensagem final, que é a que o PAINEL_FIM_APAGAR_H apaga depois.
@@ -7018,14 +7055,23 @@ Deno.serve(async (req) => {
     if (ligueiMatch) {
       const [, instLig, ladoLig, ckLig] = ligueiMatch;
       const agoraIso = new Date().toISOString();
+      // V74: o Supabase devolve o erro no retorno (não lança), então o try/catch antigo nunca pegava falha de gravação e o botão mostrava
+      // "Registrado" mesmo sem gravar. Agora checa o retorno; se falhar, avisa e mantém o botão pra tentar de novo.
+      let gravou = false;
       try {
-        await getSupabase()?.from("ligacoes_robo").insert({ instid: instLig.toUpperCase(), lado: ladoLig, ck: Number(ckLig), chat_id: String(chatId), clicado_em: agoraIso });
+        const sbLig = getSupabase();
+        if (!sbLig) console.log("⚠️ registrar 'já liguei': Supabase não configurado");
+        else {
+          const { error: eLig } = await sbLig.from("ligacoes_robo").insert({ instid: instLig.toUpperCase(), lado: ladoLig, ck: Number(ckLig), chat_id: String(chatId), clicado_em: agoraIso });
+          if (eLig) console.log("⚠️ registrar 'já liguei' falhou:", eLig.message ?? eLig);
+          else gravou = true;
+        }
       } catch (e) { console.log("⚠️ registrar 'já liguei' falhou", e); }
       const hhmm = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-      respostaCq = `🔔 Registrado às ${hhmm}`;
+      respostaCq = gravou ? `🔔 Registrado às ${hhmm}` : "⚠️ Não consegui registrar — tente de novo";
       const msgId = cq?.message?.message_id;
       // só troca o teclado (não mexe no texto, pra não perder a formatação HTML original ao reeditar)
-      if (msgId) {
+      if (gravou && msgId) {
         const markup = { inline_keyboard: [[{ text: `✅ Ligado às ${hhmm}`, callback_data: "noop" }], ...botaoAnalisar(instLig.toUpperCase())] };
         await fetch(`${TG_API}/editMessageReplyMarkup`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -7033,6 +7079,7 @@ Deno.serve(async (req) => {
         }).catch(() => {});
       }
     }
+
     if (cq?.id) {
       await fetch(`${TG_API}/answerCallbackQuery`, {
         method: "POST", headers: { "Content-Type": "application/json" },
