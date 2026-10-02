@@ -2,7 +2,7 @@
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
 // já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V74 (V73 + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// telegram-bot V74 (V73 + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
 // auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
 // telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
 // com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
@@ -101,6 +101,10 @@ const ACOMP_AUTOAPAGAR_MIN = numEnv("ACOMP_AUTOAPAGAR_MIN", "5");
 // Evita spam em moeda picotada que cruza toda hora. Guardado no Supabase (a function serverless não guarda memória entre rodadas).
 const ACOMP_INTERVALO_MIN = numEnv("ACOMP_INTERVALO_MIN", "0");
 const ACOMP_INTERVALO_PREFIXO = "_ACOMPT_";
+// V74: aviso "voltou pra dentro da faixa": alerta que saiu JÁ cruzado e o preço recuou pra dentro da faixa (repique) sem chegar à linha
+// oposta — o "cruzou CONTRA" não cobre isso. Dispara quando o preço está pelo menos WATCH_VOLTA_ATR × ATR dentro da linha (mín. FINAL_CANCELA_PCT %).
+// 0 desliga. Sai 1x por alerta.
+const WATCH_VOLTA_ATR = numEnv("WATCH_VOLTA_ATR", "0.5");
 const TF_MIN = 15;
 const ALERT_FRESCO_CANDLES = numEnv("ALERT_FRESCO_CANDLES", "2");
 const ALERT_IDADE_MAX_CANDLES = numEnv("ALERT_IDADE_MAX_CANDLES", "0");
@@ -397,12 +401,19 @@ async function configurarMenuBotao() {
   } catch (e) { console.log("⚠️ não configurei o botão de menu", e); }
 }
 configurarMenuBotao();
-async function apagarMsg(chatId: number | string, id: number): Promise<boolean> {
+// V74: apagarMsgStatus separa "ok" / "gone" (400-404: mensagem já não existe ou não dá mais pra apagar — comum quando um alerta novo
+// substitui o velho) de "retry" (429, 5xx ou rede — erro temporário; vale tentar de novo). apagarMsg segue devolvendo boolean como antes.
+async function apagarMsgStatus(chatId: number | string, id: number): Promise<"ok" | "gone" | "retry"> {
   try {
     const r = await fetch(`${TG_API}/deleteMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, message_id: id }) });
     const j: any = await J(r);
-    return j?.ok !== false;
-  } catch { return false; }
+    if (j?.ok !== false) return "ok";
+    const code = Number(j?.error_code);
+    return code === 429 || code >= 500 ? "retry" : "gone";
+  } catch { return "retry"; }
+}
+async function apagarMsg(chatId: number | string, id: number): Promise<boolean> {
+  return (await apagarMsgStatus(chatId, id)) === "ok";
 }
 const UI_PREFIXO = "_UI_";
 async function uiRegistrar(chatId: number, msgId: number) {
@@ -2046,19 +2057,56 @@ async function salvarEstado(SB: any) {
     else await SB.from("alertas_indicador").insert({ instid: ESTADO_ROW, ...campos });
   } catch (e) { console.log("⚠️ salvarEstado falhou", e); }
 }
+async function avisarVoltouPraDentro(SB: any, row: any, info: IndicadorInfo, posMap: Map<string, Pos[] | null>): Promise<void> {
+  if (WATCH_VOLTA_ATR <= 0 || !String(row.last_status || "").includes("✔")) return;
+  const lado: "long" | "short" = row.watch_side;
+  if (lado !== "long" && lado !== "short") return;
+  const linha = lado === "long" ? info.topo : info.fundo;
+  if (!(info.preco > 0) || !(linha > 0)) return;
+  const dentroPct = lado === "long" ? ((linha - info.preco) / info.preco) * 100 : ((info.preco - linha) / info.preco) * 100;
+  const atr = (info as { atr?: number }).atr;
+  const atrPct = typeof atr === "number" && atr > 0 ? (atr / info.preco) * 100 : 0;
+  const margem = Math.max(FINAL_CANCELA_PCT, WATCH_VOLTA_ATR * atrPct);
+  if (dentroPct < margem) return;
+  const psDe = (ch: string) => posDaMoeda(posMap.get(ch) ?? null, info.instId);
+  // sem filtro de _watchEnviado: o marcador ✔ da linha já garante 1 aviso por alerta
+  const dest = ALERT_CHAT_IDS.filter((ch) => !silChat(ch) || (SILENCIO_PROTECAO && psDe(ch).some((p) => p.lado === lado)));
+  if (!dest.length) return;
+  const nome = lado === "long" ? "LONG" : "SHORT";
+  const horasDesde = row.last_alert_at ? ((Date.now() - new Date(row.last_alert_at).getTime()) / 3_600_000).toFixed(1) : "?";
+  const msg =
+    `↩️ <b>${info.instId}</b> — voltou pra dentro da faixa\n${DIVISOR}\n\n` +
+    `Alerta original era <b>${nome}</b>, há ${horasDesde}h, já cruzado.\n` +
+    `Agora o preço está ${dentroPct.toFixed(2)}% de volta pra dentro da linha de ${nome} (repique / cruzamento enfraqueceu). Ainda não cruzou pro lado contrário.\n` +
+    `${indicadorTxt(info)}\n` +
+    `preço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
+  const oks = await Promise.all(dest.map(async (ch) =>
+    !!(await enviarAlertaMoeda(SB, ch, `VOLTA_${info.instId}`, cortar(msg + (await blocoPosicao(SB, ch, psDe(ch), info))), botaoAnalisar(info.instId), ACOMP_AUTOAPAGAR_MIN))));
+  if (oks.some(Boolean)) {
+    await SB.from(TAB).update({ last_status: String(row.last_status).replace(/\s*✔/g, "") }).eq("instid", row.instid);
+    console.log(`↩️ ${info.instId} voltou pra dentro da faixa (${nome}, ${dentroPct.toFixed(2)}% dentro)`);
+  }
+}
 async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, IndicadorInfo>, posMap: Map<string, Pos[] | null>) {
   const agoraIso = new Date().toISOString();
   const { data: watchRows } = await SB.from("alertas_indicador").select("*").not("watch_until", "is", null).gt("watch_until", agoraIso).eq("watch_notificado", false);
   if (!watchRows || watchRows.length === 0) { console.log("👀 lista de acompanhamento vazia"); return; }
   console.log(`👀 ${watchRows.length} moeda(s) na lista de acompanhamento`);
   await emLotes(watchRows as any[], 5, async (row: any) => {
+    try { // V74: erro numa moeda não derruba o lote inteiro (Promise.all) nem as moedas seguintes
     let info = poolInfoMap.get(row.instid) || null;
     if (!info) info = await calcIndicador500(row.instid);
     if (!info) return;
     const atual = ladoAtual(info);
-    if (atual === null || atual === row.watch_side) return;
-    const psDe = (ch: string) => posDaMoeda(posMap.get(ch) ?? null, info.instId);
     const kw = (ch: string) => `${info.instId}|${ch}`;
+    if (atual === null || atual === row.watch_side) {
+      // V74: sem cruzamento contra pendente, qualquer chave de "já avisei" é velha — se ficasse, a próxima virada não avisaria esse chat
+      // (acontecia quando um chat não recebia: silêncio, falha ou o intervalo; a linha não avançava e a chave ficava presa).
+      ALERT_CHAT_IDS.forEach((ch) => _watchEnviado.delete(kw(ch)));
+      if (atual === null) await avisarVoltouPraDentro(SB, row, info, posMap).catch((e) => console.log("⚠️ erro aviso voltou pra dentro", e));
+      return;
+    }
+    const psDe = (ch: string) => posDaMoeda(posMap.get(ch) ?? null, info.instId);
     let dest = ALERT_CHAT_IDS.filter((ch) => !_watchEnviado.has(kw(ch)) && (!silChat(ch) || (SILENCIO_PROTECAO && psDe(ch).some((p) => p.lado !== atual))));
     // V74: intervalo mínimo desde o último aviso desta moeda neste chat. Dentro dele não envia e não mexe na linha:
     // a próxima rodada reavalia (se ainda estiver contra, sai quando o intervalo passar; se desvirou, o `atual === watch_side` acima já barra).
@@ -2105,6 +2153,7 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
       await SB.from("alertas_indicador").update({ watch_notificado: true, watch_until: null }).eq("instid", row.instid);
       console.log(`🔁 ${info.instId} saiu da lista de acompanhamento (cruzou contra: ${row.watch_side} -> ${atual})`);
     }
+    } catch (e) { console.log(`⚠️ lista de acompanhamento: erro em ${row?.instid}`, e); }
   });
 }
 function cooldownEfetivoMin(row: any, lado: string, status: string): number {
@@ -2286,8 +2335,7 @@ async function resolverFinais(SB: any, ck: number) {
     // V39: fecha editando a mesma mensagem (se ainda tiver o id); sem id (estado antigo, ou chat novo), manda nova.
     const destinos = p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch));
     const ok = await Promise.all(destinos.map(async (ch) => {
-      const id = p.msgIds?.[ch];
-      if (id && (await editarTelegram(ch, id, cortar(agRiscoLinha() + msg), botaoAnalisar(p.inst)))) return true;
+      // V74: veredito do fechamento também como mensagem nova (notifica; a anterior da mesma chave é apagada)
       return !!(await enviarAlertaMoeda(SB, ch, `FINAL_${p.inst}`, cortar(msg), botaoAnalisar(p.inst)));
     }));
     if (ok.some(Boolean) || !destinos.length) _finalPend.delete(k);
@@ -2308,8 +2356,8 @@ async function acompanharFinais(SB: any, ck: number, lastMap: Map<string, number
     const msgCancel = `🛑 <b>${p.inst}</b> — RECUOU antes do fechamento\n${DIVISOR}\n\nO aviso "vai fechar cruzado (${nome})" não vale mais: o preço voltou pra dentro da linha (${Math.abs(alem).toFixed(2)}% do lado de dentro). <b>Pode desligar o robô</b> se ligou por causa dele.\nFaltam ~${finalRestMin()} min pra vela fechar; se ela fechar cruzada mesmo assim, o alerta normal de cruzamento sai em seguida.\npreço agora ${fmtPrice(vivo)} | linha ${fmtPrice(p.linha)}`;
     const destinos = p.chats.filter((ch) => ALERT_CHAT_IDS.includes(ch));
     const ok = await Promise.all(destinos.map(async (ch) => {
-      const id = p.msgIds?.[ch];
-      if (id && (await editarTelegram(ch, id, cortar(msgCancel), botaoAnalisar(p.inst)))) return true;
+      // V74: o cancelamento sai como mensagem NOVA (edição não notifica no Telegram e o aviso de "vai fechar cruzado" já pode ter sido lido);
+      // enviarAlertaMoeda apaga a mensagem anterior da mesma chave FINAL_<moeda>, então não sobra o aviso velho na tela.
       return !!(await enviarAlertaMoeda(SB, ch, `FINAL_${p.inst}`, cortar(msgCancel), botaoAnalisar(p.inst)));
     }));
     if (ok.some(Boolean) || !destinos.length) p.estado = "cancelado";
@@ -2734,7 +2782,9 @@ async function runAlertaProativo() {
     if (c.aprox && c.info.idadeCandles === null) await registrarAntecipacao(SB, c, entregues.filter((ch) => !silChat(ch)));
     enviados++;
     const registro = {
-      last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : ""),
+      // V74: " ✔" = o alerta saiu com o preço JÁ além da linha (cruzado). Serve pro aviso "voltou pra dentro da faixa" (checarListaAcompanhamento);
+      // rankStatus/🆕/🛡️ usam includes(), então o marcador não atrapalha nada.
+      last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : "") + (c.info.idadeCandles !== null ? " ✔" : ""),
       last_alert_at: new Date().toISOString(),
       watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString(),
       watch_side: c.lado,
@@ -2759,12 +2809,13 @@ async function runAlertaProativo() {
   if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
-  await checarListaAcompanhamento(SB, poolInfoMap, posMap);
+  // V74: sem .catch, um erro aqui pulava checarAntecipacoes, salvarEstado e processarAutoApagar da rodada
+  await checarListaAcompanhamento(SB, poolInfoMap, posMap).catch((e) => console.log("❌ erro lista de acompanhamento", e));
   await checarAntecipacoes(SB, poolInfoMap).catch((e) => console.log("❌ erro antecipações", e));
   await salvarEstado(SB);
   await processarAutoApagar(SB).catch((e) => console.log("❌ erro autoapagar", e));
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
-  await extrasV13(SB, posMap);
+  await extrasV13(SB, posMap).catch((e) => console.log("❌ erro extrasV13", e));
   } finally { await destravarCron(SB, tokenCron); }
 }
 const X_TZ_OFFSET_H = numEnv("TZ_OFFSET_H", "-3");
@@ -3665,23 +3716,25 @@ function simularSaida(d: XVelas, jd: { suprema: number; j6: number }[], kE: numb
 // • saiu no STOP → não vira sozinho; fica de fora até o próximo cruzamento (de qualquer lado) e só então reentra.
 // Cada perna nova recalcula o ATR (risco e trailing mudam com a volatilidade do momento). Limite de pernas evita
 // cadeia sem fim num ativo andando de lado.
-type PernaSim = SaidaSim & { lado: "long" | "short" };
+type PernaSim = SaidaSim & { lado: "long" | "short"; kE: number };
 function simularSaidaEncadeada(
   d: XVelas, jd: { suprema: number; j6: number }[], kEini: number, ladoIni: "long" | "short",
   p0ini: number, atrIni: number, trail: boolean, maxPernas = 12,
-): { pernas: PernaSim[]; rTotal: number } {
+): { pernas: PernaSim[]; rTotal: number; cortou: boolean } {
   const pernas: PernaSim[] = [];
+  let cortou = false; // V74: true só se a cadeia TINHA mais pernas pela frente quando bateu no limite (antes: qualquer cadeia com exatamente maxPernas)
   let kE = kEini, lado = ladoIni, p0 = p0ini, atr = atrIni, rTotal = 0;
   const n = d.c.length;
   const atrEm = (k: number) => calcATR(d.h.slice(0, k + 1), d.l.slice(0, k + 1), d.c.slice(0, k + 1), 14);
   for (let i = 0; i < maxPernas; i++) {
     const sim = simularSaida(d, jd, kE, lado, p0, atr, trail);
     if (!sim) break;
-    pernas.push({ ...sim, lado });
+    pernas.push({ ...sim, lado, kE });
     rTotal += sim.r;
     if (sim.motivo === "aberto") break; // fim dos dados, posição segue aberta
     const kSaida = kE + sim.barras;
     if (sim.motivo === "cruzou") {
+      if (i === maxPernas - 1) cortou = true;
       lado = lado === "long" ? "short" : "long";
       kE = kSaida; p0 = d.c[kSaida]; atr = atrEm(kE) || atr; // sem histórico suficiente aqui: reaproveita o ATR anterior
       continue;
@@ -3698,9 +3751,10 @@ function simularSaidaEncadeada(
       ladoAntes = ladoAgora;
     }
     if (novoLado === null) break; // não cruzou mais até o fim dos dados
+    if (i === maxPernas - 1) cortou = true;
     lado = novoLado; kE = kNovo; p0 = d.c[kNovo]; atr = atrEm(kE) || atr;
   }
-  return { pernas, rTotal };
+  return { pernas, rTotal, cortou };
 }
 function statsR(xs: number[]): string {
   if (!xs.length) return "sem dados";
@@ -3718,23 +3772,33 @@ async function runSaida(chatId: number | string, dias: number) {
   const desde = new Date(Date.now() - dd * 86400000).toISOString();
   const { data, error } = await SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).eq("ent_status", "entrou").order("criado_em", { ascending: false }).limit(600);
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
+  const truncou600 = (data || []).length >= 600; // V74: o .limit(600) cortava em silêncio
   const rows = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && r.ent_em && Number(r.preco) > 0);
   if (!rows.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\nNenhuma entrada registrada nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   rows.forEach((r) => { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); });
-  type Res = { r: any; a: SaidaSim; b: SaidaSim; c: { rTotal: number; pernas: number; flips: number; bateuLimite: boolean }; d: { rTotal: number; pernas: number; flips: number; bateuLimite: boolean } };
+  type Res = { r: any; a: SaidaSim; b: SaidaSim; c: { rTotal: number; pernas: number; flips: number; bateuLimite: boolean; dup: boolean }; d: { rTotal: number; pernas: number; flips: number; bateuLimite: boolean; dup: boolean } };
   const res: Res[] = [];
+  const viradas: { inst: string; de: "long" | "short"; para: "long" | "short"; emMs: number; r: number; semAlerta: boolean }[] = [];
   let semHist = 0;
   const TFMS = TF_MIN * 60000;
   await emLotes([...porMoeda.keys()], 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES);
     if (!d) { semHist += porMoeda.get(id)!.length; return; }
     const jd = superV2(d.c, PESO_SUPREMA);
+    const rowsM: { r: any; kE: number }[] = [];
     for (const r of porMoeda.get(id)!) {
       const emMs = new Date(r.ent_em).getTime();
       let kE = -1;
       for (let i = d.t.length - 1; i >= 0; i--) { if (Math.abs(d.t[i] + TFMS - emMs) <= TFMS / 2) { kE = i; break; } }
       if (kE < 100) { semHist++; continue; }
+      rowsM.push({ r, kE });
+    }
+    // V74: em ordem de entrada, pra detectar entrada que já está dentro da cadeia (virada) de outra da mesma moeda — sem isso C/D contavam as mesmas pernas 2x
+    rowsM.sort((x, y) => x.kE - y.kE);
+    const covC = new Set<string>(), covD = new Set<string>();
+    const alertados = new Set(rowsM.map((x) => `${x.kE}|${x.r.lado === "long" ? "long" : "short"}`));
+    for (const { r, kE } of rowsM) {
       const atr = calcATR(d.h.slice(0, kE + 1), d.l.slice(0, kE + 1), d.c.slice(0, kE + 1), 14);
       const lado: "long" | "short" = r.lado === "long" ? "long" : "short";
       const a = simularSaida(d, jd, kE, lado, Number(r.preco), atr, false);
@@ -3743,9 +3807,20 @@ async function runSaida(chatId: number | string, dias: number) {
       const MAX_PERNAS_SAIDA = 12;
       const ced = simularSaidaEncadeada(d, jd, kE, lado, Number(r.preco), atr, false, MAX_PERNAS_SAIDA);
       const ded = simularSaidaEncadeada(d, jd, kE, lado, Number(r.preco), atr, true, MAX_PERNAS_SAIDA);
-      const c = { rTotal: ced.rTotal, pernas: ced.pernas.length, flips: ced.pernas.length - 1, bateuLimite: ced.pernas.length === MAX_PERNAS_SAIDA };
-      const dd2 = { rTotal: ded.rTotal, pernas: ded.pernas.length, flips: ded.pernas.length - 1, bateuLimite: ded.pernas.length === MAX_PERNAS_SAIDA };
+      const chave = `${kE}|${lado}`;
+      const dupC = covC.has(chave), dupD = covD.has(chave);
+      ced.pernas.forEach((pp) => covC.add(`${pp.kE}|${pp.lado}`));
+      ded.pernas.forEach((pp) => covD.add(`${pp.kE}|${pp.lado}`));
+      const c = { rTotal: ced.rTotal, pernas: ced.pernas.length, flips: ced.pernas.length - 1, bateuLimite: ced.cortou, dup: dupC };
+      const dd2 = { rTotal: ded.rTotal, pernas: ded.pernas.length, flips: ded.pernas.length - 1, bateuLimite: ded.cortou, dup: dupD };
       res.push({ r, a, b, c, d: dd2 });
+      if (!dupC) {
+        for (let i = 1; i < ced.pernas.length; i++) {
+          const ant = ced.pernas[i - 1], pp = ced.pernas[i];
+          if (ant.motivo !== "cruzou") continue; // só virada de verdade (saiu no cruzamento e entrou na contrária)
+          viradas.push({ inst: id, de: ant.lado, para: pp.lado, emMs: d.t[pp.kE] + TFMS, r: pp.r, semAlerta: !alertados.has(`${pp.kE}|${pp.lado}`) });
+        }
+      }
     }
   });
   if (!res.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\nNão consegui simular nenhuma entrada (${semHist} sem histórico de velas suficiente).`); return; }
@@ -3765,18 +3840,28 @@ async function runSaida(chatId: number | string, dias: number) {
     if (nome === "Geral") {
       const avg = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
       const comVirada = (xs: Res[]) => xs.filter((x) => x.c.flips > 0).length;
-      const noLimiteC = g.filter((x) => x.c.bateuLimite).length, noLimiteD = g.filter((x) => x.d.bateuLimite).length;
-      msg += `C (viradas, sem trailing): ${statsR(g.map((x) => x.c.rTotal))} · ${avg(g.map((x) => x.c.pernas)).toFixed(1)} perna(s)/entrada em média, ${comVirada(g)} entrada(s) viraram pelo menos 1x${noLimiteC ? ` · ⚠️ ${noLimiteC} bateu(ram) no limite de 12 pernas (R real maior que o mostrado)` : ""}\n`;
-      msg += `D (viradas, com trailing): ${statsR(g.map((x) => x.d.rTotal))} · ${avg(g.map((x) => x.d.pernas)).toFixed(1)} perna(s)/entrada em média${noLimiteD ? ` · ⚠️ ${noLimiteD} bateu(ram) no limite` : ""}\n`;
+      const gc = g.filter((x) => !x.c.dup), gd = g.filter((x) => !x.d.dup);
+      const noLimiteC = gc.filter((x) => x.c.bateuLimite).length, noLimiteD = gd.filter((x) => x.d.bateuLimite).length;
+      msg += `C (viradas, sem trailing): ${statsR(gc.map((x) => x.c.rTotal))} · ${avg(gc.map((x) => x.c.pernas)).toFixed(1)} perna(s)/entrada em média, ${comVirada(gc)} entrada(s) viraram pelo menos 1x${noLimiteC ? ` · ⚠️ ${noLimiteC} bateu(ram) no limite de 12 pernas (R real maior que o mostrado)` : ""}\n`;
+      msg += `D (viradas, com trailing): ${statsR(gd.map((x) => x.d.rTotal))} · ${avg(gd.map((x) => x.d.pernas)).toFixed(1)} perna(s)/entrada em média${noLimiteD ? ` · ⚠️ ${noLimiteD} bateu(ram) no limite` : ""}\n`;
+      const dupsC = g.length - gc.length;
+      if (dupsC) msg += `↪️ ${dupsC} entrada(s) já estavam dentro da cadeia de outra da mesma moeda e entram em C/D uma vez só\n`;
     }
     msg += `\n`;
   }
   const durH = (x: Res) => (x.a.barras * TF_MIN) / 60;
   const mot = (m: string) => res.filter((x) => x.a.motivo === m).length;
   msg += `⏳ Duração mediana (A): ${_med(res.map(durH)).toFixed(1)}h · maior ${Math.max(...res.map(durH)).toFixed(1)}h\nSaídas (A): ${mot("cruzou")} no cruzamento · ${mot("stop")} no stop · ${mot("aberto")} abertas\n\n`;
+  if (viradas.length) {
+    const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
+    const somaV = viradas.reduce((t, v) => t + v.r, 0), semA = viradas.filter((v) => v.semAlerta).length;
+    msg += `🔁 <b>Viradas</b> (${viradas.length}, ${semA} sem alerta) · R somado das pernas novas ${somaV >= 0 ? "+" : ""}${somaV.toFixed(1)}R\n`;
+    msg += [...viradas].sort((x, y) => Math.abs(y.r) - Math.abs(x.r)).slice(0, 5).map((v) => `${String(v.inst).replace("-USDT", "")} ${v.de === "long" ? "L" : "S"}→${v.para === "long" ? "L" : "S"} ${fm(v.emMs)} ${v.r >= 0 ? "+" : ""}${v.r.toFixed(1)}R${v.semAlerta ? " 🔕" : ""}`).join("\n") + `\n<i>🔕 = o robô viraria, mas não saiu alerta (5 maiores pelo |R| da perna nova; sem trailing)</i>\n\n`;
+  }
   const ord = [...res].sort((x, y) => y.a.r - x.a.r);
   const fmtI = (x: Res) => `${String(x.r.instid).replace("-USDT", "")} ${x.r.lado === "long" ? "L" : "S"} ${x.a.r >= 0 ? "+" : ""}${x.a.r.toFixed(1)}R em ${durH(x) >= 48 ? (durH(x) / 24).toFixed(1) + "d" : durH(x).toFixed(1) + "h"}`;
   msg += `🏆 <b>Melhores (A)</b>\n${ord.slice(0, 5).map(fmtI).join("\n")}\n\n`;
+  if (truncou600) msg += `⚠️ <i>Há 600 entradas ou mais no período: só as 600 mais recentes entram. Use menos dias pra ver tudo.</i>\n`;
   if (res.length < 30) msg += `⚠️ <i>Só ${res.length} entradas: se poucos trades sustentam o resultado, ele é frágil. Compare "R médio" com "sem os 3 melhores".</i>\n`;
   msg += `<i>A/B = só a 1ª perna. C/D = virada encadeada: sai no cruzamento → entra na contrária no mesmo fechamento; sai no stop → espera o próximo cruzamento (robô "vira sozinho" depois de ligado, com ou sem alerta).</i>\n`;
   msg += `<i>Uso: /saida 7 (até ${maxDias} dias, limitado pelas ${SAIDA_CANDLES} velas de 15m)</i>`;
@@ -4664,9 +4749,12 @@ let _calibRestaurada = false;
 // segue impedindo recalcular por até AUTO_CALIB_INTERVALO_H horas. Roda 1x por isolate, bem no início da rodada.
 async function restaurarCalibracao(SB: any) {
   if (_calibRestaurada) return;
-  _calibRestaurada = true;
   try {
-    const { data: row } = await SB.from(TAB).select("last_status").eq("instid", AUTO_CALIB_ROW).maybeSingle();
+    const { data: row, error: eRest } = await SB.from(TAB).select("last_status").eq("instid", AUTO_CALIB_ROW).maybeSingle();
+    // V74: a flag só vira true se a leitura FUNCIONOU. Antes ela subia antes de ler: um erro passageiro do Supabase deixava os valores do env
+    // em memória e a próxima auto-calibração (marcarRodou) gravava esses padrões por cima da calibração salva.
+    if (eRest) { console.log("⚠️ restaurarCalibracao: leitura falhou, tento de novo na próxima rodada", eRest.message ?? eRest); return; }
+    _calibRestaurada = true;
     if (!row?.last_status) return;
     const j = JSON.parse(row.last_status);
     if (isFinite(Number(j.eta))) ANTEC_ETA_MAX_CANDLES = clamp(Math.round(Number(j.eta)), ANTEC_ETA_MIN_LIM, ANTEC_ETA_MAX_LIM);
@@ -5816,8 +5904,22 @@ async function painelAtualizar(SB: any, est: PainelEstado, fim: boolean): Promis
   for (const ch of ALERT_CHAT_IDS) {
     const id = est.ids[ch];
     if (id) {
+      if (fim) {
+        // V74: o FIM DO RESUMO sai como mensagem NOVA (edição não notifica). Desafixa e apaga o painel velho só depois de o novo sair;
+        // est.ids passa a apontar pra mensagem final, que é a que o PAINEL_FIM_APAGAR_H apaga depois.
+        const novoId = await sendTelegram(ch, await montarPainel(SB, ch, est, snap, true), undefined, { semUi: true });
+        if (novoId) {
+          if (PAINEL_PIN) await tgPost("unpinChatMessage", { chat_id: ch, message_id: id }).catch(() => {});
+          await apagarMsg(ch, id);
+          est.ids[ch] = novoId;
+        } else {
+          console.log(`⚠️ painel: não consegui mandar o fim como mensagem nova em ${ch}, editando o painel existente`);
+          await editarTelegram(ch, id, await montarPainel(SB, ch, est, snap, true));
+          if (PAINEL_PIN) tgPost("unpinChatMessage", { chat_id: ch, message_id: id }).catch(() => {});
+        }
+        continue;
+      }
       const ok = await editarTelegram(ch, id, await montarPainel(SB, ch, est, snap, fim));
-      if (fim) { if (PAINEL_PIN) tgPost("unpinChatMessage", { chat_id: ch, message_id: id }).catch(() => {}); continue; }
       if (!ok && !silChat(ch)) { // edição falhou: apaga o painel velho (se ainda existir) ANTES de recriar, pra não ficar mensagem sobrando
         console.log(`⚠️ painel: edição falhou em ${ch}, recriando (apagando o anterior)`);
         await apagarMsg(ch, id);
@@ -5959,6 +6061,7 @@ async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: str
 // na memória por 15 min — a function serverless não fica viva tanto tempo — então o apagão sempre
 // passa pela próxima rodada do cron; o atraso real fica perto do intervalo do cron, não cravado.
 const AUTOAPAGAR_PREFIXO = "_DEL_";
+const AUTOAPAGAR_RETRY_MIN = numEnv("AUTOAPAGAR_RETRY_MIN", "30");
 async function agendarAutoApagar(SB: any, chat: string, msgId: number, ms: number) {
   try { await upsertLinha(SB, `${AUTOAPAGAR_PREFIXO}${chat}_${msgId}`, { last_status: String(Date.now() + ms) }); } catch { }
 }
@@ -5975,8 +6078,10 @@ async function processarAutoApagar(SB: any) {
       const resto = r.instid.slice(AUTOAPAGAR_PREFIXO.length);
       const pos = resto.lastIndexOf("_");
       if (pos > 0) {
-        const ok = await apagarMsg(resto.slice(0, pos), Number(resto.slice(pos + 1)));
-        if (ok) apagadas++; else falhas++;
+        const st = await apagarMsgStatus(resto.slice(0, pos), Number(resto.slice(pos + 1)));
+        // V74: erro temporário (429/5xx/rede) mantém a linha pra tentar na próxima rodada, por até AUTOAPAGAR_RETRY_MIN após vencer
+        if (st === "retry" && agora - quando < AUTOAPAGAR_RETRY_MIN * 60000) { pendentes++; continue; }
+        if (st === "ok") apagadas++; else falhas++;
       }
       await SB.from(TAB).delete().eq("instid", r.instid);
     }
