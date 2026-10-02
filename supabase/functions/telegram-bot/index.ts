@@ -1,3 +1,14 @@
+// telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
+// robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
+// próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
+// já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
+// telegram-bot V74 (V73 + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
+// telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
+// com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
+// agora continua seguindo a moeda no lado novo e avisa de novo se ela virar outra vez (WATCH_REPETIR=0 volta ao
+// antigo: avisa 1x e some). Antes disso, o 2º flip só reaparecia se um alerta cheio passasse de novo pelo
+// classificar()+confiança+ESTRATEGIA_PUMP, o que pro lado "contra o dia" podia nunca acontecer)
 // telegram-bot V70 (V69 + notícias SÓ em português do Brasil: tradução pelo Gemini guardada no cache (campo pt) e usada no /noticia, no bloco do painel e no aviso automático; sem tradução nunca mostra inglês (avisa que a tradução está indisponível e deixa o link do original) · filtro de mercado lateral reorganizado: o mínimo é um só (ADX ≥ 18 · ER ≥ 0.25 · caixa ≥ 3×ATR), LIBERADO com 2 de 3 requisitos no mínimo em BTC ou ETH (LATERAL_VOTOS_LIBERA=2), aviso automático 👀 "querendo sair da lateral" quando 1 requisito atinge o mínimo e 📈 "saindo da lateral" quando 2 atingem; bloco do /resumo mostra cada requisito com ✅/❌)
 // telegram-bot V69 (V68 + resumo/painel do dia reorganizado em seções (⚠️ Atenção: agenda e notícias · 📈 Mercado · 💼 Carteira · 🔥 Horários) e fechamento do ciclo com o 15m em destaque, resultado real, lista curta e comparativo; novo /noticia (falas do Trump via espelho RSS do Truth Social + manchetes de cripto/macro, filtradas por palavra-chave, com tradução opcional pelo Gemini), bloco de notícias no painel e aviso automático de post do Trump de alto impacto) (V68 = V67 + placar sem duplicata e sem entrada inválida: (1) alerta de RETESTE de cruzamento velho (idade > ALERT_RETESTE_MAX_CANDLES, padrão 16 velas = 4h) não sai mais, exceto aviso de proteção pra quem tem posição contra; (2) conferirPlacar marca ent_status='repetido' quando já existe outro alerta da mesma moeda+lado+ent_em (fica só o 1º no placar; /placar, /15min, /saida e resumos ignoram os repetidos); (3) ent_em fora da janela (mais de ENT_MAX_ATRASO_H=48h antes do alerta, ou depois do limite de espera) vira ent_status='invalido' em vez de gravar entrada com data absurda, ex.: XMR 2024)
 // telegram-bot V67 (V66 + fallbacks OKX/Binance spot só valem se o preço bater com BloFin/Bybit/Binance (divergência máx. 25%, FALLBACK_DIV_MAX) OKX desligada por padrão (FALLBACK_OKX=1 religa) e QNT-USDT nunca usa fallback (FALLBACK_BLOQ); corrige preço/preco_15m errados no placar quando as corretoras principais falhavam) (V66 = V65 + placar de 15m separado do /placar: novo comando /15min (o /placar, o /analise e o resumo da noite passam a mostrar só 1h/4h/24h; a coleta do preco_15m continua igual); novo comando /saida N: simula a saída real do robô (fecha no cruzamento contrário da faixa ou no stop de SAIDA_STOP_ATR×ATR, e uma variante com trailing por degraus de TRAIL_ATR_MULT×ATR) e mostra R médio, profit factor, "sem os 3 melhores" e duração; sem coluna nova no Supabase) (V65 = V64 + placar com horizonte de 15 min (coluna preco_15m em alertas_log: rode o ALTER TABLE antes de publicar), somado a 1h/4h/24h no /placar, no /analise (alertas anteriores) e no resumo da noite; alertas antigos ainda ao alcance das velas são preenchidos retroativamente) (V64 = V63 + comandos /pergunta MOEDA (IA Gemini) e /veredito MOEDA (IA Claude): pegam o texto completo do /analise e mandam pra IA escolhida, que responde em cima dele; secrets GEMINI_API_KEY e ANTHROPIC_API_KEY, cada comando usa só o seu provedor) (V63 = V62 + o radar de fundo/topo (a nota "Sinal de fundo/topo: X/10" do /analise, /fundo, /topo) agora também olha book e inclinação da faixa, igual a pontuação principal já fazia — antes só via funding/OI/BTC, então podia sair baixo mesmo com book e inclinação já sinalizando reversão junto; no /analise, no /fundo e no /topo a inclinação entra (já calculada ali); nas listas em massa (fundoLista/topoLista) só o book entra por enquanto, sem inclinação, pra não pesar a varredura de todas as moedas) (V62 = V61 + quando o ADX sobe mas o DI oculto (V60) mostra que quem puxa é o lado oposto ao do robô, a linha vira "ADX subindo, mas puxado pelo lado oposto (+0)" em vez de sumir — some da lista de motivos, sem nunca citar +DI/−DI) (V61 = V60 + ADX mínimo por moeda descido de 18 para 15 (FILTRO_ADX_MIN), pra pegar sinal mais cedo agora que o DI oculto (V60) já filtra falso cruzamento por trás; ADX do filtro de mercado lateral (BTC/ETH) continua em 18, sem mudança (LATERAL_ADX_BLOQ/LIBERA); X_ADX_FRACO (texto do BTC no painel) desamarrado de FILTRO_ADX_MIN, próprio env, também 18) (V60 = V59 + +DI/−DI calculado por trás do ADX, sem aparecer em nenhuma mensagem: em continuação, se a força do ADX vem do lado oposto ao do robô, o ADX forte vale +1 em vez de +2 e o ADX subindo não pontua; em reversão nada muda; DI_OCULTO=0 desliga, DI_GAP_MIN=5 é a folga mínima entre +DI e −DI) (V59 = V58 + aviso 📉 quando o mercado ENTRA em lateral (espelho do 📈 saindo; mesmo intervalo de 30 min; LATERAL_AVISO_ENTROU=0 desliga); linha ⚠️ no /analise quando a moeda já esticou ≥3× ATR a favor do robô e nenhum radar de reversão acendeu (entrada tardia); o "FIM DO RESUMO DO DIA" se apaga sozinho depois de 24h, PAINEL_FIM_APAGAR_H=0 desliga) (V58 = V57 + painel do dia atualiza mesmo com todo mundo em silêncio/pausa, chamado antes do corte por todosSil) (V57 = V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
@@ -77,6 +88,19 @@ const ALERTA_AUTOAPAGAR_MIN = numEnv("ALERTA_AUTOAPAGAR_MIN", "15");
 const ALERT_COOLDOWN_MIN = numEnv("ALERT_COOLDOWN_MIN", "60");
 const ALERT_COOLDOWN_REPETIDO_MIN = numEnv("ALERT_COOLDOWN_REPETIDO_MIN", "180");
 const WATCH_HORAS = numEnv("WATCH_HORAS", "48");
+// V72: antes, o aviso de "cruzou CONTRA" fechava o acompanhamento da moeda depois do 1º aviso (watch_notificado=true,
+// watch_until=null). Se ela virasse de novo mais tarde, ninguém olhava — só reabria se um alerta CHEIO conseguisse
+// passar de novo pelo classificar()+confiança+ESTRATEGIA_PUMP, o que pro lado "contra o dia" pode nunca acontecer.
+// Com WATCH_REPETIR=1 (padrão), em vez de fechar, o acompanhamento continua no NOVO lado: se virar de novo, avisa de
+// novo. WATCH_REPETIR=0 volta ao comportamento antigo (avisa 1x e some).
+const WATCH_REPETIR = (Deno.env.get("WATCH_REPETIR") || "1") !== "0";
+// V72: o aviso de "cruzou CONTRA" (ACOMP_) some em 5 min por padrão, mais rápido que o auto-apagar geral (15 min) —
+// é um aviso informativo, e com WATCH_REPETIR ligado pode chegar de novo a cada virada; não precisa ficar muito tempo.
+const ACOMP_AUTOAPAGAR_MIN = numEnv("ACOMP_AUTOAPAGAR_MIN", "5");
+// V74: intervalo mínimo entre dois avisos de "cruzou CONTRA" da MESMA moeda no mesmo chat (padrão 0 = desligado: aviso toda vez que cruza, o que também serve de sinal de moeda lateral; ligue com ACOMP_INTERVALO_MIN=30, por ex.).
+// Evita spam em moeda picotada que cruza toda hora. Guardado no Supabase (a function serverless não guarda memória entre rodadas).
+const ACOMP_INTERVALO_MIN = numEnv("ACOMP_INTERVALO_MIN", "0");
+const ACOMP_INTERVALO_PREFIXO = "_ACOMPT_";
 const TF_MIN = 15;
 const ALERT_FRESCO_CANDLES = numEnv("ALERT_FRESCO_CANDLES", "2");
 const ALERT_IDADE_MAX_CANDLES = numEnv("ALERT_IDADE_MAX_CANDLES", "0");
@@ -2035,7 +2059,23 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     if (atual === null || atual === row.watch_side) return;
     const psDe = (ch: string) => posDaMoeda(posMap.get(ch) ?? null, info.instId);
     const kw = (ch: string) => `${info.instId}|${ch}`;
-    const dest = ALERT_CHAT_IDS.filter((ch) => !_watchEnviado.has(kw(ch)) && (!silChat(ch) || (SILENCIO_PROTECAO && psDe(ch).some((p) => p.lado !== atual))));
+    let dest = ALERT_CHAT_IDS.filter((ch) => !_watchEnviado.has(kw(ch)) && (!silChat(ch) || (SILENCIO_PROTECAO && psDe(ch).some((p) => p.lado !== atual))));
+    // V74: intervalo mínimo desde o último aviso desta moeda neste chat. Dentro dele não envia e não mexe na linha:
+    // a próxima rodada reavalia (se ainda estiver contra, sai quando o intervalo passar; se desvirou, o `atual === watch_side` acima já barra).
+    if (ACOMP_INTERVALO_MIN > 0 && dest.length) {
+      const livres: string[] = [];
+      for (const ch of dest) {
+        let ultimo = 0;
+        try {
+          const { data: lt } = await SB.from(TAB).select("last_status").eq("instid", `${ACOMP_INTERVALO_PREFIXO}${ch}_${info.instId}`).maybeSingle();
+          const n = Number(lt?.last_status);
+          if (isFinite(n) && n > 0) ultimo = n;
+        } catch { }
+        if (Date.now() - ultimo >= ACOMP_INTERVALO_MIN * 60000) livres.push(ch);
+        else console.log(`⏳ ${info.instId} cruzou contra, mas o último aviso foi há ${Math.round((Date.now() - ultimo) / 60000)}min (< ${ACOMP_INTERVALO_MIN}min) — aguardo`);
+      }
+      dest = livres;
+    }
     if (!dest.length) return;
     const desdeMs = row.last_alert_at ? new Date(row.last_alert_at).getTime() : null;
     const horasDesde = desdeMs ? ((Date.now() - desdeMs) / 3_600_000).toFixed(1) : "?";
@@ -2047,13 +2087,24 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     `${indicadorTxt(info)}\n` +
     `preço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
     await Promise.all(dest.map(async (ch) => {
-      const id = await enviarAlertaMoeda(SB, ch, `ACOMP_${info!.instId}`, cortar(msg + (await blocoPosicao(SB, ch, psDe(ch), info!))), botaoAnalisar(info!.instId));
-      if (id) _watchEnviado.add(kw(ch));
+      const id = await enviarAlertaMoeda(SB, ch, `ACOMP_${info!.instId}`, cortar(msg + (await blocoPosicao(SB, ch, psDe(ch), info!))), botaoAnalisar(info!.instId), ACOMP_AUTOAPAGAR_MIN);
+      if (id) {
+        _watchEnviado.add(kw(ch));
+        if (ACOMP_INTERVALO_MIN > 0) { try { await upsertLinha(SB, `${ACOMP_INTERVALO_PREFIXO}${ch}_${info!.instId}`, { last_status: String(Date.now()) }); } catch { } }
+      }
     }));
     if (!ALERT_CHAT_IDS.every((ch) => _watchEnviado.has(kw(ch)))) return;
     ALERT_CHAT_IDS.forEach((ch) => _watchEnviado.delete(kw(ch)));
-    await SB.from("alertas_indicador").update({ watch_notificado: true, watch_until: null }).eq("instid", row.instid);
-    console.log(`🔁 ${info.instId} saiu da lista de acompanhamento (cruzou contra: ${row.watch_side} -> ${atual})`);
+    if (WATCH_REPETIR) {
+      await SB.from("alertas_indicador").update({
+        watch_side: atual, watch_notificado: false,
+        watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString(),
+      }).eq("instid", row.instid);
+      console.log(`🔁 ${info.instId} virou de novo (${row.watch_side} -> ${atual}); continuo acompanhando`);
+    } else {
+      await SB.from("alertas_indicador").update({ watch_notificado: true, watch_until: null }).eq("instid", row.instid);
+      console.log(`🔁 ${info.instId} saiu da lista de acompanhamento (cruzou contra: ${row.watch_side} -> ${atual})`);
+    }
   });
 }
 function cooldownEfetivoMin(row: any, lado: string, status: string): number {
@@ -3606,6 +3657,51 @@ function simularSaida(d: XVelas, jd: { suprema: number; j6: number }[], kE: numb
   }
   return fim(d.c[n - 1], n - 1, "aberto");
 }
+// V71: virada encadeada. Veio da análise do ZRO (10:30 SHORT → 12:00 LONG sem alerta): o ESTRATEGIA_PUMP filtra o
+// ALERTA (decide se avisa), mas o robô, depois de ligado, "vira sozinho nos dois sentidos" — ele entra em todo
+// cruzamento, avisado ou não. O /saida (A/B) media só a 1ª perna de cada entrada registrada, então nunca via essas
+// viradas silenciosas. simularSaidaEncadeada reproduz o que o robô faria de fato a partir da 1ª entrada:
+// • saiu no CRUZAMENTO → abre a posição contrária no mesmo fechamento (sem esperar alerta, sem olhar o ESTRATEGIA_PUMP).
+// • saiu no STOP → não vira sozinho; fica de fora até o próximo cruzamento (de qualquer lado) e só então reentra.
+// Cada perna nova recalcula o ATR (risco e trailing mudam com a volatilidade do momento). Limite de pernas evita
+// cadeia sem fim num ativo andando de lado.
+type PernaSim = SaidaSim & { lado: "long" | "short" };
+function simularSaidaEncadeada(
+  d: XVelas, jd: { suprema: number; j6: number }[], kEini: number, ladoIni: "long" | "short",
+  p0ini: number, atrIni: number, trail: boolean, maxPernas = 12,
+): { pernas: PernaSim[]; rTotal: number } {
+  const pernas: PernaSim[] = [];
+  let kE = kEini, lado = ladoIni, p0 = p0ini, atr = atrIni, rTotal = 0;
+  const n = d.c.length;
+  const atrEm = (k: number) => calcATR(d.h.slice(0, k + 1), d.l.slice(0, k + 1), d.c.slice(0, k + 1), 14);
+  for (let i = 0; i < maxPernas; i++) {
+    const sim = simularSaida(d, jd, kE, lado, p0, atr, trail);
+    if (!sim) break;
+    pernas.push({ ...sim, lado });
+    rTotal += sim.r;
+    if (sim.motivo === "aberto") break; // fim dos dados, posição segue aberta
+    const kSaida = kE + sim.barras;
+    if (sim.motivo === "cruzou") {
+      lado = lado === "long" ? "short" : "long";
+      kE = kSaida; p0 = d.c[kSaida]; atr = atrEm(kE) || atr; // sem histórico suficiente aqui: reaproveita o ATR anterior
+      continue;
+    }
+    // stop: espera o PRÓXIMO cruzamento DE VERDADE (transição), de qualquer lado — não reentra só porque o preço
+    // "já estava" do lado favorável desde antes do stop (senão reentraria na mesma vela toda vez, sem esperar nada).
+    // Mesma ideia do idadeCandles (linha ~850): cruzamento = a vela anterior NÃO satisfazia e esta satisfaz.
+    const ladoDe = (k: number) => (d.c[k] > Math.max(jd[k].suprema, jd[k].j6) ? "long" : d.c[k] < Math.min(jd[k].suprema, jd[k].j6) ? "short" : null);
+    let kNovo = -1, novoLado: "long" | "short" | null = null;
+    let ladoAntes = ladoDe(kSaida);
+    for (let k = kSaida + 1; k < n; k++) {
+      const ladoAgora = ladoDe(k);
+      if (ladoAgora && ladoAgora !== ladoAntes) { novoLado = ladoAgora; kNovo = k; break; }
+      ladoAntes = ladoAgora;
+    }
+    if (novoLado === null) break; // não cruzou mais até o fim dos dados
+    lado = novoLado; kE = kNovo; p0 = d.c[kNovo]; atr = atrEm(kE) || atr;
+  }
+  return { pernas, rTotal };
+}
 function statsR(xs: number[]): string {
   if (!xs.length) return "sem dados";
   const ac = xs.filter((x) => x > 0).length, pf = _profitFactor(xs), media = xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -3626,7 +3722,7 @@ async function runSaida(chatId: number | string, dias: number) {
   if (!rows.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\nNenhuma entrada registrada nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   rows.forEach((r) => { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); });
-  type Res = { r: any; a: SaidaSim; b: SaidaSim };
+  type Res = { r: any; a: SaidaSim; b: SaidaSim; c: { rTotal: number; pernas: number; flips: number; bateuLimite: boolean }; d: { rTotal: number; pernas: number; flips: number; bateuLimite: boolean } };
   const res: Res[] = [];
   let semHist = 0;
   const TFMS = TF_MIN * 60000;
@@ -3643,7 +3739,13 @@ async function runSaida(chatId: number | string, dias: number) {
       const lado: "long" | "short" = r.lado === "long" ? "long" : "short";
       const a = simularSaida(d, jd, kE, lado, Number(r.preco), atr, false);
       const b = simularSaida(d, jd, kE, lado, Number(r.preco), atr, true);
-      if (a && b) res.push({ r, a, b });
+      if (!(a && b)) continue;
+      const MAX_PERNAS_SAIDA = 12;
+      const ced = simularSaidaEncadeada(d, jd, kE, lado, Number(r.preco), atr, false, MAX_PERNAS_SAIDA);
+      const ded = simularSaidaEncadeada(d, jd, kE, lado, Number(r.preco), atr, true, MAX_PERNAS_SAIDA);
+      const c = { rTotal: ced.rTotal, pernas: ced.pernas.length, flips: ced.pernas.length - 1, bateuLimite: ced.pernas.length === MAX_PERNAS_SAIDA };
+      const dd2 = { rTotal: ded.rTotal, pernas: ded.pernas.length, flips: ded.pernas.length - 1, bateuLimite: ded.pernas.length === MAX_PERNAS_SAIDA };
+      res.push({ r, a, b, c, d: dd2 });
     }
   });
   if (!res.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\nNão consegui simular nenhuma entrada (${semHist} sem histórico de velas suficiente).`); return; }
@@ -3659,7 +3761,15 @@ async function runSaida(chatId: number | string, dias: number) {
   for (const [nome, fn] of grupos) {
     const g = res.filter(fn);
     if (!g.length) continue;
-    msg += `<b>${nome}</b> (n=${g.length})\nA: ${statsR(g.map((x) => x.a.r))}\nB: ${statsR(g.map((x) => x.b.r))}\n\n`;
+    msg += `<b>${nome}</b> (n=${g.length})\nA: ${statsR(g.map((x) => x.a.r))}\nB: ${statsR(g.map((x) => x.b.r))}\n`;
+    if (nome === "Geral") {
+      const avg = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
+      const comVirada = (xs: Res[]) => xs.filter((x) => x.c.flips > 0).length;
+      const noLimiteC = g.filter((x) => x.c.bateuLimite).length, noLimiteD = g.filter((x) => x.d.bateuLimite).length;
+      msg += `C (viradas, sem trailing): ${statsR(g.map((x) => x.c.rTotal))} · ${avg(g.map((x) => x.c.pernas)).toFixed(1)} perna(s)/entrada em média, ${comVirada(g)} entrada(s) viraram pelo menos 1x${noLimiteC ? ` · ⚠️ ${noLimiteC} bateu(ram) no limite de 12 pernas (R real maior que o mostrado)` : ""}\n`;
+      msg += `D (viradas, com trailing): ${statsR(g.map((x) => x.d.rTotal))} · ${avg(g.map((x) => x.d.pernas)).toFixed(1)} perna(s)/entrada em média${noLimiteD ? ` · ⚠️ ${noLimiteD} bateu(ram) no limite` : ""}\n`;
+    }
+    msg += `\n`;
   }
   const durH = (x: Res) => (x.a.barras * TF_MIN) / 60;
   const mot = (m: string) => res.filter((x) => x.a.motivo === m).length;
@@ -3668,6 +3778,7 @@ async function runSaida(chatId: number | string, dias: number) {
   const fmtI = (x: Res) => `${String(x.r.instid).replace("-USDT", "")} ${x.r.lado === "long" ? "L" : "S"} ${x.a.r >= 0 ? "+" : ""}${x.a.r.toFixed(1)}R em ${durH(x) >= 48 ? (durH(x) / 24).toFixed(1) + "d" : durH(x).toFixed(1) + "h"}`;
   msg += `🏆 <b>Melhores (A)</b>\n${ord.slice(0, 5).map(fmtI).join("\n")}\n\n`;
   if (res.length < 30) msg += `⚠️ <i>Só ${res.length} entradas: se poucos trades sustentam o resultado, ele é frágil. Compare "R médio" com "sem os 3 melhores".</i>\n`;
+  msg += `<i>A/B = só a 1ª perna. C/D = virada encadeada: sai no cruzamento → entra na contrária no mesmo fechamento; sai no stop → espera o próximo cruzamento (robô "vira sozinho" depois de ligado, com ou sem alerta).</i>\n`;
   msg += `<i>Uso: /saida 7 (até ${maxDias} dias, limitado pelas ${SAIDA_CANDLES} velas de 15m)</i>`;
   await sendTelegram(chatId, cortar(msg));
 }
@@ -5818,7 +5929,7 @@ function emSilencio(): boolean {
   return SILENCIO_INI_H <= SILENCIO_FIM_H ? (h >= SILENCIO_INI_H && h < SILENCIO_FIM_H) : (h >= SILENCIO_INI_H || h < SILENCIO_FIM_H);
 }
 const MSG_PREFIXO = "_MSG_";
-async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: string, botoes?: Botoes): Promise<number | null> {
+async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: string, botoes?: Botoes, autoApagarMin?: number): Promise<number | null> {
   const chave = `${MSG_PREFIXO}${chat}_${instId}`;
   let antigo: number | null = null;
   try {
@@ -5836,7 +5947,10 @@ async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: str
     if (antigo) await apagarMsg(chat, antigo);
     // NOTICIA_<ts> e AGENDA_RES_<ts> são chaves únicas (nunca substituem nada): gravar o id só criaria uma linha nova por aviso, pra sempre.
     if (!/^(NOTICIA|AGENDA_RES)_/.test(instId)) { try { await upsertLinha(SB, chave, { last_status: String(novo) }); } catch (e) { console.log("⚠️ não salvei id da mensagem", e); } }
-    if (ALERTA_AUTOAPAGAR_MIN > 0) await agendarAutoApagar(SB, chat, novo, ALERTA_AUTOAPAGAR_MIN * 60000).catch(() => {});
+    // autoApagarMin (opcional) substitui o padrão global só pra essa chamada — usado no aviso de "cruzou CONTRA" (V72), que é
+    // informativo (não é uma entrada/saída real) e some mais rápido pra não acumular tela com WATCH_REPETIR mandando de novo a cada virada.
+    const apagarMin = autoApagarMin ?? ALERTA_AUTOAPAGAR_MIN;
+    if (apagarMin > 0) await agendarAutoApagar(SB, chat, novo, apagarMin * 60000).catch(() => {});
   }
   return novo;
 }
@@ -6719,7 +6833,7 @@ function montarConfig(): string {
   const tz = `UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}`;
   const adminFixo = !!Deno.env.get("ADMIN_CHAT_ID") || !!Deno.env.get("BLOFIN_OWNER_CHAT_ID");
   let m = `⚙️ <b>CONFIG</b> (valores em uso agora)\n${DIVISOR}\n\n`;
-  m += `🔔 <b>Alertas</b>\n• oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% (24h)\n• cooldown ${ALERT_COOLDOWN_MIN} min · repetição idêntica ${ALERT_COOLDOWN_REPETIDO_MIN} min\n• fresco ≤ ${ALERT_FRESCO_CANDLES} velas · idade máx ${ALERT_IDADE_MAX_CANDLES || "sem limite"}\n• máx ${ALERT_MAX_POR_RODADA} por rodada · pool ${ALERT_POOL} · acompanhamento ${WATCH_HORAS}h\n• antecipação: ${ANTEC_ETA_MAX_CANDLES} velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min), distância ≤ ${ANTEC_DIST_MAX_PCT}%\n• auto-apagar: ${ALERTA_AUTOAPAGAR_MIN > 0 ? `${ALERTA_AUTOAPAGAR_MIN} min` : "desligado"}\n\n`;
+  m += `🔔 <b>Alertas</b>\n• oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% (24h)\n• cooldown ${ALERT_COOLDOWN_MIN} min · repetição idêntica ${ALERT_COOLDOWN_REPETIDO_MIN} min\n• fresco ≤ ${ALERT_FRESCO_CANDLES} velas · idade máx ${ALERT_IDADE_MAX_CANDLES || "sem limite"}\n• máx ${ALERT_MAX_POR_RODADA} por rodada · pool ${ALERT_POOL} · acompanhamento ${WATCH_HORAS}h (repete a cada virada: ${WATCH_REPETIR ? "sim" : "não"})\n• antecipação: ${ANTEC_ETA_MAX_CANDLES} velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min), distância ≤ ${ANTEC_DIST_MAX_PCT}%\n• auto-apagar: ${ALERTA_AUTOAPAGAR_MIN > 0 ? `${ALERTA_AUTOAPAGAR_MIN} min` : "desligado"}\n\n`;
   m += `💸 <b>Taxa no placar</b>: ${TAXA_IDA_VOLTA_PCT.toFixed(3)}% ida e volta (taker ${TAXA_TAKER_PCT}% × 2; ajuste com TAXA_TAKER_PCT ou TAXA_IDA_VOLTA_PCT)\n`;
   m += `📏 <b>Placar</b>: entrada pelo fechamento da vela do cruzamento ${on(PLACAR_ENTRADA_ON && _placarTemEntrada)}${PLACAR_ENTRADA_ON && !_placarTemEntrada ? " (faltam as colunas: rode o ALTER TABLE V30)" : ""} · cruzamento vale até ${ENTRADA_MAX_CANDLES} velas (${ENTRADA_MAX_CANDLES * TF_MIN} min) depois do aviso\n`;
   m += `\n${MINI_DIVISOR}\n`;
