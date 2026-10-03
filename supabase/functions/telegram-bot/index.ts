@@ -4145,7 +4145,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
   const rows = rowsBase.filter((r) => !filtro || !(filtro.mov > 0) || (r.pct24 != null && Math.abs(Number(r.pct24)) >= filtro.mov)); // |24h| da hora do alerta
   const filtroBase = filtro ? `🔎 Filtro (valores da hora do alerta): |24h| ≥ ${filtro.mov}% · ADX ≥ ${filtro.adx}${filtro.subindo ? " e subindo" : ""}` : "";
   let filtroTxt = filtro ? `${filtroBase}\n` : "";
-  let passaramFiltro = 0;
+  let passaramFiltro = 0, passaramAdx = 0;
   if (!rows.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\n${filtroTxt}Nenhuma entrada registrada${opc?.moeda ? ` de ${opc.moeda}` : ""} nos últimos ${dd} dia(s)${filtro ? ` com esse filtro (tudo: /saida ${dd} tudo)` : ""}.`); return; }
   // V74: variantes do trailing do motor (% de preço): "Hoje" = SAIDA_E_* (0.5/0.3 sem SL); com config no comando, E (contínuo) e F (degrau)
   const fmtCfg = (c: { trava: number; cb: number; sl: number }) => `${c.trava}/${c.cb}${c.sl > 0 ? ` · SL ${c.sl}%` : " · sem SL"}`;
@@ -4192,6 +4192,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
       const lado: "long" | "short" = r.lado === "long" ? "long" : "short";
       if (adxS && filtro) { // ADX ≥ mínimo e (se pedido) subindo: ADX da vela da entrada maior que o de SAIDA_ADX_JAN velas antes
         const a0 = adxEm(kE), a4 = adxEm(kE - SAIDA_ADX_JAN);
+        if (isFinite(a0) && a0 >= filtro.adx) passaramAdx++;
         if (!(isFinite(a0) && a0 >= filtro.adx && (!filtro.subindo || (isFinite(a4) && a0 > a4)))) continue;
       }
       passaramFiltro++;
@@ -4240,7 +4241,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
     ["📶 Com tendência", (x) => temMarca(x.r, TEND_MARCA)],
   ];
   const abertos = res.filter((x) => x.a.motivo === "aberto").length;
-  if (filtro) filtroTxt = `${filtroBase} · ${passaramFiltro} de ${rowsBase.length} entradas passaram (todas: /saida ${dd} tudo)\n`;
+  if (filtro) filtroTxt = `${filtroBase} · ${passaramFiltro} de ${rowsBase.length} entradas passaram (todas: /saida ${dd} tudo)\nFunil: ${rowsBase.length} → ${rows.length} com |24h| ≥ ${filtro.mov}% → ${passaramAdx} com ADX ≥ ${filtro.adx} → ${passaramFiltro}${filtro.subindo ? " subindo" : ""}\n`;
   let msg = `🚪 <b>SAÍDA REAL DO ROBÔ</b> — últimos ${dd} dia(s)${opc?.moeda ? ` · ${opc.moeda}` : ""}\n${DIVISOR}\n${filtroTxt}${res.length} entrada(s) simuladas${abertos ? `, ${abertos} ainda aberta(s) (contadas ao preço atual)` : ""}${semHist ? `, ${semHist} sem velas suficientes` : ""}\n<i>Entrada = fechamento da vela do cruzamento. 1R = ${SAIDA_STOP_ATR}×ATR da entrada. A = sai no cruzamento contrário da faixa ou no stop. B = A + trailing por degraus de ${TRAIL_ATR_MULT}×ATR. Já desconta a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}%); sem funding.</i>\n\n`;
   for (const [nome, fn] of grupos) {
     const g = res.filter(fn);
@@ -4252,8 +4253,11 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
       const comVirada = (xs: Res[]) => xs.filter((x) => x.c.flips > 0).length;
       const gc = g.filter((x) => !x.c.dup), gd = g.filter((x) => !x.d.dup);
       const noLimiteC = gc.filter((x) => x.c.bateuLimite).length, noLimiteD = gd.filter((x) => x.d.bateuLimite).length;
+      if (!gc.length || !gd.length) msg += `C/D: as ${g.length} entrada(s) deste grupo já estavam dentro da cadeia de outra (contadas no Geral)\n`;
+      else {
       msg += `C (viradas, sem trailing): ${statsR(gc.map((x) => x.c.rTotal))} · ${avg(gc.map((x) => x.c.pernas)).toFixed(1)} perna(s)/entrada em média, ${comVirada(gc)} entrada(s) viraram pelo menos 1x${noLimiteC ? ` · ⚠️ ${noLimiteC} bateu(ram) no limite de 12 pernas (o R real dessas pode ser diferente do mostrado)` : ""}\n`;
       msg += `D (viradas, com trailing): ${statsR(gd.map((x) => x.d.rTotal))} · ${avg(gd.map((x) => x.d.pernas)).toFixed(1)} perna(s)/entrada em média${noLimiteD ? ` · ⚠️ ${noLimiteD} bateu(ram) no limite` : ""}\n`;
+      }
       const dupsC = g.length - gc.length, dupsD = g.length - gd.length;
       if (nome === "Geral" && (dupsC || dupsD)) msg += `↪️ ${dupsC === dupsD ? dupsC : `${dupsC} em C e ${dupsD} em D`} entrada(s) já estavam dentro da cadeia de outra da mesma moeda e entram em C/D uma vez só\n`;
     }
