@@ -788,6 +788,24 @@ function barToMs(bar: string): number {
   const map: Record<string, number> = { "1m":60000,"3m":180000,"5m":300000,"15m":900000,"30m":1800000,"1H":3600000,"2H":7200000,"4H":14400000,"6H":21600000,"12H":43200000,"1D":86400000,"1W":604800000 };
   return map[bar] || 900000;
 }
+// V75: BTC e ETH (BTC-USDT / ETH-USDT) usam SEMPRE a Binance futuros (BTCUSDT / ETHUSDT perpetuo, o mesmo do painel no TradingView)
+// como fonte PRIMEIRA de velas, preco ao vivo, funding, open interest e livro de ofertas. So se a Binance falhar/bloquear
+// (ex.: erro 451 por regiao) cai na cadeia antiga, pra nada ficar sem dado. BINANCE_BTC_ETH=0 volta ao comportamento antigo.
+const BINANCE_BTC_ETH = (Deno.env.get("BINANCE_BTC_ETH") || "1") !== "0";
+const ehBtcEth = (instId: string): boolean => BINANCE_BTC_ETH && (instId === "BTC-USDT" || instId === "ETH-USDT");
+async function binanceGet(path: string): Promise<any | null> {
+  try {
+    const r = await fetch(`https://fapi.binance.com${path}`, { signal: AbortSignal.timeout(8000) });
+    const j = await r.json();
+    if (j && !Array.isArray(j) && j.code !== undefined && Number(j.code) < 0) { console.log(`⚠️ Binance futuros ${path.split("?")[0]} recusou: ${JSON.stringify(j).slice(0, 120)}`); return null; }
+    return j;
+  } catch (e) { console.log(`⚠️ Binance futuros ${path.split("?")[0]} falhou: ${e}`); return null; }
+}
+async function binanceKlinesBtcEth(instId: string, bar: string, limit: number): Promise<any[] | null> {
+  const iv = /[HDW]$/.test(bar) ? bar.toLowerCase() : bar;
+  const j = await binanceGet(`/fapi/v1/klines?symbol=${instId.replace("-", "")}&interval=${iv}&limit=${Math.min(limit, 1500)}`);
+  return Array.isArray(j) && j.length > 100 ? j : null;
+}
 async function getCandles(instId: string, bar: string, limit: number = CANDLES_LIMIT_PADRAO) {
   const sym = instId.replace("-", "");
   const periodo = barToMs(bar);
@@ -796,6 +814,10 @@ async function getCandles(instId: string, bar: string, limit: number = CANDLES_L
     while (rows.length && rows[rows.length - 1][0] >= aberturaAtual) rows.pop();
     return rows.map((r) => r[1]);
   };
+  if (ehBtcEth(instId)) {
+    const j = await binanceKlinesBtcEth(instId, bar, limit);
+    if (j) { marcaFonte("Binance"); return stripCloses(j.map((c: any) => [parseInt(c[0]), parseFloat(c[4])] as [number, number])); }
+  }
   for (let t = 0; t < 2; t++) {
     try {
       const r = await fetch(`https://openapi.blofin.com/api/v1/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`, { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -828,6 +850,11 @@ async function getTickerOne(instId: string) {
   } catch { return null; }
 }
 async function precoAoVivo(instId: string): Promise<number | null> {
+  if (ehBtcEth(instId)) {
+    const j = await binanceGet(`/fapi/v1/ticker/price?symbol=${instId.replace("-", "")}`);
+    const p = Number(j?.price);
+    if (isFinite(p) && p > 0) return p;
+  }
   const t = await getTickerOne(instId);
   const v = Number(t?.last);
   return isFinite(v) && v > 0 ? v : null;
@@ -2846,6 +2873,10 @@ async function xCandles(instId: string, bar: string, limit: number): Promise<XVe
     v: rows.map((r) => parseFloat(r[5])),
   });
   const fechada = (d: XVelas) => xFechadas(d, barToMs(bar));
+  if (ehBtcEth(instId)) {
+    const j = await binanceKlinesBtcEth(instId, bar, bar === "1H" ? 1000 : limit);
+    if (j) { marcaFonte("Binance"); return fechada(monta(j)); }
+  }
   for (let t = 0; t < 2; t++) {
     try {
       const r = await fetch(`https://openapi.blofin.com/api/v1/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`, { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -5212,10 +5243,17 @@ const BOOK_IMB_MIN_PCT = numEnv("BOOK_IMB_MIN_PCT", "15");
 async function getBookImbalance(instId: string): Promise<number | null> {
   try {
     const sym = instId.replace("-", "");
-    const r = await fetch(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${sym}&limit=50`);
-    const j = await r.json();
-    const bids = j?.result?.b as [string, string][] | undefined;
-    const asks = j?.result?.a as [string, string][] | undefined;
+    let bids: [string, string][] | undefined, asks: [string, string][] | undefined;
+    if (ehBtcEth(instId)) {
+      const jb = await binanceGet(`/fapi/v1/depth?symbol=${sym}&limit=50`);
+      bids = jb?.bids; asks = jb?.asks;
+    }
+    if (!bids?.length || !asks?.length) {
+      const r = await fetch(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${sym}&limit=50`);
+      const j = await r.json();
+      bids = j?.result?.b as [string, string][] | undefined;
+      asks = j?.result?.a as [string, string][] | undefined;
+    }
     if (!bids?.length || !asks?.length) return null;
     const soma = (arr: [string, string][]) => arr.reduce((s, [, q]) => s + (parseFloat(q) || 0), 0);
     const bidVol = soma(bids), askVol = soma(asks);
@@ -5227,11 +5265,22 @@ async function getBookImbalance(instId: string): Promise<number | null> {
 async function getFundingOI(instId: string): Promise<{ funding: number | null; oiChg: number | null }> {
   const sym = instId.replace("-", "");
   let funding: number | null = null, oiChg: number | null = null;
+  if (ehBtcEth(instId)) {
+    const jf = await binanceGet(`/fapi/v1/premiumIndex?symbol=${sym}`);
+    const fb = parseFloat(jf?.lastFundingRate);
+    if (isFinite(fb)) funding = fb * 100;
+    const jo = await binanceGet(`/futures/data/openInterestHist?symbol=${sym}&period=1h&limit=5`);
+    if (Array.isArray(jo) && jo.length >= 5) {
+      const a = parseFloat(jo[jo.length - 1].sumOpenInterest), b = parseFloat(jo[0].sumOpenInterest); // Binance: mais antigo primeiro
+      if (isFinite(a) && isFinite(b) && b > 0) oiChg = ((a - b) / b) * 100;
+    }
+    if (funding !== null && oiChg !== null) return { funding, oiChg };
+  }
   try {
     const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${sym}`);
     const j = await r.json();
     const fr = parseFloat(j?.result?.list?.[0]?.fundingRate);
-    if (isFinite(fr)) funding = fr * 100;
+    if (funding === null && isFinite(fr)) funding = fr * 100;
   } catch { }
   if (funding === null) {
     try {
@@ -5247,7 +5296,7 @@ async function getFundingOI(instId: string): Promise<{ funding: number | null; o
     const l = j?.result?.list;
     if (Array.isArray(l) && l.length >= 5) {
       const a = parseFloat(l[0].openInterest), b = parseFloat(l[4].openInterest);
-      if (isFinite(a) && isFinite(b) && b > 0) oiChg = ((a - b) / b) * 100;
+      if (oiChg === null && isFinite(a) && isFinite(b) && b > 0) oiChg = ((a - b) / b) * 100;
     }
   } catch { }
   return { funding, oiChg };
