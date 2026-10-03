@@ -2,7 +2,7 @@
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
 // já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V74 (V73 + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// telegram-bot V74 (V73 + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
 // auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
 // telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
 // com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
@@ -4034,6 +4034,17 @@ function simularSaida(d: XVelas, jd: { suprema: number; j6: number }[], kE: numb
 const SAIDA_E_TRAVA = numEnv("SAIDA_E_TRAVA", "0.5");
 const SAIDA_E_CB = numEnv("SAIDA_E_CB", "0.3");
 const SAIDA_E_SL = numEnv("SAIDA_E_SL", "0");
+// V74: /saida simplificado. Filtro PADRÃO (o que você usa): moeda com |24h| ≥ 8% e ADX ≥ 14 SUBINDO (ADX da vela da entrada > ADX de 4 velas antes, igual ao scanner),
+// tudo medido NA HORA do alerta (sem olhar o futuro). "tudo" no comando mostra todas as entradas. Trailing comparado por padrão: 5/3.5 (SAIDA_CFG_PADRAO).
+const SAIDA_FILTRO_PADRAO = (Deno.env.get("SAIDA_FILTRO_PADRAO") ?? "1") !== "0";
+const SAIDA_MOV_PADRAO = numEnv("SAIDA_MOV_PADRAO", "8");
+const SAIDA_ADX_PADRAO = numEnv("SAIDA_ADX_PADRAO", "14");
+const SAIDA_ADX_SUBINDO = (Deno.env.get("SAIDA_ADX_SUBINDO") ?? "1") !== "0";
+const SAIDA_ADX_JAN = numEnv("SAIDA_ADX_JAN", "4");
+const SAIDA_CFG_PADRAO = (() => {
+  const m = String(Deno.env.get("SAIDA_CFG_PADRAO") ?? "5/3.5").match(/^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)(?:\/(\d+(?:\.\d+)?))?$/);
+  return m ? { trava: Number(m[1]), cb: Number(m[2]), sl: m[3] ? Number(m[3]) : 0 } : { trava: 5, cb: 3.5, sl: 0 };
+})();
 type MotorCfg = { trava: number; cb: number; sl: number; degrau: boolean };
 function simularLegMotor(d: XVelas, jd: { suprema: number; j6: number }[], kE: number, lado: "long" | "short", p0: number, cfg: MotorCfg): SaidaSim | null {
   if (!(p0 > 0) || !(cfg.trava > 0) || !(cfg.cb > 0)) return null;
@@ -4118,7 +4129,7 @@ function statsR(xs: number[], un = "R"): string {
   const f = (x: number) => (isFinite(x) ? `${x >= 0 ? "+" : ""}${x.toFixed(2)}${un}` : "—");
   return `acerto ${Math.round((ac / xs.length) * 100)}% (${ac}/${xs.length}) · ${un === "R" ? "R médio" : "médio"} ${f(media)} · mediana ${f(_med(xs))} · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"} · sem os 3 melhores ${xs.length > 3 ? f(sem3) : "—"}`;
 }
-async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: string; cfg?: { trava: number; cb: number; sl: number } }) {
+async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: string; cfg?: { trava: number; cb: number; sl: number }; filtro?: { mov: number; adx: number; subindo: boolean } | null }) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const maxDias = Math.max(1, Math.floor((SAIDA_CANDLES * TF_MIN) / 1440) - 1);
@@ -4128,9 +4139,14 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const truncou600 = (data || []).length >= 600; // V74: o .limit(600) cortava em silêncio
   const baseDe = (id: string) => String(id).split("-")[0];
-  const rows = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && r.ent_em && Number(r.preco) > 0)
+  const rowsBase = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && r.ent_em && Number(r.preco) > 0)
     .filter((r) => !opc?.moeda || baseDe(r.instid) === opc.moeda || baseDe(r.instid) === `1000${opc.moeda}`);
-  if (!rows.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\nNenhuma entrada registrada${opc?.moeda ? ` de ${opc.moeda}` : ""} nos últimos ${dd} dia(s).`); return; }
+  const filtro = opc?.filtro ?? null;
+  const rows = rowsBase.filter((r) => !filtro || !(filtro.mov > 0) || (r.pct24 != null && Math.abs(Number(r.pct24)) >= filtro.mov)); // |24h| da hora do alerta
+  const filtroBase = filtro ? `🔎 Filtro (valores da hora do alerta): |24h| ≥ ${filtro.mov}% · ADX ≥ ${filtro.adx}${filtro.subindo ? " e subindo" : ""}` : "";
+  let filtroTxt = filtro ? `${filtroBase}\n` : "";
+  let passaramFiltro = 0;
+  if (!rows.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\n${filtroTxt}Nenhuma entrada registrada${opc?.moeda ? ` de ${opc.moeda}` : ""} nos últimos ${dd} dia(s)${filtro ? ` com esse filtro (tudo: /saida ${dd} tudo)` : ""}.`); return; }
   // V74: variantes do trailing do motor (% de preço): "Hoje" = SAIDA_E_* (0.5/0.3 sem SL); com config no comando, E (contínuo) e F (degrau)
   const fmtCfg = (c: { trava: number; cb: number; sl: number }) => `${c.trava}/${c.cb}${c.sl > 0 ? ` · SL ${c.sl}%` : " · sem SL"}`;
   const baseMot: MotorCfg = { trava: SAIDA_E_TRAVA, cb: SAIDA_E_CB, sl: SAIDA_E_SL, degrau: false };
@@ -4155,6 +4171,8 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES);
     if (!d) { semHist += porMoeda.get(id)!.length; return; }
     const jd = superV2(d.c, PESO_SUPREMA);
+    const adxS = filtro && filtro.adx > 0 ? xAdxSerie(d.h, d.l, d.c, 14) : null;
+    const adxEm = (k: number): number => { const j = k - (2 * 14 - 1); return adxS && j >= 0 && j < adxS.length ? adxS[j] : NaN; }; // a série só começa na vela 2p−1
     const rowsM: { r: any; kE: number }[] = [];
     for (const r of porMoeda.get(id)!) {
       const emMs = new Date(r.ent_em).getTime();
@@ -4172,6 +4190,11 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
     for (const { r, kE } of rowsM) {
       const atr = calcATR(d.h.slice(0, kE + 1), d.l.slice(0, kE + 1), d.c.slice(0, kE + 1), 14);
       const lado: "long" | "short" = r.lado === "long" ? "long" : "short";
+      if (adxS && filtro) { // ADX ≥ mínimo e (se pedido) subindo: ADX da vela da entrada maior que o de SAIDA_ADX_JAN velas antes
+        const a0 = adxEm(kE), a4 = adxEm(kE - SAIDA_ADX_JAN);
+        if (!(isFinite(a0) && a0 >= filtro.adx && (!filtro.subindo || (isFinite(a4) && a0 > a4)))) continue;
+      }
+      passaramFiltro++;
       const a = simularSaida(d, jd, kE, lado, Number(r.preco), atr, false);
       const b = simularSaida(d, jd, kE, lado, Number(r.preco), atr, true);
       if (!(a && b)) continue;
@@ -4217,7 +4240,8 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
     ["📶 Com tendência", (x) => temMarca(x.r, TEND_MARCA)],
   ];
   const abertos = res.filter((x) => x.a.motivo === "aberto").length;
-  let msg = `🚪 <b>SAÍDA REAL DO ROBÔ</b> — últimos ${dd} dia(s)\n${DIVISOR}\n${res.length} entrada(s) simuladas${abertos ? `, ${abertos} ainda aberta(s) (contadas ao preço atual)` : ""}${semHist ? `, ${semHist} sem velas suficientes` : ""}\n<i>Entrada = fechamento da vela do cruzamento. 1R = ${SAIDA_STOP_ATR}×ATR da entrada. A = sai no cruzamento contrário da faixa ou no stop. B = A + trailing por degraus de ${TRAIL_ATR_MULT}×ATR. Já desconta a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}%); sem funding.</i>\n\n`;
+  if (filtro) filtroTxt = `${filtroBase} · ${passaramFiltro} de ${rowsBase.length} entradas passaram (todas: /saida ${dd} tudo)\n`;
+  let msg = `🚪 <b>SAÍDA REAL DO ROBÔ</b> — últimos ${dd} dia(s)${opc?.moeda ? ` · ${opc.moeda}` : ""}\n${DIVISOR}\n${filtroTxt}${res.length} entrada(s) simuladas${abertos ? `, ${abertos} ainda aberta(s) (contadas ao preço atual)` : ""}${semHist ? `, ${semHist} sem velas suficientes` : ""}\n<i>Entrada = fechamento da vela do cruzamento. 1R = ${SAIDA_STOP_ATR}×ATR da entrada. A = sai no cruzamento contrário da faixa ou no stop. B = A + trailing por degraus de ${TRAIL_ATR_MULT}×ATR. Já desconta a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}%); sem funding.</i>\n\n`;
   for (const [nome, fn] of grupos) {
     const g = res.filter(fn);
     if (!g.length) continue;
@@ -4267,7 +4291,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
   // V74: trailing do motor numa mensagem à parte (a principal já enche a tela do Telegram)
   {
     const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
-    let m2 = `🤖 <b>TRAILING DO MOTOR</b> — ${opc?.moeda ? `${opc.moeda} · ` : ""}últimos ${dd} dia(s)\n${DIVISOR}\n<i>% de preço por entrada, taxa ${TAXA_IDA_VOLTA_PCT}%/perna já descontada. Regra copiada do motor: arma na trava, fecha no callback do pico; também sai no cruzamento contrário.</i>\n\n`;
+    let m2 = `🤖 <b>TRAILING DO MOTOR</b> — ${opc?.moeda ? `${opc.moeda} · ` : ""}últimos ${dd} dia(s)\n${DIVISOR}\n${filtroTxt}<i>% de preço por entrada, taxa ${TAXA_IDA_VOLTA_PCT}%/perna já descontada. Regra copiada do motor: arma na trava, fecha no callback do pico; também sai no cruzamento contrário.</i>\n\n`;
     for (const v of varsMot) {
       const a = motor[v.id];
       if (!a.primeira.length) continue;
@@ -4276,7 +4300,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
     }
     if (notaF) m2 += `⚠️ <i>${notaF}</i>\n`;
     m2 += `<i>Vela a vela: o stop usa o pico das velas anteriores (pior caso) e na vela em que arma não conta saída (aproximação). SL e trailing em % de preço (alavancagem 1). Poucas entradas = resultado frágil: compare "médio" com "sem os 3 melhores".</i>\n`;
-    m2 += `<i>Uso: /saida 9 QNT 5/3.5 (trava/callback) · /saida 9 QNT 5/3.5/3 (com SL 3%) · sem config mostra só o "Hoje".</i>`;
+    m2 += `<i>Uso: /saida (padrão) · /saida 9 (dias) · /saida QNT (moeda) · /saida 5/3.5 ou 5/3.5/3 (trava/callback e SL) · /saida tudo (sem filtro). Ex.: /saida 9 QNT 5/3.5</i>`;
     await sendTelegram(chatId, cortar(m2));
   }
 }
@@ -7293,7 +7317,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   sec("📊 Resultados", [
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
-    ["🚪 /saida 7", "simula a saída real do robô", "simula a saída real (cruzamento contrário ou stop de 1×ATR, e variante com trailing): R médio, profit factor, sem os 3 melhores e duração; até 9 dias. Também simula o trailing do motor em % de preço: /saida 9 QNT 5/3.5 (trava/callback), /saida 9 QNT 5/3.5/3 (com SL 3%); mostra contínuo e em degraus de N em N%"],
+    ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
     ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso"],
     ["🧾 /meuplacar 7", "seus trades reais x alertas", "seus trades reais x alertas do bot (precisa da chave BloFin)"],
     ["🌅 /resumo", "painel do dia", "painel do dia (21h a 21h), atualizado a cada hora: agenda e notícias no topo, BTC (comparação desde as 21h e 8h), posições e janelas fortes; no fechamento das 21h vêm os 15m em destaque, seu resultado real e o comparativo com o ciclo anterior"],
@@ -7602,10 +7626,11 @@ Deno.serve(async (req) => {
       return new Response("ok");
     }
     if (text.startsWith("/saida")) {
-      // V74: /saida [dias] [MOEDA] [trava/callback[/sl]] — ex.: /saida 9 QNT 5/3.5/3
-      let dias = 7, diasSet = false, moeda: string | undefined, cfg: { trava: number; cb: number; sl: number } | undefined;
+      // V74: /saida [dias] [MOEDA] [trava/callback[/sl]] [tudo] — tudo é opcional: sem nada usa 7 dias, o filtro padrão e o trailing 5/3.5
+      let dias = 7, diasSet = false, moeda: string | undefined, cfg: { trava: number; cb: number; sl: number } | undefined, tudo = false;
       const num = (x: string) => Number(x.replace(",", "."));
       for (const p of text.split(/\s+/).slice(1)) {
+        if (/^tudo$/i.test(p)) { tudo = true; continue; }
         const mc = p.match(/^(\d+(?:[.,]\d+)?)\/(\d+(?:[.,]\d+)?)(?:\/(\d+(?:[.,]\d+)?))?$/);
         if (mc) { cfg = { trava: num(mc[1]), cb: num(mc[2]), sl: mc[3] ? num(mc[3]) : 0 }; continue; }
         if (!diasSet && /^\d+$/.test(p)) { dias = Number(p); diasSet = true; continue; }
@@ -7614,7 +7639,8 @@ Deno.serve(async (req) => {
       }
       dias = Math.min(9, Math.max(1, Math.round(dias || 7)));
       if (cfg && !(cfg.trava > 0 && cfg.cb > 0)) { await sendTelegram(chatId, "⚠️ Trava e callback precisam ser maiores que zero. Ex.: /saida 9 QNT 5/3.5"); return new Response("ok"); }
-      await comAguarde("🚪 Simulando a saída real, aguarde...", () => runSaida(chatId, dias, { moeda, cfg }));
+      const filtro = tudo || !SAIDA_FILTRO_PADRAO ? null : { mov: SAIDA_MOV_PADRAO, adx: SAIDA_ADX_PADRAO, subindo: SAIDA_ADX_SUBINDO };
+      await comAguarde("🚪 Simulando a saída real, aguarde...", () => runSaida(chatId, dias, { moeda, cfg: cfg ?? SAIDA_CFG_PADRAO, filtro }));
       return new Response("ok");
     }
     if (text.startsWith("/placar")) {
