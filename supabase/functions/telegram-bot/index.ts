@@ -4116,7 +4116,7 @@ function statsR(xs: number[], un = "R"): string {
   const s3 = [...xs].sort((a, b) => b - a).slice(3);
   const sem3 = s3.length ? s3.reduce((a, b) => a + b, 0) / s3.length : NaN;
   const f = (x: number) => (isFinite(x) ? `${x >= 0 ? "+" : ""}${x.toFixed(2)}${un}` : "—");
-  return `acerto ${Math.round((ac / xs.length) * 100)}% (${ac}/${xs.length}) · R médio ${f(media)} · mediana ${f(_med(xs))} · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"} · sem os 3 melhores ${xs.length > 3 ? f(sem3) : "—"}`;
+  return `acerto ${Math.round((ac / xs.length) * 100)}% (${ac}/${xs.length}) · ${un === "R" ? "R médio" : "médio"} ${f(media)} · mediana ${f(_med(xs))} · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"} · sem os 3 melhores ${xs.length > 3 ? f(sem3) : "—"}`;
 }
 async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: string; cfg?: { trava: number; cb: number; sl: number } }) {
   const SB = getSupabase();
@@ -4272,7 +4272,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
       const a = motor[v.id];
       if (!a.primeira.length) continue;
       const mo = (k: string) => a.mot[k] || 0;
-      m2 += `<b>${v.nome}</b> (n=${a.primeira.length})\n1ª perna: ${statsR(a.primeira, "%")}\nCadeia: ${statsR(a.cadeia, "%")} · ${avg(a.pernas).toFixed(1)} perna(s)/entrada\nSaídas (1ª perna): ${mo("trail")} trailing · ${mo("stop")} SL · ${mo("cruzou")} cruzamento · ${mo("aberto")} abertas\n\n`;
+      m2 += `<b>${v.nome}</b> (n=${a.primeira.length})\n1ª perna: ${statsR(a.primeira, "%")}\nCadeia: ${statsR(a.cadeia, "%")} · ${avg(a.pernas).toFixed(1)} perna(s)/entrada\nSaídas (1ª perna): ${mo("trail")} trailing · ${mo("stop")} SL · ${mo("cruzou")} cruzamento · ${mo("aberto")} abertas\n${a.primeira.length < 30 ? "⚠️ <i>poucas entradas (n&lt;30): resultado frágil, não decida por isto</i>\n" : ""}\n`;
     }
     if (notaF) m2 += `⚠️ <i>${notaF}</i>\n`;
     m2 += `<i>Vela a vela: o stop usa o pico das velas anteriores (pior caso) e na vela em que arma não conta saída (aproximação). SL e trailing em % de preço (alavancagem 1). Poucas entradas = resultado frágil: compare "médio" com "sem os 3 melhores".</i>\n`;
