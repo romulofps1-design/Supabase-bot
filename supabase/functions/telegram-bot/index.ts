@@ -2,7 +2,7 @@
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
 // já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V74 (V73 + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// telegram-bot V74 (V73 + controle do volume de logs: Secret LOG_NIVEL (tudo | normal | erro | mudo), LOG_OCULTAR, LOG_MOSTRAR, LOG_REPETIDO_MIN e comando /logs + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
 // auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
 // telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
 // com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
@@ -50,6 +50,70 @@
 // moedas do pool estão chegando na linha juntas na mesma rodada, sinal de que pode ser o mercado todo (BTC) se
 // movendo, não edge de uma moeda isolada) (V40 = V39 + OI (open interest) agora entra na pontuação de confiança — antes era buscado mas só aparecia como texto: OI subindo junto com o preço soma ponto, OI caindo (squeeze fechando) tira ponto; velocidade de aproximação (🚀/🐢) agora compara 2 rodadas seguidas em vez de 1, pra distinguir aceleração de verdade de um pico de ruído (🚀🚀/🐢🐢 quando confirma 2x); modo Experiente corrigido — o compactador só cortava os motivos ✅/⚠️ do bloco "🧭 Sinal de fundo/topo/compressão", não do bloco "🧭 Confiança" que é o que sai em todo alerta automático e no /analise; agora corta os dois e também tira linhas de regra fixa repetidas) (V39 = V38 + alerta dos minutos finais agora EDITA a mesma mensagem em vez de mandar uma nova a cada rodada do cron; detecta pavio de rejeição (tocou a linha e recuou 1x+ dentro da mesma vela) e avisa antes do LIGUE AGORA; botão "🔔 Já liguei" registra a hora real que a pessoa ligou o robô (tabela ligacoes_robo); sinal de velocidade 🚀 acelerando / 🐢 devagar comparando a aproximação da rodada atual com a anterior; comando /agora MOEDA com retrato compacto — fechamento, distância às duas linhas, confiança e toque/recuo) (V38 = modo Novato x Experiente, alertas e comandos compactados sem o texto explicando) (V37 = marca discreta 🔔 nos alertas proativos, autoapagamento, proteção do webhook e do cron) (V36 (V35 + inclinação da faixa na confiança: cruzamento contra a inclinação perde pontos, a favor ganha; radar de COMPRESSÃO em rodízio de todos os pares avisa "PREPARE: rompimento iminente" com a distância até as duas linhas; 1º cruzamento em faixa comprimida sem volume perde 1 ponto; /compressao no /placar; REPIQUE nos dois lados com prioridade: SHORT = despencou, repicou até a faixa e foi rejeitada (radar de topo); LONG = disparou, recuou até a faixa e está segurando (radar de fundo); /oportunidade e /reversao alinhados com os alertas: a lista sai pelo LADO da virada (reversão mostra LONG → SHORT e SHORT → LONG), não só pela variação do dia) (V35 = V34 + radar de TOPO e repique SHORT, espelho do fundo: alta medida desde a mínima recente, rejeição na faixa pontua, /topo) (V34 = V33 + radar de fundo que enxerga o REPIQUE NA FAIXA depois de pump: queda medida desde a máxima recente, não só 24h; toque na faixa pontua; PREPARE/LIGUE no texto) (V33 = V32 + /analise em blocos "de fora / já dentro" com "ligar o robô?", textos dos avisos alinhados ao robô que vira sozinho, /help por grupos e botão "⬆️ Ir ao topo" junto da mensagem) (historico das versoes: CHANGELOG.md)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// ===== V74: controle do volume de logs (Secret LOG_NIVEL) =====
+// tudo   = todos os logs, como antes.
+// normal = (padrão) erros/avisos + eventos (alerta enviado, ordem, fechamento...). Corta o ruído que se repete a cada rodada.
+// erro   = só erros e avisos.   mudo = nada.
+// LOG_OCULTAR = trechos (separados por vírgula) que NUNCA aparecem · LOG_MOSTRAR = trechos que SEMPRE aparecem (menos no mudo).
+// Erro/aviso igual repetido dentro de LOG_REPETIDO_MIN minutos (padrão 10) sai 1 vez só, e depois vem "(+N iguais ocultas)"; LOG_REPETIDO_MIN=0 desliga.
+type LogNivel = "tudo" | "normal" | "erro" | "mudo";
+const LOG_NIVEL: LogNivel = (() => {
+  const v = String(Deno.env.get("LOG_NIVEL") || "normal").trim().toLowerCase();
+  if (["tudo", "all", "completo", "verbose"].includes(v)) return "tudo";
+  if (["erro", "erros", "error", "errors"].includes(v)) return "erro";
+  if (["mudo", "off", "nenhum", "silencio", "silêncio"].includes(v)) return "mudo";
+  return "normal";
+})();
+const LOG_LISTA = (k: string): string[] => String(Deno.env.get(k) || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+const LOG_OCULTAR = LOG_LISTA("LOG_OCULTAR"), LOG_MOSTRAR = LOG_LISTA("LOG_MOSTRAR");
+const LOG_REPETIDO_MS = Math.max(0, Number(Deno.env.get("LOG_REPETIDO_MIN") ?? "10") || 0) * 60000;
+const LOG_ERRO_INICIO = /^\s*(❌|⚠️|⛔|🚨|Erro|ERRO|Gemini|Claude)/;
+const LOG_ERRO_PALAVRA = /(falhou|FALHOU|ERRO |erro rede|⏳ Telegram 429|⏳ retry)/;
+const LOG_RUIDO: RegExp[] = [
+  /^\s*🏁 alerta proativo em/, /^\s*🔔 \d+ setups/, /^\s*👀 (lista de acompanhamento|\d+ moeda)/, /^\s*🔄 painel/, /^\s*📊 placar:/, /^\s*🎯 \d+ previs/,
+  /^\s*(🟢|🔴|🗜️) radar (de fundo|de topo|de compressão): \d+ candidata/, /^\s*(🟢|🔴) radar: .* < /, /^\s*🧱 lateral: BTC/, /^\s*📡 fonte de dados/,
+  /^\s*⏱ (final \(.*faltam|prepare)/, /^\s*🌙 todos/, /^\s*⏭️/, /^\s*ℹ️/, /^\s*🗑️ autoapagar/, /^\s*(🧭|₿|🧱|🔒) .*barrado/, /^\s*🔎 volume/,
+  /^\s*🧹 \/oportunidade/, /^\s*✅ \d+ pares/, /^\s*⏳ .* cruzou contra, mas o último aviso/, /^\s*⏱ .*já coberto pelo alerta/, /^\s*⏱ final .*loop principal já avisou/,
+];
+const logClasse = (msg: string): "erro" | "ruido" | "evento" => {
+  if (LOG_ERRO_INICIO.test(msg)) return "erro";
+  if (LOG_RUIDO.some((r) => r.test(msg))) return "ruido";
+  if (LOG_ERRO_PALAVRA.test(msg)) return "erro";
+  return "evento";
+};
+const _logEst = { mostrados: 0, ruido: 0, repetidos: 0, filtro: 0, desde: Date.now() };
+const _logOrig = console.log.bind(console);
+const _logVisto = new Map<string, { t: number; n: number }>();
+console.log = (...args: unknown[]) => {
+  if (LOG_NIVEL === "tudo" && !LOG_OCULTAR.length) { _logOrig(...args); return; }
+  const msg = args.map((a) => {
+    if (typeof a === "string") return a;
+    if (a instanceof Error) return a.message;
+    try { return JSON.stringify(a); } catch { return String(a); }
+  }).join(" ");
+  const low = msg.toLowerCase();
+  if (LOG_OCULTAR.some((x) => low.includes(x))) { _logEst.filtro++; return; }
+  if (LOG_NIVEL === "tudo") { _logOrig(...args); return; }
+  if (LOG_NIVEL === "mudo") { _logEst.ruido++; return; }
+  const cls = logClasse(msg), forca = LOG_MOSTRAR.some((x) => low.includes(x));
+  if (!forca && ((LOG_NIVEL === "erro" && cls !== "erro") || (LOG_NIVEL === "normal" && cls === "ruido"))) { _logEst.ruido++; return; }
+  if (cls === "erro" && LOG_REPETIDO_MS > 0) {
+    const chave = msg.replace(/\d+(?:[.,]\d+)?/g, "#").slice(0, 140);
+    const agora = Date.now(), v = _logVisto.get(chave);
+    if (v && agora - v.t < LOG_REPETIDO_MS) { v.n++; _logEst.repetidos++; return; }
+    if (_logVisto.size > 800) _logVisto.clear();
+    _logVisto.set(chave, { t: agora, n: 0 });
+    if (v && v.n > 0) { _logEst.mostrados++; _logOrig(...args, `(+${v.n} iguais ocultas)`); return; }
+  }
+  _logEst.mostrados++;
+  _logOrig(...args);
+};
+const logResumo = (): string =>
+  `📜 <b>LOGS</b>\nNível: <b>${LOG_NIVEL}</b>${LOG_OCULTAR.length ? ` · ocultar: ${LOG_OCULTAR.join(", ")}` : ""}${LOG_MOSTRAR.length ? ` · sempre mostrar: ${LOG_MOSTRAR.join(", ")}` : ""} · repetidos: ${LOG_REPETIDO_MS ? `${LOG_REPETIDO_MS / 60000} min` : "off"}\n` +
+  `Desde que esta instância subiu (${Math.round((Date.now() - _logEst.desde) / 60000)} min): ${_logEst.mostrados} mostrados · ${_logEst.ruido} ruído/nível ocultos · ${_logEst.repetidos} repetidos ocultos · ${_logEst.filtro} por LOG_OCULTAR\n` +
+  `<i>Secrets: LOG_NIVEL = tudo | normal | erro | mudo · LOG_OCULTAR / LOG_MOSTRAR = trechos separados por vírgula · LOG_REPETIDO_MIN</i>`;
+
 // Timeout padrão: quase todas as chamadas de dados de mercado, do Telegram e da BloFin não tinham limite de tempo. Uma conexão
 // que trava ficava esperando até a function ser derrubada pela plataforma, segurando a trava do cron e atrasando todos os alertas.
 // 15 s pra mercado/Telegram/BloFin (respondem em menos de 2 s; passou disso, está travado) e 30 s pras consultas ao Supabase (leituras
@@ -7322,6 +7386,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
     ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
+    ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
     ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso"],
     ["🧾 /meuplacar 7", "seus trades reais x alertas", "seus trades reais x alertas do bot (precisa da chave BloFin)"],
     ["🌅 /resumo", "painel do dia", "painel do dia (21h a 21h), atualizado a cada hora: agenda e notícias no topo, BTC (comparação desde as 21h e 8h), posições e janelas fortes; no fechamento das 21h vêm os 15m em destaque, seu resultado real e o comparativo com o ciclo anterior"],
@@ -7623,6 +7688,10 @@ Deno.serve(async (req) => {
     if (text.startsWith("/15min")) {
       const dias = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
       await rodarEmBackground(run15min(chatId, dias));
+      return new Response("ok");
+    }
+    if (text === "/logs" || text.startsWith("/logs ") || text.startsWith("/logs@")) {
+      await sendTelegram(chatId, logResumo());
       return new Response("ok");
     }
     if (text === "/div" || text.startsWith("/div ") || text.startsWith("/div@")) {
