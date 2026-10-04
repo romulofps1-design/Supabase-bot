@@ -2,7 +2,7 @@
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
 // já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V74 (V73 + /saida passa a ser enviado em partes (dividirHtml) em vez de cortar o fim com "...(cortado)" + DIV_MODO=tv: divergência do BTC com as MESMAS regras do indicador Pine (pivô do RSI 5/5, 5 a 60 velas, sem zona, vale 5 velas) + controle do volume de logs: Secret LOG_NIVEL (tudo | normal | erro | mudo), LOG_OCULTAR, LOG_MOSTRAR, LOG_REPETIDO_MIN e comando /logs + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// telegram-bot V74 (V73 + o cooldown de alerta novo e o "loop já avisou" do alerta final passam a usar o lado do ÚLTIMO ALERTA (marcador [L]/[S] no last_status), não o watch_side que a lista de acompanhamento troca a cada virada — a lista não atrasa mais um alerta bom + /trades: histórico REAL do motor (outro Supabase) por chave só de leitura (MOTOR_URL, MOTOR_LEITURA_SECRET) + /saida passa a ser enviado em partes (dividirHtml) em vez de cortar o fim com "...(cortado)" + DIV_MODO=tv: divergência do BTC com as MESMAS regras do indicador Pine (pivô do RSI 5/5, 5 a 60 velas, sem zona, vale 5 velas) + controle do volume de logs: Secret LOG_NIVEL (tudo | normal | erro | mudo), LOG_OCULTAR, LOG_MOSTRAR, LOG_REPETIDO_MIN e comando /logs + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
 // auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
 // telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
 // com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
@@ -2239,8 +2239,14 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     } catch (e) { console.log(`⚠️ lista de acompanhamento: erro em ${row?.instid}`, e); }
   });
 }
+// V74: lado do ÚLTIMO ALERTA, gravado no fim do last_status (" [L]"/" [S]"). O watch_side muda quando a moeda vira na lista de acompanhamento; usar ele aqui fazia um alerta
+// NOVO no lado novo parecer "repetição" (cooldown de 180 min em vez de 60) e o alerta final achar que o loop principal já avisou. Linha antiga sem marcador: cai no watch_side.
+const ladoUltimoAlerta = (row: any): string | null => {
+  const ls = String(row?.last_status || "");
+  return ls.includes(" [L]") ? "long" : ls.includes(" [S]") ? "short" : (row?.watch_side ?? null);
+};
 function cooldownEfetivoMin(row: any, lado: string, status: string): number {
-  const repeticao = row?.watch_side === lado && rankStatus(status) === rankStatus(row?.last_status);
+  const repeticao = ladoUltimoAlerta(row) === lado && rankStatus(status) === rankStatus(row?.last_status);
   return repeticao ? Math.max(ALERT_COOLDOWN_MIN, ALERT_COOLDOWN_REPETIDO_MIN) : ALERT_COOLDOWN_MIN;
 }
 function refinarAoVivo(c: Setup, vivo: number): "recuou" | "ok" {
@@ -2530,7 +2536,7 @@ async function checarAlertaFinal(
   const abertura = ck * FINAL_PERIODO_MS;
   const loopJaAvisou = (inst: string, lado: string, soLigue: boolean) => {
     const r = rows.get(inst);
-    if (!r || r.watch_side !== lado || !r.last_alert_at || new Date(r.last_alert_at).getTime() < abertura) return false;
+    if (!r || ladoUltimoAlerta(r) !== lado || !r.last_alert_at || new Date(r.last_alert_at).getTime() < abertura) return false;
     return soLigue ? String(r.last_status || "").includes("LIGUE AGORA") : true;
   };
   const posDe = (ch: string, inst: string) => posDaMoeda(posMap.get(ch) ?? null, inst);
@@ -2869,7 +2875,7 @@ async function runAlertaProativo() {
     const registro = {
       // V74: " ✔" = o alerta saiu com o preço JÁ além da linha (cruzado). Serve pro aviso "voltou pra dentro da faixa" (checarListaAcompanhamento);
       // rankStatus/🆕/🛡️ usam includes(), então o marcador não atrapalha nada.
-      last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : "") + (c.info.idadeCandles !== null ? " ✔" : ""),
+      last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : "") + (c.info.idadeCandles !== null ? " ✔" : "") + (c.lado === "long" ? " [L]" : " [S]"),
       last_alert_at: new Date().toISOString(),
       watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString(),
       watch_side: c.lado,
@@ -3492,6 +3498,62 @@ async function runDivDiag(chatId: number | string) {
   }
   m += `\n<i>Se o TradingView mostra divergência e aqui está ✘: a regra que falhou (zona do RSI, diferença mínima, distância) é a diferença entre o seu indicador e o bot. Se está ✅ e não avisou, me mande o horário.</i>`;
   await sendTelegram(chatId, cortar(m));
+}
+// V74: /trades — histórico REAL do motor (tabela "trades", em OUTRO Supabase). O bot não tem acesso ao banco do motor: ele pergunta ao motor (action:"trades") com uma
+// chave SÓ DE LEITURA (secret MOTOR_LEITURA_SECRET = o LEITURA_SECRET do motor). Secrets: MOTOR_URL (URL da função do motor), MOTOR_LEITURA_SECRET e,
+// se houver mais de um usuário no motor, MOTOR_USER_EMAIL. PnL do motor = preço × tamanho, SEM taxas: a taxa abaixo é estimativa (alavancagem 1, 0,12% por perna).
+const MOTOR_URL = (Deno.env.get("MOTOR_URL") || "").trim();
+const MOTOR_LEITURA_SECRET = (Deno.env.get("MOTOR_LEITURA_SECRET") || "").trim();
+const MOTOR_USER_EMAIL = (Deno.env.get("MOTOR_USER_EMAIL") || "").trim();
+type TradeMotor = { inst_id: string; side: string; action: "open" | "close"; size: number | null; price: number | null; cost_usdt: number | null; pnl_usdt: number | null; motivo: string | null; created_at: string };
+function resumoTrades(rows: TradeMotor[], dias: number): string {
+  const opens = rows.filter((r) => r.action === "open"), closes = rows.filter((r) => r.action === "close");
+  const comPnl = closes.filter((r) => r.pnl_usdt != null && isFinite(Number(r.pnl_usdt)));
+  const pnl = (r: TradeMotor) => Number(r.pnl_usdt), soma = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  const ganhos = soma(comPnl.map(pnl).filter((x) => x > 0)), perdas = -soma(comPnl.map(pnl).filter((x) => x < 0));
+  const pf = perdas > 0 ? ganhos / perdas : ganhos > 0 ? Infinity : NaN;
+  const un = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(2)}`;
+  const taxaEst = soma(opens.map((r) => Number(r.cost_usdt) || 0)) * (TAXA_IDA_VOLTA_PCT / 100);
+  let m = `🧾 <b>TRADES REAIS DO MOTOR</b> — últimos ${dias} dia(s)\n${DIVISOR}\n`;
+  if (!rows.length) return m + "Nenhum trade registrado no período (a tabela <b>trades</b> existe e está recebendo?).";
+  m += `${opens.length} abertura(s) · ${closes.length} fechamento(s) (${comPnl.length} com PnL)\n`;
+  if (comPnl.length) {
+    const wins = comPnl.filter((r) => pnl(r) > 0).length;
+    m += `Acerto ${Math.round((wins / comPnl.length) * 100)}% (${wins}/${comPnl.length}) · PnL ${un(soma(comPnl.map(pnl)))} USDT · médio ${un(soma(comPnl.map(pnl)) / comPnl.length)} · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"}\n`;
+    m += `Taxa estimada ≈ ${taxaEst.toFixed(2)} USDT (0,12%/perna, alavancagem 1) → PnL líquido estimado <b>${un(soma(comPnl.map(pnl)) - taxaEst)} USDT</b>\n`;
+  }
+  // por motivo de fechamento
+  const mot = new Map<string, { n: number; soma: number; wins: number; comPnl: number }>();
+  for (const r of closes) {
+    const k = String(r.motivo || "outro"), a = mot.get(k) || { n: 0, soma: 0, wins: 0, comPnl: 0 };
+    a.n++; if (r.pnl_usdt != null && isFinite(Number(r.pnl_usdt))) { a.comPnl++; a.soma += pnl(r); if (pnl(r) > 0) a.wins++; }
+    mot.set(k, a);
+  }
+  m += `\n<b>Fechamentos por motivo</b>\n` + [...mot.entries()].sort((a, b) => b[1].n - a[1].n).map(([k, a]) => `${k}: ${a.n}${a.comPnl ? ` · ${un(a.soma)} USDT · acerto ${Math.round((a.wins / a.comPnl) * 100)}%` : ""}`).join("\n") + "\n";
+  const viradas = closes.filter((r) => r.motivo === "virada").length, sinais = opens.filter((r) => r.motivo === "sinal").length;
+  m += `\n🔁 Viradas reais: ${viradas} · entradas por sinal (sem posição antes): ${sinais}\n`;
+  // por moeda
+  const porMoeda = new Map<string, { n: number; soma: number }>();
+  for (const r of comPnl) { const k = String(r.inst_id), a = porMoeda.get(k) || { n: 0, soma: 0 }; a.n++; a.soma += pnl(r); porMoeda.set(k, a); }
+  const ordM = [...porMoeda.entries()].sort((a, b) => b[1].soma - a[1].soma), fm = (e: [string, { n: number; soma: number }]) => `${e[0].replace("-USDT", "")} ${un(e[1].soma)} (${e[1].n})`;
+  if (ordM.length === 1) m += `\n<b>Moeda:</b> ${fm(ordM[0])}\n`;
+  else if (ordM.length) { const kM = Math.min(3, Math.floor(ordM.length / 2)); m += `\n<b>Melhores:</b> ${ordM.slice(0, kM).map(fm).join(" · ")}\n<b>Piores:</b> ${ordM.slice(-kM).reverse().map(fm).join(" · ")}\n`; } // metade de cada lado: com poucas moedas não repete a mesma nas duas listas
+  // últimos fechamentos
+  m += `\n<b>Últimos fechamentos</b>\n` + closes.slice(-8).reverse().map((r) => `${divDH(new Date(r.created_at).getTime())} ${String(r.inst_id).replace("-USDT", "")} ${r.side === "long" ? "L" : "S"} · ${r.motivo || "—"}${r.pnl_usdt != null ? ` · ${un(pnl(r))}` : ""}`).join("\n") + "\n";
+  m += `\n<i>PnL do motor = preço × tamanho, sem taxas nem funding; fechamentos usam o preço ao vivo da hora, pode diferir do fill real. Compare com o /saida (simulação) pelo mesmo período.</i>`;
+  return m;
+}
+async function runTrades(chatId: number | string, dias: number) {
+  if (!MOTOR_URL || !MOTOR_LEITURA_SECRET) {
+    await sendTelegram(chatId, `🧾 <b>/trades</b> precisa de 2 Secrets no bot de alertas:\n• <b>MOTOR_URL</b> = URL da função do motor\n• <b>MOTOR_LEITURA_SECRET</b> = o mesmo valor do <b>LEITURA_SECRET</b> que você criar no motor\n(opcional: MOTOR_USER_EMAIL, se o motor tiver mais de um usuário). A chave de leitura só lista trades, não opera nem lê chave da corretora.`);
+    return;
+  }
+  try {
+    const r = await fetch(MOTOR_URL, { method: "POST", headers: { "Content-Type": "application/json", "x-leitura-secret": MOTOR_LEITURA_SECRET }, body: JSON.stringify({ action: "trades", dias, ...(MOTOR_USER_EMAIL ? { user_email: MOTOR_USER_EMAIL } : {}) }) });
+    const j: any = await r.json().catch(() => null);
+    if (!r.ok || !j?.ok) { await sendTelegram(chatId, `⚠️ O motor recusou a leitura (HTTP ${r.status}${j?.error ? `: ${String(j.error).slice(0, 160)}` : ""}). Confira MOTOR_URL, o LEITURA_SECRET do motor e se o motor já está na versão com a ação "trades".`); return; }
+    for (const parte of dividirHtml(resumoTrades((j.trades || []) as TradeMotor[], Number(j.dias) || dias))) await sendTelegram(chatId, parte);
+  } catch (e) { await sendTelegram(chatId, `⚠️ Não consegui falar com o motor agora (${String((e as Error)?.message || e).slice(0, 120)}).`); }
 }
 async function runDiv(chatId: number | string) {
   const SB = getSupabase();
@@ -7457,6 +7519,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
     ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
+    ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET"],
     ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
     ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso. /div diag mostra por que avisou ou não (regra a regra, com 15m pra comparar com o TradingView)"],
     ["🧾 /meuplacar 7", "seus trades reais x alertas", "seus trades reais x alertas do bot (precisa da chave BloFin)"],
@@ -7759,6 +7822,11 @@ Deno.serve(async (req) => {
     if (text.startsWith("/15min")) {
       const dias = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
       await rodarEmBackground(run15min(chatId, dias));
+      return new Response("ok");
+    }
+    if (text === "/trades" || text.startsWith("/trades ") || text.startsWith("/trades@")) {
+      const dT = Math.min(30, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
+      await comAguarde("🧾 Lendo os trades do motor, aguarde...", () => runTrades(chatId, dT));
       return new Response("ok");
     }
     if (text === "/logs" || text.startsWith("/logs ") || text.startsWith("/logs@")) {
