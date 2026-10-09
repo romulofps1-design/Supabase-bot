@@ -786,11 +786,15 @@ function ma(d: number[], p: number) {
   for (let i = 1; i < d.length; i++) { e = d[i] * k + e * (1 - k); o.push(e); }
   return o;
 }
+// J6_MODO: Juncao 6 RAPIDA (9,20,21,50,60) ou CLASSICA (20,21,50,60,100,200). Secret J6_MODO=rapida liga a rapida; sem o secret (ou "classica") nada muda.
+// Use o MESMO valor no motor e no bot de alertas (e a opcao "Juncao 6 RAPIDA" do indicador no TradingView), senao cada um enxerga linhas diferentes.
+// Se o motor e o bot de alertas estiverem em projetos Supabase diferentes, o secret precisa ser criado nos DOIS projetos.
+const J6_RAPIDA = (Deno.env.get("J6_MODO") || "classica").trim().toLowerCase() === "rapida";
 function superV2(closes: number[], peso: number = PESO_SUPREMA) {
-  const e20 = ma(closes, 20), e21 = ma(closes, 21), e50 = ma(closes, 50), e60 = ma(closes, 60), e100 = ma(closes, 100), e200 = ma(closes, 200);
+  const e9 = ma(closes, 9), e20 = ma(closes, 20), e21 = ma(closes, 21), e50 = ma(closes, 50), e60 = ma(closes, 60), e100 = ma(closes, 100), e200 = ma(closes, 200);
   return closes.map((_, i) => {
     const j3 = (e21[i] + e50[i] + e60[i]) / 3;
-    const j6 = (e20[i] + e21[i] + e50[i] + e60[i] + e100[i] + e200[i]) / 6;
+    const j6 = J6_RAPIDA ? (e9[i] + e20[i] + e21[i] + e50[i] + e60[i]) / 5 : (e20[i] + e21[i] + e50[i] + e60[i] + e100[i] + e200[i]) / 6;
     const exata = (j3 + j6) / 2;
     const suprema = exata * peso + j6 * (1 - peso);
     return { j3, j6, suprema };
@@ -856,6 +860,38 @@ function barToMs(bar: string): number {
   const map: Record<string, number> = { "1m":60000,"3m":180000,"5m":300000,"15m":900000,"30m":1800000,"1H":3600000,"2H":7200000,"4H":14400000,"6H":21600000,"12H":43200000,"1D":86400000,"1W":604800000 };
   return map[bar] || 900000;
 }
+// V75: BTC e ETH (BTC-USDT / ETH-USDT) usam a BINANCE FUTUROS (BTCUSDT / ETHUSDT perpetuo - o mesmo do painel no TradingView) como fonte PRIMEIRA de velas, preco ao vivo,
+// funding, open interest e livro de ofertas. Segunda opcao: Binance spot (data-api.binance.vision, sem bloqueio por regiao). So se as duas falharem cai na cadeia antiga
+// (BloFin, Bybit...). Secret BINANCE_BTC_ETH=0 (ou off) volta ao comportamento antigo. As outras moedas nao mudam.
+const BINANCE_BTC_ETH = !/^(0|off|false|nao|no)$/i.test((Deno.env.get("BINANCE_BTC_ETH") || "on").trim());
+const ehBtcEth = (instId: string): boolean => BINANCE_BTC_ETH && (instId === "BTC-USDT" || instId === "ETH-USDT");
+// de onde vieram as velas de BTC/ETH na ultima leitura (aparece no aviso do filtro lateral e no log, pra conferir)
+const _fonteBtcEth: Record<string, string> = {};
+const FONTE_FORA_BINANCE = "⚠️ FORA da Binance (BloFin/Bybit)";
+async function binanceGet(path: string, host: string = "https://fapi.binance.com"): Promise<any | null> {
+  const nome = host.includes("vision") ? "Binance spot" : "Binance futuros";
+  try {
+    const r = await fetch(`${host}${path}`, { signal: AbortSignal.timeout(8000) });
+    const txt = await r.text();
+    let j: any = null;
+    try { j = JSON.parse(txt); } catch { }
+    if (!r.ok || j === null) { console.log(`⚠️ ${nome} ${path.split("?")[0]} HTTP ${r.status}: ${txt.slice(0, 160)}`); return null; }
+    if (!Array.isArray(j) && j.code !== undefined && Number(j.code) !== 0 && Number(j.code) !== 200) { console.log(`⚠️ ${nome} ${path.split("?")[0]} recusou: ${txt.slice(0, 160)}`); return null; }
+    return j;
+  } catch (e) { console.log(`⚠️ ${nome} ${path.split("?")[0]} falhou: ${e}`); return null; }
+}
+// velas BTC/ETH: 1) Binance futuros  2) Binance spot  3) null -> cadeia antiga
+async function binanceKlinesBtcEth(instId: string, bar: string, limit: number): Promise<any[] | null> {
+  const iv = /[HDW]$/.test(bar) ? bar.toLowerCase() : bar;
+  const sym = instId.replace("-", "");
+  const jf = await binanceGet(`/fapi/v1/klines?symbol=${sym}&interval=${iv}&limit=${Math.min(limit, 1500)}`);
+  if (Array.isArray(jf) && jf.length > 100) { if (_fonteBtcEth[instId] !== "Binance futuros") console.log(`📊 ${instId} velas: Binance futuros`); _fonteBtcEth[instId] = "Binance futuros"; return jf; }
+  const js = await binanceGet(`/api/v3/klines?symbol=${sym}&interval=${iv}&limit=${Math.min(limit, 1000)}`, "https://data-api.binance.vision");
+  if (Array.isArray(js) && js.length > 100) { if (_fonteBtcEth[instId] !== "Binance spot") console.log(`📊 ${instId} velas: Binance spot (futuros indisponivel)`); _fonteBtcEth[instId] = "Binance spot"; return js; }
+  if (_fonteBtcEth[instId] !== FONTE_FORA_BINANCE) console.log(`❌ ${instId}: Binance futuros E spot falharam - usando a cadeia antiga (BloFin/Bybit)`);
+  _fonteBtcEth[instId] = FONTE_FORA_BINANCE;
+  return null;
+}
 async function getCandles(instId: string, bar: string, limit: number = CANDLES_LIMIT_PADRAO) {
   const sym = instId.replace("-", "");
   const periodo = barToMs(bar);
@@ -864,6 +900,10 @@ async function getCandles(instId: string, bar: string, limit: number = CANDLES_L
     while (rows.length && rows[rows.length - 1][0] >= aberturaAtual) rows.pop();
     return rows.map((r) => r[1]);
   };
+  if (ehBtcEth(instId)) {
+    const jb = await binanceKlinesBtcEth(instId, bar, limit);
+    if (jb) { marcaFonte(_fonteBtcEth[instId] === "Binance spot" ? "Binance spot" : "Binance"); return stripCloses(jb.map((c: any) => [parseInt(c[0]), parseFloat(c[4])] as [number, number])); }
+  }
   for (let t = 0; t < 2; t++) {
     try {
       const r = await fetch(`https://openapi.blofin.com/api/v1/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`, { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -896,6 +936,14 @@ async function getTickerOne(instId: string) {
   } catch { return null; }
 }
 async function precoAoVivo(instId: string): Promise<number | null> {
+  if (ehBtcEth(instId)) {
+    const jp = await binanceGet(`/fapi/v1/ticker/price?symbol=${instId.replace("-", "")}`);
+    const pf = Number(jp?.price);
+    if (isFinite(pf) && pf > 0) return pf;
+    const js = await binanceGet(`/api/v3/ticker/price?symbol=${instId.replace("-", "")}`, "https://data-api.binance.vision");
+    const ps = Number(js?.price);
+    if (isFinite(ps) && ps > 0) return ps;
+  }
   const t = await getTickerOne(instId);
   const v = Number(t?.last);
   return isFinite(v) && v > 0 ? v : null;
@@ -2938,6 +2986,10 @@ async function xCandles(instId: string, bar: string, limit: number): Promise<XVe
     v: rows.map((r) => parseFloat(r[5])),
   });
   const fechada = (d: XVelas) => xFechadas(d, barToMs(bar));
+  if (ehBtcEth(instId)) {
+    const jb = await binanceKlinesBtcEth(instId, bar, bar === "1H" ? 1000 : limit);
+    if (jb) { marcaFonte(_fonteBtcEth[instId] === "Binance spot" ? "Binance spot" : "Binance"); return fechada(monta(jb)); }
+  }
   for (let t = 0; t < 2; t++) {
     try {
       const r = await fetch(`https://openapi.blofin.com/api/v1/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`, { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -3150,6 +3202,7 @@ type LateralEst = {
   cont: Record<string, { n: number; ms: number }>; // por ciclo do painel (chave = início do ciclo em ms): sinais barrados e tempo bloqueado
   hk: string[]; hora: number; // chaves moeda|lado já contadas na hora atual (conta 1x por hora, não a cada rodada de 2 min)
   sujo?: boolean;
+  fonte?: string; // V75: de onde vieram as velas de BTC/ETH na ultima leitura
 };
 const lateralNovo = (): LateralEst => ({ bloq: false, desde: Date.now(), flip: 0, btc: null, eth: null, upd: Date.now(), dadoT: 0, btcEr: null, btcAmp: null, ethEr: null, ethAmp: null, tend: [], avisoT: 0, avisoEntrouT: 0, cont: {}, hk: [], hora: 0 });
 const fmtAdx = (x: number | null) => (x === null ? "?" : x.toFixed(1));
@@ -3584,6 +3637,21 @@ async function runDiv(chatId: number | string) {
   m += `\n<i>Divergência é contexto, não entrada: em tendência forte o RSI diverge várias vezes antes do preço virar. "A favor" = na direção do aviso (altista sobe, baixista cai). Compare por gráfico antes de confiar.</i>`;
   await sendTelegram(chatId, cortar(m));
 }
+// V75: status/resumo/painel mostravam os numeros GRAVADOS pelo cron (de ate 15 min atras, ou de antes da Binance), enquanto o /analise recalcula na hora.
+// Quem so EXIBE o filtro agora refaz a leitura ao vivo (ADX/ER/caixa de BTC e ETH; cache de 4 min). O ESTADO (bloqueando/liberado, desde quando, avisos)
+// continua sendo o gravado pelo cron - isto nao decide nada nem grava nada.
+async function lateralComLeituraViva(est: LateralEst | null): Promise<LateralEst | null> {
+  if (!est || !LATERAL_ON) return est;
+  try {
+    const [b, e] = await Promise.all([xRegimeCache().catch(() => null), xRegimeCacheEth().catch(() => null)]);
+    if (!b && !e) return est;
+    const v: LateralEst = { ...est };
+    if (b) { v.btc = b.adx; v.btcEr = b.er; v.btcAmp = b.amp; }
+    if (e) { v.eth = e.adx; v.ethEr = e.er; v.ethAmp = e.amp; }
+    v.fonte = `BTC ${_fonteBtcEth["BTC-USDT"] ?? "?"} · ETH ${_fonteBtcEth["ETH-USDT"] ?? "?"}`;
+    return v;
+  } catch { return est; }
+}
 async function avaliarLateral(SB: any): Promise<LateralEst> {
   const est = (await lateralLer(SB)) ?? lateralNovo();
   if (!LATERAL_ON) { est.bloq = false; return est; }
@@ -3603,6 +3671,7 @@ async function avaliarLateral(SB: any): Promise<LateralEst> {
   if (est.bloq !== antes) { est.desde = agora; est.flip = agora; }
   est.btc = ib?.adx ?? null; est.btcEr = ib?.er ?? null; est.btcAmp = ib?.amp ?? null;
   est.eth = ie?.adx ?? null; est.ethEr = ie?.er ?? null; est.ethAmp = ie?.amp ?? null;
+  est.fonte = `BTC ${_fonteBtcEth["BTC-USDT"] ?? "?"} · ETH ${_fonteBtcEth["ETH-USDT"] ?? "?"}`;
   est.upd = agora;
   // V57: quais dos 6 sinais (3 indicadores × BTC/ETH) estão em tendência agora; "novos" = entraram em tendência desde a última leitura
   const tendAgora: string[] = [];
@@ -3646,7 +3715,8 @@ function msgEntrouLateral(est: LateralEst): string {
     (LATERAL_BARRA
       ? `🛑 O filtro passa a bloquear o LIGUE AGORA até liberar (precisa de ${latQtdLibera()} em BTC ou ETH).`
       : `🧱 Aviso visual: nenhum alerta é barrado, mas BTC e ETH perderam direção.`) +
-    `\n<i>Sem tendência, o cruzamento tende a ser falso. Considere desligar o robô nas moedas sem posição e confirme no gráfico.</i>`;
+    `\n<i>Sem tendência, o cruzamento tende a ser falso. Considere desligar o robô nas moedas sem posição e confirme no gráfico.</i>` +
+    (est.fonte ? `\n<i>Velas: ${est.fonte}</i>` : "");
 }
 // V70: marca ✅ quando o requisito está no mínimo (ou acima), ❌ quando ainda está lateral, ❔ sem dado
 const latOk = (v: number | null, min: number) => (v === null ? "❔" : v >= min ? "✅" : "❌");
@@ -3666,7 +3736,8 @@ function msgSaiuLateral(est: LateralEst): string {
     `${quem} já tem <b>${Math.max(nb, ne)} de 3</b> requisitos no mínimo.\n\n` +
     `<i>Mínimo: ${latRegrasTend()}</i>\n${latLinhaAtivo("BTC", b)}${latLinhaAtivo("ETH", e)}\n` +
     (LATERAL_BARRA ? `✅ Filtro liberado: o LIGUE AGORA e os alertas de entrada voltam ao normal.` : `✅ Liberado: o aviso 🧱 de mercado lateral sai dos alertas.`) +
-    `\n<i>O mercado pode estar começando a andar. Confirme no gráfico antes de ligar o robô.</i>`;
+    `\n<i>O mercado pode estar começando a andar. Confirme no gráfico antes de ligar o robô.</i>` +
+    (est.fonte ? `\n<i>Velas: ${est.fonte}</i>` : "");
 }
 // V70: QUERENDO SAIR — ainda lateral, mas um requisito já chegou no mínimo (precisa de LATERAL_VOTOS_LIBERA pra liberar)
 function msgQuerSairLateral(est: LateralEst, novos: string[]): string {
@@ -3676,7 +3747,8 @@ function msgQuerSairLateral(est: LateralEst, novos: string[]): string {
     `${novos.length === 1 ? "1 requisito chegou" : `${novos.length} requisitos chegaram`} no mínimo:\n${novos.map((k) => latDescSinal(est, k)).join("\n")}\n\n` +
     `<i>Mínimo: ${latRegrasTend()}</i>\n${latLinhaAtivo("BTC", b)}${latLinhaAtivo("ETH", e)}\n` +
     `🧱 Ainda lateral: falta${falta > 1 ? "m" : ""} ${falta} requisito${falta > 1 ? "s" : ""} em BTC ou ETH pra liberar (precisa de ${LATERAL_VOTOS_LIBERA} de 3).` +
-    `\n<i>Pode ser só o começo de um movimento. Ainda não confie em cruzamento novo; confirme no gráfico.</i>`;
+    `\n<i>Pode ser só o começo de um movimento. Ainda não confie em cruzamento novo; confirme no gráfico.</i>` +
+    (est.fonte ? `\n<i>Velas: ${est.fonte}</i>` : "");
 }
 // conta 1 sinal barrado (1x por moeda|lado por hora). Devolve true se contou agora.
 function latContar(est: LateralEst, inst: string, lado: string): boolean {
@@ -3725,7 +3797,7 @@ function lateralTxt(est: LateralEst | null, inicio: number): string {
   const regra = est.bloq
     ? `Libera quando BTC ou ETH tiver ${LATERAL_VOTOS_LIBERA} de 3 no mínimo${LATERAL_BARRA ? " · PREPARE e radares seguem, com aviso 🧱" : ""}`
     : `${LATERAL_BARRA ? "Volta a bloquear" : "Volta a marcar lateral"} quando BTC e ETH ficarem com até ${3 - LATERAL_VOTOS} de 3 no mínimo`;
-  return `${titulo}: ${estado}\n<i>Mínimo: ${latRegrasTend()}</i>\n${latLinhaAtivo("BTC", b)}${latLinhaAtivo("ETH", e)}${regra}${velho}\n${placar}\n`;
+  return `${titulo}: ${estado}\n<i>Mínimo: ${latRegrasTend()}</i>\n${latLinhaAtivo("BTC", b)}${latLinhaAtivo("ETH", e)}${regra}${velho}\n${est.fonte ? `<i>Velas: ${est.fonte}</i>\n` : ""}${placar}\n`;
 }
 function lateralStatusTxt(est: LateralEst | null): string {
   if (!LATERAL_ON) return "🧱 Filtro lateral: desligado\n";
@@ -3738,7 +3810,7 @@ function lateralStatusTxt(est: LateralEst | null): string {
   const cab = est.bloq
     ? (LATERAL_BARRA ? `🧱 Filtro lateral: 🛑 bloqueando desde ${horaLocal(est.desde)}${quer}` : `🧱 Filtro lateral: lateral desde ${horaLocal(est.desde)} (modo visual, sem barrar)${quer}`)
     : `🧱 Filtro lateral: ✅ liberado`;
-  return `${cab}${barr}${velho}\n   BTC ${indTxt(indBtc(est))}\n   ETH ${indTxt(indEth(est))}\n`;
+  return `${cab}${barr}${velho}\n   BTC ${indTxt(indBtc(est))}\n   ETH ${indTxt(indEth(est))}\n${est.fonte ? `   <i>Velas: ${est.fonte}</i>\n` : ""}`;
 }
 async function runLista(chatId: number | string) {
   const SB = getSupabase();
@@ -5523,10 +5595,17 @@ const BOOK_IMB_MIN_PCT = numEnv("BOOK_IMB_MIN_PCT", "15");
 async function getBookImbalance(instId: string): Promise<number | null> {
   try {
     const sym = instId.replace("-", "");
-    const r = await fetch(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${sym}&limit=50`);
-    const j = await r.json();
-    const bids = j?.result?.b as [string, string][] | undefined;
-    const asks = j?.result?.a as [string, string][] | undefined;
+    let bids: [string, string][] | undefined, asks: [string, string][] | undefined;
+    if (ehBtcEth(instId)) {
+      const jb = await binanceGet(`/fapi/v1/depth?symbol=${sym}&limit=50`);
+      bids = jb?.bids; asks = jb?.asks;
+    }
+    if (!bids?.length || !asks?.length) {
+      const r = await fetch(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${sym}&limit=50`);
+      const j = await r.json();
+      bids = j?.result?.b as [string, string][] | undefined;
+      asks = j?.result?.a as [string, string][] | undefined;
+    }
     if (!bids?.length || !asks?.length) return null;
     const soma = (arr: [string, string][]) => arr.reduce((s, [, q]) => s + (parseFloat(q) || 0), 0);
     const bidVol = soma(bids), askVol = soma(asks);
@@ -5538,11 +5617,22 @@ async function getBookImbalance(instId: string): Promise<number | null> {
 async function getFundingOI(instId: string): Promise<{ funding: number | null; oiChg: number | null }> {
   const sym = instId.replace("-", "");
   let funding: number | null = null, oiChg: number | null = null;
+  if (ehBtcEth(instId)) {
+    const jf = await binanceGet(`/fapi/v1/premiumIndex?symbol=${sym}`);
+    const fb = parseFloat(jf?.lastFundingRate);
+    if (isFinite(fb)) funding = fb * 100;
+    const jo = await binanceGet(`/futures/data/openInterestHist?symbol=${sym}&period=1h&limit=5`);
+    if (Array.isArray(jo) && jo.length >= 5) {
+      const a = parseFloat(jo[jo.length - 1].sumOpenInterest), b = parseFloat(jo[0].sumOpenInterest); // Binance: mais antigo primeiro
+      if (isFinite(a) && isFinite(b) && b > 0) oiChg = ((a - b) / b) * 100;
+    }
+    if (funding !== null && oiChg !== null) return { funding, oiChg };
+  }
   try {
     const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${sym}`);
     const j = await r.json();
     const fr = parseFloat(j?.result?.list?.[0]?.fundingRate);
-    if (isFinite(fr)) funding = fr * 100;
+    if (funding === null && isFinite(fr)) funding = fr * 100;
   } catch { }
   if (funding === null) {
     try {
@@ -5558,7 +5648,7 @@ async function getFundingOI(instId: string): Promise<{ funding: number | null; o
     const l = j?.result?.list;
     if (Array.isArray(l) && l.length >= 5) {
       const a = parseFloat(l[0].openInterest), b = parseFloat(l[4].openInterest);
-      if (isFinite(a) && isFinite(b) && b > 0) oiChg = ((a - b) / b) * 100;
+      if (oiChg === null && isFinite(a) && isFinite(b) && b > 0) oiChg = ((a - b) / b) * 100;
     }
   } catch { }
   return { funding, oiChg };
@@ -6518,7 +6608,7 @@ async function painelJanelas(): Promise<string> {
   return `🔥 <b>Janelas fortes</b> (${perfil.tipo}, UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}): ${js.length ? js.map((j) => `${xHH(j.ini)}–${xHH(j.fim)}`).join(" · ") : "nenhuma bem definida"}\n\n`;
 }
 async function montarPainel(SB: any, chat: string | number, est: Pick<PainelEstado, "base" | "base8" | "inicio">, snap: PainelSnap | null, fim: boolean): Promise<string> {
-  const [janelas, agenda, noticias, placarBruto, pos, lat] = await Promise.all([painelJanelas().catch(() => ""), agBlocoProximas(SB), ntBlocoPainel(SB), fim ? montarResumoNoite(SB, chat, est.inicio) : Promise.resolve(""), agPosicoes(chat), lateralLer(SB)]); // placar (alertas + resultado real) só no fechamento das 21h
+  const [janelas, agenda, noticias, placarBruto, pos, lat] = await Promise.all([painelJanelas().catch(() => ""), agBlocoProximas(SB), ntBlocoPainel(SB), fim ? montarResumoNoite(SB, chat, est.inicio) : Promise.resolve(""), agPosicoes(chat), lateralLer(SB).then(lateralComLeituraViva)]); // placar (alertas + resultado real) só no fechamento das 21h
   const linhaPos = pos === null ? "" : pos.lista.length ? `💼 <b>Posições abertas (${pos.lista.length})</b>: ${pos.lista.join(" · ")}\nTotal agora: ${pos.total >= 0 ? "➕" : "➖"}${Math.abs(pos.total).toFixed(2)} USDT\n\n` : `💼 Sem posição aberta.\n\n`;
   const placar = placarBruto
     ? placarBruto.replace(/^[^\n]*\n[^\n]*\n\n?/, "") // tira o cabeçalho antigo ("BOA NOITE…" + divisor)
@@ -6607,7 +6697,7 @@ async function checarPainel(SB: any) {
     return;
   }
   // 3) painel do ciclo já existe: atualiza de hora em hora
-  const latPn = LATERAL_ON ? await lateralLer(SB) : null;
+  const latPn = LATERAL_ON ? await lateralComLeituraViva(await lateralLer(SB)) : null;
   const mudouLateral = !!latPn && latPn.flip > est.upd; // V57: filtro ligou/desligou desde a última edição → edita já (edição não notifica)
   if (mudouLateral || Date.now() - est.upd >= (PAINEL_MIN - 2) * 60000) {
     await painelAtualizar(SB, est, false);
@@ -7296,7 +7386,7 @@ async function runStatus(chatId: number | string) {
     const { data: p } = await SB.from(TAB).select("last_status").eq("instid", `_PAUSA_${chatId}`).maybeSingle();
     const ate = Number(p?.last_status);
     if (ate > Date.now()) pausa = `⏸ Alertas pausados até ${horaLocal(ate)}\n`;
-    lateral = lateralStatusTxt(await lateralLer(SB));
+    lateral = lateralStatusTxt(await lateralComLeituraViva(await lateralLer(SB)));
     nSeg = (await listarSeguidas(SB, chatId)).length;
     const { count: nDelCount } = await SB.from(TAB).select("instid", { count: "exact", head: true }).like("instid", `${AUTOAPAGAR_PREFIXO}%`);
     nDel = nDelCount ?? 0;
