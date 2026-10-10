@@ -1,4 +1,4 @@
-// telegram-bot V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -1867,10 +1867,15 @@ async function registrarAlertaCompressao(SB: any, info: InfoFiltravel, pct: numb
   if (!_placarTemEntrada) return;
   try {
     // lado provisório: o placar troca pelo lado do 1º fechamento fora da faixa (o que o robô ligado pegaria)
+    const r2 = (x: number | undefined | null, d = 2) => (x === undefined || x === null || !isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d);
+    const feat = JSON.stringify({
+      lr: r2(info.larguraRel), cc: info.compCandles ?? 0, inc: r2(info.inclinaRel), rng: r2(info.rangeRel), vr: r2(info.volRatio),
+      adx: r2(info.adx, 1), dadx: r2((info.adx ?? 0) - (info.adxAntes ?? info.adx ?? 0), 1), dist: r2(info.distAbs), idade: info.idadeCandles,
+    });
     await inserirLogAlerta(SB, {
       instid: info.instId, lado: "long", tipo: "compressao", status: "🗜️ COMPRESSÃO", fresco: false,
       idade_candles: info.idadeCandles, pct24: pct, preco: info.preco, adx: info.adx ?? null, rsi: info.rsi ?? null,
-    }, conf);
+    }, conf, feat);
   } catch (e) { console.log("⚠️ registrarAlertaCompressao erro", e); }
 }
 async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: string; pct: number; volUsdt: number }[], indicadores: (InfoFiltravel | null)[], posMap: Map<string, Pos[] | null>) {
@@ -4456,17 +4461,28 @@ const ANALISE_TARDE_CANDLES = 8;
 const ANALISE_MUITO_TARDE_CANDLES = 16;
 type VarInfo = { instId: string; pct: number; last: number; volUsdt: number; dd: number; up: number };
 let _logTemConf = true;
-async function inserirLogAlerta(SB: any, linha: Record<string, unknown>, conf: number | null) {
-  if (_logTemConf && conf !== null) {
-    const { error } = await SB.from(PLACAR_TABELA).insert({ ...linha, conf });
+let _logTemFeat = true; // V87: coluna opcional comp_feat (texto) com as características da compressão no momento do alerta
+async function inserirLogAlerta(SB: any, linha: Record<string, unknown>, conf: number | null, feat: string | null = null) {
+  for (let tent = 0; tent < 3; tent++) {
+    const payload: Record<string, unknown> = { ...linha };
+    if (_logTemConf && conf !== null) payload.conf = conf;
+    if (_logTemFeat && feat) payload.comp_feat = feat;
+    const { error } = await SB.from(PLACAR_TABELA).insert(payload);
     if (!error) return;
-    if (/conf/i.test(String(error.message || ""))) {
+    const msg = String(error.message || "");
+    if (payload.comp_feat !== undefined && /comp_feat/i.test(msg)) {
+      _logTemFeat = false;
+      console.log("⚠️ alertas_log sem a coluna comp_feat: rode  ALTER TABLE alertas_log ADD COLUMN IF NOT EXISTS comp_feat text;  pra guardar os componentes da compressão");
+      continue;
+    }
+    if (payload.conf !== undefined && /conf/i.test(msg)) {
       _logTemConf = false;
       console.log("⚠️ alertas_log sem a coluna conf: rode o ALTER TABLE do arquivo setup-supabase.sql pra medir acerto por confianca");
-    } else { console.log("⚠️ registrarAlerta:", error.message); return; }
+      continue;
+    }
+    console.log("⚠️ registrarAlerta:", msg);
+    return;
   }
-  const { error } = await SB.from(PLACAR_TABELA).insert(linha);
-  if (error) console.log("⚠️ registrarAlerta:", error.message);
 }
 async function registrarAlerta(SB: any, c: Setup, conf: number | null = null) {
   try {
@@ -4800,6 +4816,46 @@ async function runCompressao(chatId: number | string, dias: number) {
     const mv = comMov(g);
     if (mv.length >= 20) movRank.push({ nome, n: mv.length, pct: mv.filter((r) => Math.max(Number(r.mfe_pct), Number(r.mae_pct)) >= COMPRESS_ROMPE_PCT).length / mv.length });
   }
+  // V88: por quanto a moeda já se mexeu no dia (|variação 24h| no momento do alerta). Os outros alertas só olham o pool das que mais se mexeram;
+  // a compressão olha o pool + um rodízio de moedas FORA dele (as mais calmas). Isso mostra quantos alertas vêm de moeda calma e como se saem.
+  m += `${MINI_DIVISOR}\n<b>Por movimento da moeda no dia (|variação 24h| ao alertar)</b>\n${MINI_DIVISOR}\n\n`;
+  const comP24 = ent.filter((r) => r.pct24 != null && isFinite(Number(r.pct24)));
+  const bk: [string, (x: number) => boolean][] = [["🐢 parada (< 3%)", (x) => x < 3], ["⚖️ 3% a 8%", (x) => x >= 3 && x < 8], ["🚀 forte (≥ 8%)", (x) => x >= 8]];
+  for (const [nome, f] of bk) {
+    const g = comP24.filter((r) => f(Math.abs(Number(r.pct24))));
+    if (g.length) m += linha(nome, g);
+  }
+  m += `<i>Dos ${comP24.length} alertas com a variação gravada, ${comP24.length ? Math.round((comP24.filter((r) => Math.abs(Number(r.pct24)) < 3).length / comP24.length) * 100) : 0}% vieram de moeda parada (&lt; 3% no dia).</i>\n\n`;
+  // V87: por componente do sinal (só alertas com o detalhe gravado em comp_feat; começa a acumular depois do ALTER TABLE)
+  const feats = ent.map((r) => { try { return { r, f: JSON.parse(String(r.comp_feat)) as any }; } catch { return null; } }).filter((x): x is { r: any; f: any } => !!x && !!x.f);
+  m += `${MINI_DIVISOR}\n<b>Por componente do sinal</b>\n${MINI_DIVISOR}\n\n`;
+  if (feats.length < 30) {
+    m += `<i>Ainda sem dados (${feats.length} alerta(s) com o detalhe gravado). Rode no Supabase: ALTER TABLE alertas_log ADD COLUMN IF NOT EXISTS comp_feat text; — os novos alertas passam a guardar largura da faixa, tempo comprimida, volume, velas, inclinação e ADX.</i>\n\n`;
+  } else {
+    const num = (x: any) => (typeof x === "number" && isFinite(x) ? x : null);
+    const grupos: [string, [string, (f: any) => boolean][]][] = [
+      ["Largura da faixa (vs típica)", [["≤ 40%", (f) => num(f.lr) !== null && f.lr <= 0.4], ["40–50%", (f) => num(f.lr) !== null && f.lr > 0.4 && f.lr <= 0.5], ["> 50%", (f) => num(f.lr) !== null && f.lr > 0.5]]],
+      ["Tempo comprimida", [["< 2h", (f) => (f.cc ?? 0) < 8], ["2–4h", (f) => (f.cc ?? 0) >= 8 && (f.cc ?? 0) < 16], ["≥ 4h", (f) => (f.cc ?? 0) >= 16]]],
+      ["Volume (× a média)", [["< 1.1×", (f) => num(f.vr) !== null && f.vr < 1.1], ["1.1–1.5×", (f) => num(f.vr) !== null && f.vr >= 1.1 && f.vr < 1.5], ["≥ 1.5×", (f) => num(f.vr) !== null && f.vr >= 1.5]]],
+      ["Tamanho das velas", [["minúsculas (≤ 70%)", (f) => num(f.rng) !== null && f.rng <= 0.7], ["normais (> 70%)", (f) => num(f.rng) !== null && f.rng > 0.7]]],
+      ["Faixa achatada", [["plana", (f) => num(f.inc) !== null && Math.abs(f.inc) <= INCLINA_PLANA], ["inclinada", (f) => num(f.inc) !== null && Math.abs(f.inc) > INCLINA_PLANA]]],
+      ["ADX", [["saindo do fundo (↗)", (f) => (f.dadx ?? 0) > 0.5], ["parado/caindo", (f) => (f.dadx ?? 0) <= 0.5]]],
+      ["Preço vs faixa", [["já cruzou", (f) => f.idade !== null && f.idade !== undefined], ["ainda dentro", (f) => f.idade === null || f.idade === undefined]]],
+    ];
+    m += `<i>${feats.length} alertas com detalhe. Mesma régua: andou ${COMPRESS_ROMPE_PCT}%+ pra algum lado em 24h.</i>\n\n`;
+    for (const [titulo, faixas] of grupos) {
+      let bloco = "";
+      for (const [nome, fp] of faixas) {
+        const g = feats.filter((x) => fp(x.f)).map((x) => x.r);
+        const mv = comMov(g);
+        if (mv.length < 10) { if (g.length) bloco += `• ${nome}: n=${g.length} (poucos conferidos)\n`; continue; }
+        const gr = mv.filter((r) => Math.max(Number(r.mfe_pct), Number(r.mae_pct)) >= COMPRESS_ROMPE_PCT);
+        const lp = gr.filter((r) => Math.min(Number(r.mfe_pct), Number(r.mae_pct)) < COMPRESS_LIMPO_PCT);
+        bloco += `• ${nome}: ${Math.round((gr.length / mv.length) * 100)}% (${gr.length}/${mv.length}) · limpo ${Math.round((lp.length / mv.length) * 100)}%\n`;
+      }
+      if (bloco) m += `<b>${titulo}</b>\n${bloco}\n`;
+    }
+  }
   m += `${MINI_DIVISOR}\n<b>Por força da tendência (ADX)</b>\n${MINI_DIVISOR}\n\n`;
   const adxA = ent.filter((r) => r.adx != null && Number(r.adx) >= 25), adxB = ent.filter((r) => r.adx != null && Number(r.adx) < 25);
   if (adxA.length) m += linha("💪 ADX ≥ 25", adxA);
@@ -4842,11 +4898,14 @@ async function runCompressaoBase(chatId: number | string) {
   const seleciona = new Set(insts);
   const passo = Math.max(1, Math.round(60 / TF_MIN)), jan = Math.round(1440 / TF_MIN); // uma janela por hora, olhando 24h à frente
   let nJan = 0, nGrande = 0, nLimpo = 0, nMoedas = 0;
+  const porMoedaVol: { id: string; vol: number; cj: number; cg: number; cq: number; cqg: number }[] = []; // V88: por moeda, pra separar por volatilidade
   let qJan = 0, qGrande = 0, qLimpo = 0; // janelas "quietas": faixa comprimida e preço perto dela, as mesmas condições que o radar de compressão exige (largura ≤ SQUEEZE_REL da típica e distância ≤ COMPRESS_DIST_MAX_PCT)
   await emLotes(insts, 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
     if (!d || d.c.length < jan + 10) return;
     nMoedas++;
+    const amps: number[] = [];
+    let cj = 0, cg = 0, cq = 0, cqg = 0;
     const jd = superV2(d.c, PESO_SUPREMA);
     const larg = (k: number) => ((Math.max(jd[k].suprema, jd[k].j6) - Math.min(jd[k].suprema, jd[k].j6)) / d.c[k]) * 100;
     for (let k = 0; k + jan < d.c.length; k += passo) {
@@ -4868,11 +4927,16 @@ async function runCompressaoBase(chatId: number | string) {
       for (let i = k + 1; i <= k + jan; i++) { if (d.h[i] > mx) mx = d.h[i]; if (d.l[i] < mn) mn = d.l[i]; }
       const up = ((mx - p0) / p0) * 100, dn = ((p0 - mn) / p0) * 100;
       nJan++;
+      amps.push(up + dn); // amplitude das 24h seguintes: serve de medida de volatilidade da moeda
+      cj++;
       const grande = Math.max(up, dn) >= COMPRESS_ROMPE_PCT, limpo = grande && Math.min(up, dn) < COMPRESS_LIMPO_PCT;
+      if (grande) cg++;
+      if (quieta) { cq++; if (grande) cqg++; }
       if (grande) nGrande++;
       if (limpo) nLimpo++;
       if (quieta) { qJan++; if (grande) qGrande++; if (limpo) qLimpo++; }
     }
+    if (amps.length >= 20) porMoedaVol.push({ id, vol: _med(amps), cj, cg, cq, cqg });
   });
   if (nJan < 50) { await sendTelegram(chatId, "⚠️ Não consegui velas suficientes pra montar a base agora. Tente de novo."); return; }
   const mesmas = comp.filter((r) => seleciona.has(r.instid));
@@ -4894,6 +4958,25 @@ async function runCompressaoBase(chatId: number | string) {
   for (const [nome, f] of [["Confiança 6", (r: any) => Number(r.conf) === 6], ["Confiança 7", (r: any) => Number(r.conf) === 7], ["Confiança 8", (r: any) => Number(r.conf) === 8]] as [string, (r: any) => boolean][]) {
     const g = mesmas.filter(f);
     if (g.length >= 10) m += `• ${nome}: ${pc(pctG(g).length, g.length)}% (${pctG(g).length}/${g.length}) · limpo ${pc(pctL(g).length, g.length)}%\n`;
+  }
+  // V88: separar por volatilidade da moeda (terços). Pergunta: o alerta se sai melhor nas moedas mais voláteis? E o peso das moedas calmas distorce a comparação?
+  if (porMoedaVol.length >= 9) {
+    const ord = [...porMoedaVol].sort((a, b) => a.vol - b.vol), t = Math.ceil(ord.length / 3);
+    const grupos: [string, typeof ord][] = [["🐢 Menos voláteis", ord.slice(0, t)], ["⚖️ Médias", ord.slice(t, 2 * t)], ["🚀 Mais voláteis", ord.slice(2 * t)]];
+    m += `\n${MINI_DIVISOR}\n<b>Por volatilidade da moeda</b> (amplitude mediana em 24h)\n${MINI_DIVISOR}\n`;
+    for (const [nome, g] of grupos) {
+      if (!g.length) continue;
+      const ids = new Set(g.map((x) => x.id)), al = mesmas.filter((r) => ids.has(r.instid));
+      const cj2 = g.reduce((a, x) => a + x.cj, 0), cg2 = g.reduce((a, x) => a + x.cg, 0), cq2 = g.reduce((a, x) => a + x.cq, 0), cqg2 = g.reduce((a, x) => a + x.cqg, 0);
+      const volMin = g[0].vol.toFixed(1), volMax = g[g.length - 1].vol.toFixed(1);
+      const aG = pctG(al).length;
+      m += `\n<b>${nome}</b> (${g.length} moedas, amplitude ${volMin}–${volMax}%)\n`;
+      m += `• qualquer hora: ${pc(cg2, cj2)}% · moeda quieta: ${cq2 >= 20 ? pc(cqg2, cq2) + "%" : "poucas janelas"}\n`;
+      m += `• depois do alerta: ${al.length ? pc(aG, al.length) + "% (" + aG + "/" + al.length + ")" : "sem alertas"}${al.length && al.length < 30 ? " <i>(amostra pequena)</i>" : ""}\n`;
+    }
+    const totAl = mesmas.length;
+    const pesos = grupos.map(([, g]) => { const ids = new Set(g.map((x) => x.id)); return mesmas.filter((r) => ids.has(r.instid)).length; });
+    if (totAl > 0) m += `\n<i>Onde ficam os alertas: ${grupos.map(([n], i) => `${n.replace(/^\S+ /, "")} ${pc(pesos[i], totAl)}%`).join(" · ")} (o ideal pra uma comparação justa seria 33% em cada).</i>\n`;
   }
   const dif = qOk ? cG - quietaG : cG - baseG, refNome = qOk ? "uma moeda quieta qualquer (sem alerta)" : "essas moedas em qualquer hora";
   m += `\n<b>Leitura (contra ${refNome}):</b> ${Math.abs(dif) < 5 ? `a compressão do bot anda praticamente o MESMO que ${refNome}: o alerta não está separando o que vai se mexer do que não vai — o filtro de confiança e de volume não acrescenta nada visível.` : dif > 0 ? `depois do alerta a moeda anda ${dif} pontos a MAIS que ${refNome}: o alerta (confiança e volume) acrescenta valor sobre só achar faixa comprimida.` : `depois do alerta a moeda anda ${-dif} pontos a MENOS que ${refNome}: o alerta não só não ajuda como parece pegar casos piores que a calmaria comum.`}\n`;
