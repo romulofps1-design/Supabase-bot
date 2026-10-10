@@ -3877,6 +3877,19 @@ function virLinha(x: VirSim[]): string {
   t += `    média ${sg(mediaR)}R (${sg(mediaP, 1)}% de preço)${semMelhor !== null ? ` · sem a melhor ${sg(semMelhor)}R` : ""}${dec.length < 15 ? " ⚠️ amostra pequena" : ""}\n`;
   return t;
 }
+// V77: a linha da virada quebrada por ADX antes do alerta (< 30 contra >= 30), pra ver se o ganho some quando a tendência já está forte
+function virFatiaAdx(g: { v: VirSim; adx: number | null }[]): string {
+  const dec = g.filter((i) => i.v.res === "ok" && i.adx !== null);
+  if (dec.length < 8) return "";
+  const sg = (v: number, nd = 2) => `${v >= 0 ? "+" : ""}${v.toFixed(nd)}`;
+  const linha = (rotulo: string, x: typeof dec): string => {
+    if (!x.length) return "";
+    const mR = x.reduce((u, i) => u + i.v.r, 0) / x.length, mP = x.reduce((u, i) => u + i.v.pct, 0) / x.length;
+    const alvo = x.filter((i) => i.v.fim === "alvo").length, virou = x.filter((i) => i.v.pernas > 1).length;
+    return `    ${rotulo} (n=${x.length}): média ${sg(mR)}R (${sg(mP, 1)}% de preço) · terminou em alvo ${Math.round((alvo / x.length) * 100)}% · virou ${Math.round((virou / x.length) * 100)}%${x.length < 8 ? " ⚠️" : ""}\n`;
+  };
+  return `    <i>virada por ADX antes do alerta:</i>\n` + linha("ADX menor que 30", dec.filter((i) => (i.adx as number) < 30)) + linha("ADX 30 ou mais", dec.filter((i) => (i.adx as number) >= 30));
+}
 function rupLinha(nome: string, x: RupSim[], comEspera: boolean): string {
   const ok = x.filter((i) => i.res !== "semdados");
   if (!ok.length) return "";
@@ -3955,6 +3968,7 @@ async function runRadarStats(chatId: number | string, dias: number) {
       m += rupLinha(`A) ${regraA}`, g.map((x) => x.rA), true);
       m += rupLinha(`B) ${regraB}`, g.map((x) => x.rB), true);
       m += virLinha(g.map((x) => x.rV));
+      m += virFatiaAdx(g.map((x) => ({ v: x.rV, adx: x.adx })));
       m += rupLinha("Direto no alerta (mesmo stop, sem esperar rompimento)", g.map((x) => x.rD), false);
     }
     if (g.length < 15) m += `<i>amostra pequena (n&lt;15)</i>\n`;
