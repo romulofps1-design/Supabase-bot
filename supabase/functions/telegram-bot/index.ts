@@ -1,4 +1,4 @@
-// telegram-bot V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -3819,6 +3819,64 @@ function rupDireto(d: { h: number[]; l: number[]; c: number[] }, k0: number, lad
   const r = rupCorrer(d, k0 + 1, ladoOp, preco0, stop, alvoR, maxBarras);
   return { ...r, esperou: 0 };
 }
+// V77: VIRADA. As duas ordens ficam armadas nas pontas da vela do alerta: vale o 1º rompimento (mínima = short, máxima = long). Se o stop (a ponta oposta) vier, VIRA: entra no sentido contrário
+// naquela ponta, com stop na ponta de onde saiu, até RADAR_VIRADA_PERNAS pernas (padrão 3). Sai no alvo (RADAR_ALVO_R × risco), no prazo HIP_HORAS (contado da 1ª entrada) ou na última perna.
+// O resultado do alerta é a SOMA das pernas (em R e em % de preço). Rompendo as duas pontas na mesma vela, conta a 1ª perna como stop (pior caso) e a virada começa na vela seguinte.
+const RUP_PERNAS = Math.max(1, Math.round(numEnv("RADAR_VIRADA_PERNAS", "3")));
+type VirSim = { res: "ok" | "aberta" | "naoentrou" | "semdados"; r: number; pct: number; pernas: number; fim: RupRes; esperou: number };
+function rupVirada(d: { o: number[]; h: number[]; l: number[]; c: number[] }, k0: number, espera: number, alvoR: number, maxBarras: number, maxPernas: number): VirSim {
+  const hi = d.h[k0], lo = d.l[k0];
+  const vaz = (res: VirSim["res"]): VirSim => ({ res, r: 0, pct: 0, pernas: 0, fim: "semdados", esperou: 0 });
+  if (!(hi > lo)) return vaz("semdados");
+  const ate = Math.min(k0 + espera, d.h.length - 1);
+  let k1 = -1;
+  for (let k = k0 + 1; k <= ate; k++) if (d.l[k] < lo || d.h[k] > hi) { k1 = k; break; }
+  if (k1 < 0) return vaz(k0 + espera > d.h.length - 1 ? "aberta" : "naoentrou");
+  const desce = d.l[k1] < lo, sobe = d.h[k1] > hi;
+  let side: HipLado = desce && sobe ? (Math.abs(d.o[k1] - lo) <= Math.abs(d.o[k1] - hi) ? "short" : "long") : desce ? "short" : "long";
+  const nivelEntrada = (sd: HipLado) => (sd === "short" ? lo : hi), nivelStop = (sd: HipLado) => (sd === "short" ? hi : lo);
+  const prazoFim = k1 + maxBarras;
+  let totR = 0, totPct = 0, pernas = 0, kIni = k1 + 1, fim: RupRes = "tempo";
+  // 1ª perna (pode abrir com gap além do nível)
+  let entrada = side === "short" ? Math.min(lo, d.o[k1]) : Math.max(hi, d.o[k1]);
+  let stop = nivelStop(side);
+  let r: { res: RupRes; r: number; pct: number; barras: number };
+  const toqueNaMesma = desce && sobe;
+  if (toqueNaMesma) { const risco = Math.abs(entrada - stop); r = risco > 0 ? { res: "stop", r: -1, pct: (-risco / entrada) * 100, barras: 1 } : { res: "semdados", r: 0, pct: 0, barras: 0 }; }
+  else r = rupCorrer(d, kIni, side, entrada, stop, alvoR, Math.max(1, prazoFim - kIni + 1));
+  for (;;) {
+    if (r.res === "semdados") return vaz("semdados");
+    pernas++; totR += r.r; totPct += r.pct;
+    if (r.res === "aberta") return { res: "aberta", r: 0, pct: 0, pernas, fim: "aberta", esperou: k1 - k0 };
+    fim = r.res;
+    if (r.res !== "stop" || pernas >= maxPernas) break;
+    const kProx = pernas === 1 && toqueNaMesma ? kIni : kIni + r.barras; // 1ª perna da mesma vela: a virada já começa na vela seguinte (kIni)
+    if (kProx > prazoFim) break; // acabou o prazo
+    side = side === "short" ? "long" : "short";
+    entrada = nivelEntrada(side); stop = nivelStop(side); kIni = kProx;
+    r = rupCorrer(d, kIni, side, entrada, stop, alvoR, Math.max(1, prazoFim - kIni + 1));
+  }
+  return { res: "ok", r: totR, pct: totPct, pernas, fim, esperou: k1 - k0 };
+}
+function virLinha(x: VirSim[]): string {
+  const ok = x.filter((i) => i.res !== "semdados");
+  if (!ok.length) return "";
+  const dec = ok.filter((i) => i.res === "ok");
+  const c = (r: VirSim["res"]) => ok.filter((i) => i.res === r).length;
+  const sg = (v: number, nd = 2) => `${v >= 0 ? "+" : ""}${v.toFixed(nd)}`;
+  let t = `  <b>Virada (entra no 1º rompimento; se o stop vier, vira pro outro lado · até ${RUP_PERNAS} pernas)</b>\n`;
+  t += `    entrou ${dec.length + c("aberta")} de ${ok.length} · não rompeu em ${RUP_ESPERA} velas ${c("naoentrou")}${c("aberta") ? ` · em aberto ${c("aberta")}` : ""}\n`;
+  if (!dec.length) return t + `    sem operação concluída ainda\n`;
+  const a = dec.filter((i) => i.fim === "alvo").length, te = dec.filter((i) => i.fim === "tempo").length, st = dec.filter((i) => i.fim === "stop").length;
+  const virou = dec.filter((i) => i.pernas > 1).length, perna1 = dec.filter((i) => i.pernas === 1), perna23 = dec.filter((i) => i.pernas > 1);
+  const med = (v: VirSim[]) => (v.length ? v.reduce((u, i) => u + i.r, 0) / v.length : 0);
+  const rs = dec.map((i) => i.r), mediaR = rs.reduce((u, v) => u + v, 0) / rs.length, mediaP = dec.reduce((u, i) => u + i.pct, 0) / dec.length;
+  const semMelhor = rs.length > 1 ? (rs.reduce((u, v) => u + v, 0) - Math.max(...rs)) / (rs.length - 1) : null;
+  t += `    ${dec.length} concluídas: terminou em alvo ${a} · prazo ${te} · stop na última perna ${st} · virou em ${virou} (${Math.round((virou / dec.length) * 100)}%)\n`;
+  t += `    sem virar (n=${perna1.length}): média ${sg(med(perna1))}R · com virada (n=${perna23.length}): média ${sg(med(perna23))}R\n`;
+  t += `    média ${sg(mediaR)}R (${sg(mediaP, 1)}% de preço)${semMelhor !== null ? ` · sem a melhor ${sg(semMelhor)}R` : ""}${dec.length < 15 ? " ⚠️ amostra pequena" : ""}\n`;
+  return t;
+}
 function rupLinha(nome: string, x: RupSim[], comEspera: boolean): string {
   const ok = x.filter((i) => i.res !== "semdados");
   if (!ok.length) return "";
@@ -3855,7 +3913,7 @@ async function runRadarStats(chatId: number | string, dias: number) {
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
-  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number; conf: number | null; ext: number | null; adx: number | null; rA: RupSim; rB: RupSim; rD: RupSim };
+  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number; conf: number | null; ext: number | null; adx: number | null; rA: RupSim; rB: RupSim; rD: RupSim; rV: VirSim };
   const itens: Item[] = [];
   await emLotes([...porMoeda.keys()], 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
@@ -3874,7 +3932,7 @@ async function runRadarStats(chatId: number | string, dias: number) {
       const adxA = adxS[k0 - 1], adxAlerta = Number.isFinite(adxA) ? adxA : null;
       const opostoLado: HipLado = lado === "long" ? "short" : "long", maxB = Math.max(1, Math.round((HIP_HORAS * 60) / TF_MIN)); // V77: simulação do rompimento da vela do alerta
       itens.push({ tipo, inst: id, lado, emMs, preco: preco0, conf: r.conf == null ? null : Number(r.conf), ext, adx: adxAlerta, ...hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN),
-        rA: rupRompimento(d, k0, lado, RUP_ESPERA, RUP_ALVO_R, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, RUP_ALVO_R, maxB), rD: rupDireto(d, k0, lado, preco0, RUP_ALVO_R, maxB) });
+        rA: rupRompimento(d, k0, lado, RUP_ESPERA, RUP_ALVO_R, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, RUP_ALVO_R, maxB), rD: rupDireto(d, k0, lado, preco0, RUP_ALVO_R, maxB), rV: rupVirada(d, k0, RUP_ESPERA, RUP_ALVO_R, maxB, RUP_PERNAS) });
     }
   });
   const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
@@ -3896,6 +3954,7 @@ async function runRadarStats(chatId: number | string, dias: number) {
       m += `\n🚪 <b>Só no rompimento da vela do alerta</b> (stop no extremo oposto · alvo ${RUP_ALVO_R}R · espera até ${RUP_ESPERA} velas)\n`;
       m += rupLinha(`A) ${regraA}`, g.map((x) => x.rA), true);
       m += rupLinha(`B) ${regraB}`, g.map((x) => x.rB), true);
+      m += virLinha(g.map((x) => x.rV));
       m += rupLinha("Direto no alerta (mesmo stop, sem esperar rompimento)", g.map((x) => x.rD), false);
     }
     if (g.length < 15) m += `<i>amostra pequena (n&lt;15)</i>\n`;
@@ -3903,7 +3962,7 @@ async function runRadarStats(chatId: number | string, dias: number) {
   }
   const piores = itens.filter((x) => x.res === "invalida").sort((a, b) => b.mae - a.mae).slice(0, 5);
   if (piores.length) m += `<b>Maiores invalidações</b>\n` + piores.map((x) => `${x.inst.replace("-USDT", "")} ${HIP_NOME[x.tipo]} ${fm(x.emMs)} → ${x.mae.toFixed(1)}% contra em ${(x.barras * TF_MIN / 60).toFixed(1)}h`).join("\n") + "\n\n";
-  m += `<i>🚪 R = distância da entrada até o stop; alvo/stop na mesma vela conta stop (pior caso). "Direto" usa a máxima/mínima final da vela do alerta como stop, então o risco dele tem outra base: compare pela média em % de preço também. Ajustes: RADAR_ENTRADA_VELAS (8), RADAR_ALVO_R (2).</i>\n\n` + `<i>Esticada = variacao do preco em 24h ate o alerta; ADX medido na vela anterior ao alerta. Só alertas com vela e ATR disponíveis (até 9 dias). Aviso ao vivo: HIP_ON (1), limites HIP_INV_ATR/HIP_INV_PCT/HIP_ALVO_ATR/HIP_ALVO_PCT, prazo HIP_HORAS.</i>`;
+  m += `<i>🚪 R = distância da entrada até o stop; alvo/stop na mesma vela conta stop (pior caso). "Direto" usa a máxima/mínima final da vela do alerta como stop, então o risco dele tem outra base: compare pela média em % de preço também. Virada: o resultado é a soma de todas as pernas. Ajustes: RADAR_ENTRADA_VELAS (8), RADAR_ALVO_R (2), RADAR_VIRADA_PERNAS (3).</i>\n\n` + `<i>Esticada = variacao do preco em 24h ate o alerta; ADX medido na vela anterior ao alerta. Só alertas com vela e ATR disponíveis (até 9 dias). Aviso ao vivo: HIP_ON (1), limites HIP_INV_ATR/HIP_INV_PCT/HIP_ALVO_ATR/HIP_ALVO_PCT, prazo HIP_HORAS.</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
 async function runDiv(chatId: number | string) {
