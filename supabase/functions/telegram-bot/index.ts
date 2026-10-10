@@ -1,4 +1,4 @@
-// telegram-bot V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -3980,6 +3980,119 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
   m += `<i>🚪 R = distância da entrada até o stop; alvo/stop na mesma vela conta stop (pior caso). "Direto" usa a máxima/mínima final da vela do alerta como stop, então o risco dele tem outra base: compare pela média em % de preço também. Virada: o resultado é a soma de todas as pernas. Teste sem mexer nos secrets: /radar 9 pernas2 alvo3. Padrões: RADAR_ENTRADA_VELAS (8), RADAR_ALVO_R (2), RADAR_VIRADA_PERNAS (3).</i>\n\n` + `<i>Esticada = variacao do preco em 24h ate o alerta; ADX medido na vela anterior ao alerta. Só alertas com vela e ATR disponíveis (até 9 dias). Aviso ao vivo: HIP_ON (1), limites HIP_INV_ATR/HIP_INV_PCT/HIP_ALVO_ATR/HIP_ALVO_PCT, prazo HIP_HORAS.</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
+// ===== V78: histórico do /radar guardado no Supabase (não depende mais da janela de 9 dias das velas) =====
+// Todo dia, na virada do painel (21h), e também com /radarhist gravar, cada alerta de topo/fundo/repique dos últimos 9 dias é reavaliado
+// com as velas e GRAVADO de forma compacta na linha _RADAR_HIST_ (mesma tabela alertas_indicador, sem coluna nova). Alerta já gravado é
+// atualizado (o desfecho de um alerta recente ainda pode mudar); alerta mais velho que RADARH_DIAS dias sai. /radarhist [dias] lê tudo e
+// mostra o desempenho por tipo, por esticada em 24h (inclui a faixa ≥ 25%) e por ADX, acumulando semanas.
+const RADARH_ROW = "_RADAR_HIST_";
+const RADARH_DIAS = numEnv("RADARH_DIAS", "60");
+const RADARH_MAX = 1500;
+type RadarReg = { i: string; t: number; k: HipTipo; r: HipRes; f: number; a: number; c: number | null; e: number | null; x: number | null };
+async function radarColetarReg(SB: any, dd: number): Promise<RadarReg[] | null> {
+  const desde = new Date(Date.now() - dd * 86400000).toISOString();
+  const busca = (cols: string) => SB.from(PLACAR_TABELA).select(cols).gt("criado_em", desde).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).limit(500);
+  let { data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf");
+  if (error && /conf/i.test(String(error.message || ""))) ({ data, error } = await busca("instid, lado, tipo, status, preco, criado_em"));
+  if (error) { console.log("⚠️ radarhist: leitura dos alertas falhou", error.message ?? error); return null; }
+  const rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em);
+  const porMoeda = new Map<string, any[]>();
+  for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
+  const TFMS = TF_MIN * 60000, out: RadarReg[] = [];
+  await emLotes([...porMoeda.keys()], 5, async (id) => {
+    const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
+    if (!d) return;
+    const adxS = xAdxSerie(d.h, d.l, d.c, 14);
+    for (const r of porMoeda.get(id)!) {
+      const emMs = new Date(r.criado_em).getTime();
+      let k0 = -1;
+      for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= emMs && emMs < d.t[i] + TFMS) { k0 = i; break; } }
+      if (k0 < 20) continue;
+      const preco0 = Number(r.preco), atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
+      const tipo: HipTipo = String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
+      const lado: HipLado = r.lado === "long" ? "long" : "short";
+      const k24 = k0 - Math.round(1440 / TF_MIN), c24 = k24 >= 0 ? d.c[k24] : 0, mov24 = c24 > 0 ? (preco0 / c24 - 1) * 100 : null;
+      const ext = mov24 === null ? null : lado === "short" ? mov24 : -mov24;
+      const adxA = adxS[k0 - 1];
+      const av = hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN);
+      out.push({ i: id, t: emMs, k: tipo, r: av.res, f: Math.round(av.mfe * 100) / 100, a: Math.round(av.mae * 100) / 100, c: r.conf == null ? null : Number(r.conf), e: ext === null ? null : Math.round(ext * 10) / 10, x: Number.isFinite(adxA) ? Math.round(adxA * 10) / 10 : null });
+    }
+  });
+  return out;
+}
+async function radarHistLer(SB: any): Promise<RadarReg[] | null> {
+  try {
+    const { data, error } = await SB.from(TAB).select("last_status").eq("instid", RADARH_ROW).maybeSingle();
+    if (error) { console.log("⚠️ radarhist: leitura falhou", error.message ?? error); return null; }
+    if (!data?.last_status) return [];
+    try { const j = JSON.parse(data.last_status); return Array.isArray(j) ? j : []; } catch { return []; }
+  } catch (e) { console.log("⚠️ radarhist: leitura falhou", e); return null; }
+}
+// reavalia os alertas dos últimos 9 dias e junta com o que já estava gravado. Devolve quantos registros ficaram (ou null se falhou).
+async function radarHistGravar(SB: any): Promise<{ total: number; novos: number } | null> {
+  const velhos = await radarHistLer(SB);
+  if (velhos === null) return null; // sem ler o histórico, não grava (não pode sobrescrever o que já existe)
+  const novos = await radarColetarReg(SB, 9);
+  if (novos === null) return null;
+  const mapa = new Map<string, RadarReg>();
+  for (const v of velhos) mapa.set(`${v.i}|${v.t}|${v.k}`, v);
+  let adicionados = 0;
+  for (const n of novos) {
+    const k = `${n.i}|${n.t}|${n.k}`, ant = mapa.get(k);
+    if (!ant) adicionados++;
+    if (ant && n.r === "aberta" && ant.r !== "aberta") continue; // já tinha desfecho: não volta pra "aberta"
+    mapa.set(k, n);
+  }
+  const corte = Date.now() - RADARH_DIAS * 86400000;
+  const todos = [...mapa.values()].filter((x) => x.t >= corte).sort((a, b) => a.t - b.t).slice(-RADARH_MAX);
+  await upsertLinha(SB, RADARH_ROW, { last_status: JSON.stringify(todos), last_alert_at: new Date().toISOString() });
+  return { total: todos.length, novos: adicionados };
+}
+// /radarhist [dias] — lê o histórico gravado e mostra por tipo / esticada / ADX. "gravar" força a gravação agora.
+async function runRadarHist(chatId: number | string, dias: number, gravar: boolean) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  let aviso = "";
+  if (gravar) {
+    const g = await radarHistGravar(SB);
+    aviso = g ? `💾 Gravado agora: ${g.novos} alerta(s) novo(s), ${g.total} no histórico.\n\n` : "⚠️ Não consegui gravar agora (veja os logs).\n\n";
+  }
+  const todos = await radarHistLer(SB);
+  if (todos === null) { await sendTelegram(chatId, aviso + "⚠️ Não consegui ler o histórico do radar."); return; }
+  const dd = Math.min(RADARH_DIAS, Math.max(1, Math.round(dias || 30)));
+  const itens = todos.filter((x) => x.t >= Date.now() - dd * 86400000);
+  if (!itens.length) { await sendTelegram(chatId, aviso + `📚 <b>HISTÓRICO DOS RADARES</b>\n\nNada gravado ainda nos últimos ${dd} dia(s). Ele é gravado sozinho na virada das 21h; pra começar já, use /radarhist gravar.`); return; }
+  const primeiro = Math.min(...itens.map((x) => x.t));
+  const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`; };
+  const med = (v: number[]) => { const s = [...v].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : 0; };
+  const sg = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
+  let m = `📚 <b>HISTÓRICO DOS RADARES</b> · ${itens.length} alertas · desde ${fm(primeiro)}\n${DIVISOR}\n<i>Mesmas regras do /radar (invalidado = andou contra ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h), mas acumulando além dos 9 dias. A esticada é a variação de 24h no sentido que o radar quer reverter.</i>\n\n`;
+  for (const tipo of ["topo", "fundo", "repique"] as HipTipo[]) {
+    const g = itens.filter((x) => x.k === tipo);
+    if (!g.length) continue;
+    const c = (r: HipRes) => g.filter((x) => x.r === r).length, pc = (n: number) => `${Math.round((n / g.length) * 100)}%`;
+    m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
+    m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
+    m += `a favor mediano ${sg(med(g.map((x) => x.f)))}% · contra mediano ${sg(-med(g.map((x) => x.a)))}%\n`;
+    const ext = g.filter((x) => x.e !== null);
+    if (ext.length >= 8) {
+      const fx = (a: number, b: number) => ext.filter((x) => (x.e as number) >= a && (x.e as number) < b);
+      const f1 = fx(-1e9, 5), f2 = fx(5, 15), f3 = fx(15, 25), f4 = fx(25, 1e9);
+      m += `  <i>esticada em 24h:</i>\n` + hipLinhaFatia("menos de 5%", f1) + hipLinhaFatia("5% a 15%", f2) + hipLinhaFatia("15% a 25%", f3) + hipLinhaFatia("25% ou mais", f4);
+      m += hipLeituraFatia("moeda MUITO forte no dia (25% ou mais)", f4, [...f1, ...f2, ...f3]);
+      m += hipLeituraFatia("moeda esticada (15% ou mais)", [...f3, ...f4], [...f1, ...f2]);
+    }
+    const ax = g.filter((x) => x.x !== null);
+    if (ax.length >= 8) {
+      const a1 = ax.filter((x) => (x.x as number) < 20), a2 = ax.filter((x) => (x.x as number) >= 20 && (x.x as number) < 30), a3 = ax.filter((x) => (x.x as number) >= 30);
+      m += `  <i>ADX antes do alerta:</i>\n` + hipLinhaFatia("ADX menor que 20", a1) + hipLinhaFatia("ADX 20 a 30", a2) + hipLinhaFatia("ADX 30 ou mais", a3);
+    }
+    if (g.length < 15) m += `<i>amostra pequena (n&lt;15)</i>\n`;
+    m += "\n";
+  }
+  m += `<i>⚠️ Alerta com desfecho ainda aberto entra em "sem desfecho". Use /radarhist 14 pra ver só as últimas 2 semanas. Guarda até ${RADARH_DIAS} dias (RADARH_DIAS).</i>`;
+  for (const parte of dividirHtml(aviso + m)) await sendTelegram(chatId, parte);
+}
 async function runDiv(chatId: number | string) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
@@ -7054,6 +7167,8 @@ async function checarPainel(SB: any) {
     // V59: agenda a exclusão do FIM DO RESUMO (usa o mesmo autoapagar do cron) pra o do dia anterior não acumular no chat
     if (PAINEL_FIM_APAGAR_H > 0) for (const ch of ALERT_CHAT_IDS) { const id = est.ids[ch]; if (id) await agendarAutoApagar(SB, ch, id, PAINEL_FIM_APAGAR_H * 3600000); }
     console.log(`🏁 painel ${est.key} encerrado${PAINEL_FIM_APAGAR_H > 0 ? ` (some em ${PAINEL_FIM_APAGAR_H}h)` : ""}`);
+    // V78: na virada do ciclo, grava o histórico dos radares no Supabase (best-effort; falha não atrapalha o painel)
+    radarHistGravar(SB).then((g) => console.log(g ? `📚 radarhist: ${g.novos} novo(s), ${g.total} gravado(s)` : "⚠️ radarhist: não gravou")).catch((e) => console.log("⚠️ radarhist falhou", e));
   }
   // 2) sem painel neste ciclo: cria
   if (!est || est.key !== fase.key) {
@@ -7985,6 +8100,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
     ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
+    ["📚 /radarhist 30", "histórico dos radares acumulado no Supabase", "o que o /radar mostra, mas guardado dia a dia (além dos 9 dias das velas): por tipo, por esticada em 24h (inclui 25% ou mais) e por ADX. Grava sozinho na virada das 21h; /radarhist gravar força agora"],
     ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
     ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET"],
     ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
@@ -8289,6 +8405,14 @@ Deno.serve(async (req) => {
     if (text.startsWith("/15min")) {
       const dias = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
       await rodarEmBackground(run15min(chatId, dias));
+      return new Response("ok");
+    }
+    if (text === "/radarhist" || text.startsWith("/radarhist ") || text.startsWith("/radarhist@")) {
+      // V78: /radarhist [dias] [gravar] — histórico dos radares gravado no Supabase (acumula além dos 9 dias do /radar)
+      const argsH = text.split(/\s+/).slice(1);
+      const gravarH = argsH.some((a) => /^grav/i.test(a));
+      const dH = Number(argsH.find((a) => /^\d+$/.test(a)) || 30);
+      await comAguarde("📚 Lendo o histórico dos radares, aguarde...", () => runRadarHist(chatId, dH, gravarH));
       return new Response("ok");
     }
     if (text === "/radar" || text.startsWith("/radar ") || text.startsWith("/radar@")) {
