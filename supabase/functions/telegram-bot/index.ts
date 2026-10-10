@@ -1,4 +1,4 @@
-// telegram-bot V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -162,13 +162,16 @@ const WATCH_HORAS = numEnv("WATCH_HORAS", "48");
 // V79: teto de moedas mostradas no /lista (0 = sem teto) e idade máxima do alerta original pra continuar renovando a vigilância a cada virada (0 = sem teto).
 const LISTA_MAX = numEnv("LISTA_MAX", "20");
 const WATCH_IDADE_MAX_H = numEnv("WATCH_IDADE_MAX_H", "168");
+// V81: aviso 🔁 "cruzou contra" por mensagem só pra moeda que IMPORTA pro chat: alerta original recente (<= ACOMP_AVISO_MAX_H), moeda seguida por ele ou com posição aberta dele.
+// O resto continua na /lista (marcado como cruzou contra / virou) mas sem mensagem. 0 = sem corte (avisa tudo, como na V80). O toque na linha NÃO espera confirmação.
+const ACOMP_AVISO_MAX_H = numEnv("ACOMP_AVISO_MAX_H", "24");
 const WATCH_REPETIR = (Deno.env.get("WATCH_REPETIR") || "1") !== "0";
 // V72: o aviso de "cruzou CONTRA" (ACOMP_) some em 5 min por padrão, mais rápido que o auto-apagar geral (15 min) —
 // é um aviso informativo, e com WATCH_REPETIR ligado pode chegar de novo a cada virada; não precisa ficar muito tempo.
 const ACOMP_AUTOAPAGAR_MIN = numEnv("ACOMP_AUTOAPAGAR_MIN", "5");
 // V74: intervalo mínimo entre dois avisos de "cruzou CONTRA" da MESMA moeda no mesmo chat (padrão 0 = desligado: aviso toda vez que cruza, o que também serve de sinal de moeda lateral; ligue com ACOMP_INTERVALO_MIN=30, por ex.).
 // Evita spam em moeda picotada que cruza toda hora. Guardado no Supabase (a function serverless não guarda memória entre rodadas).
-const ACOMP_INTERVALO_MIN = numEnv("ACOMP_INTERVALO_MIN", "0");
+const ACOMP_INTERVALO_MIN = numEnv("ACOMP_INTERVALO_MIN", "30"); // V82: antes 0 (sem intervalo). O 1º 🔁 de uma moeda sai na hora; o seguinte só depois do intervalo e se ela AINDA estiver contra (corta o vai-e-vem em cima da linha).
 const ACOMP_INTERVALO_PREFIXO = "_ACOMPT_";
 // V74: aviso "voltou pra dentro da faixa": alerta que saiu JÁ cruzado e o preço recuou pra dentro da faixa (repique) sem chegar à linha
 // oposta — o "cruzou CONTRA" não cobre isso. Dispara quando o preço está pelo menos WATCH_VOLTA_ATR × ATR dentro da linha (mín. FINAL_CANCELA_PCT %).
@@ -2286,6 +2289,8 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
   const { data: watchRows } = await SB.from(TAB).select("*").like("instid", `${WL_PREFIXO}%`).not("watch_until", "is", null).gt("watch_until", agoraIso).eq("watch_notificado", false);
   if (!watchRows || watchRows.length === 0) { console.log("👀 lista de acompanhamento vazia"); return; }
   console.log(`👀 ${watchRows.length} vigilância(s) na lista de acompanhamento (todos os chats)`);
+  const segSet = new Set<string>();
+  try { (await listarSeguidas(SB)).forEach((x) => segSet.add(`${x.chat}|${x.inst}`)); } catch (e) { console.log("⚠️ lista de acompanhamento: não li as seguidas", e); }
   await emLotes(watchRows as any[], 5, async (wl: any) => {
     try { // V74: erro numa moeda não derruba o lote inteiro (Promise.all) nem as moedas seguintes
     const pw = parseWL(wl);
@@ -2301,6 +2306,25 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
       return;
     }
     const ps = posDaMoeda(posMap.get(ch) ?? null, info.instId);
+    // fecha ou renova a vigilância depois de uma virada (com ou sem mensagem)
+    const atualizarVig = async (comAviso: boolean) => {
+      // V79: depois de WATCH_IDADE_MAX_H do alerta original, a virada não renova mais (a vigilância fecha).
+      const idadeAlertaH = row.last_alert_at ? (Date.now() - new Date(row.last_alert_at).getTime()) / 3600000 : 0;
+      if (WATCH_REPETIR && !(WATCH_IDADE_MAX_H > 0 && idadeAlertaH > WATCH_IDADE_MAX_H)) {
+        await SB.from(TAB).update({
+          watch_side: atual, watch_notificado: false,
+          watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString(),
+        }).eq("instid", wl.instid);
+        console.log(`🔁 ${info!.instId} (${ch}) virou de novo (${row.watch_side} -> ${atual}); continuo acompanhando${comAviso ? "" : " (sem mensagem)"}`);
+      } else {
+        await SB.from(TAB).update({ watch_notificado: true, watch_until: null }).eq("instid", wl.instid);
+        console.log(`🔁 ${info!.instId} (${ch}) saiu da lista de acompanhamento (cruzou contra: ${row.watch_side} -> ${atual})${comAviso ? "" : " (sem mensagem)"}`);
+      }
+    };
+    // V81: só manda a mensagem se a moeda importa pra este chat (alerta recente, seguida ou com posição). Senão registra a virada na lista, em silêncio.
+    const idadeOrigH = row.last_alert_at ? (Date.now() - new Date(row.last_alert_at).getTime()) / 3600000 : 0;
+    const importa = ACOMP_AVISO_MAX_H <= 0 || !row.last_alert_at || idadeOrigH <= ACOMP_AVISO_MAX_H || segSet.has(`${ch}|${pw.inst}`) || ps.length > 0;
+    if (!importa) { await atualizarVig(false); return; }
     if (silChat(ch) && !(SILENCIO_PROTECAO && ps.some((p) => p.lado !== atual))) return;
     // V74: intervalo mínimo desde o último aviso desta moeda neste chat. Dentro dele não envia e não mexe na linha:
     // a próxima rodada reavalia (se ainda estiver contra, sai quando o intervalo passar; se desvirou, o `atual === watch_side` acima já barra).
@@ -2317,7 +2341,7 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     const horasDesde = desdeMs ? ((Date.now() - desdeMs) / 3_600_000).toFixed(1) : "?";
     const msg =
     `🔁 <b>${info.instId}</b> — cruzou CONTRA o movimento\n${DIVISOR}\n\n` +
-    `Alerta original era <b>${row.watch_side === "long" ? "LONG" : "SHORT"}</b>, há ${horasDesde}h\n` +
+    `Alerta original era <b>${row.watch_side === "long" ? "LONG" : "SHORT"}</b>${tipoAlertaTxt(row) ? ` (${tipoAlertaTxt(row)})` : ""}, há ${horasDesde}h\n` +
     `Agora cruzou pra <b>${atual === "long" ? "LONG" : "SHORT"}</b>\n` +
     `${idadeTxt(info.idadeCandles)}\n` +
     `${indicadorTxt(info)}\n` +
@@ -2325,23 +2349,14 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     const id = await enviarAlertaMoeda(SB, ch, `ACOMP_${info.instId}`, cortar(msg + (await blocoPosicao(SB, ch, ps, info))), botaoAnalisar(info.instId), ACOMP_AUTOAPAGAR_MIN);
     if (!id) return; // não entregou: a linha fica como está e a próxima rodada tenta de novo
     if (ACOMP_INTERVALO_MIN > 0) { try { await upsertLinha(SB, `${ACOMP_INTERVALO_PREFIXO}${ch}_${info.instId}`, { last_status: String(Date.now()) }); } catch { } }
-    // V79: depois de WATCH_IDADE_MAX_H do alerta original, a virada não renova mais (a vigilância fecha).
-    const idadeAlertaH = row.last_alert_at ? (Date.now() - new Date(row.last_alert_at).getTime()) / 3600000 : 0;
-    if (WATCH_REPETIR && !(WATCH_IDADE_MAX_H > 0 && idadeAlertaH > WATCH_IDADE_MAX_H)) {
-      await SB.from(TAB).update({
-        watch_side: atual, watch_notificado: false,
-        watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString(),
-      }).eq("instid", wl.instid);
-      console.log(`🔁 ${info.instId} (${ch}) virou de novo (${row.watch_side} -> ${atual}); continuo acompanhando`);
-    } else {
-      await SB.from(TAB).update({ watch_notificado: true, watch_until: null }).eq("instid", wl.instid);
-      console.log(`🔁 ${info.instId} (${ch}) saiu da lista de acompanhamento (cruzou contra: ${row.watch_side} -> ${atual})`);
-    }
+    await atualizarVig(true);
     } catch (e) { console.log(`⚠️ lista de acompanhamento: erro em ${wl?.instid}`, e); }
   });
 }
 // V74: lado do ÚLTIMO ALERTA, gravado no fim do last_status (" [L]"/" [S]"). O watch_side muda quando a moeda vira na lista de acompanhamento; usar ele aqui fazia um alerta
 // NOVO no lado novo parecer "repetição" (cooldown de 180 min em vez de 60) e o alerta final achar que o loop principal já avisou. Linha antiga sem marcador: cai no watch_side.
+// V82: tipo do alerta original (gravado no last_status: {O} oportunidade = a favor do dia · {R} reversão = contra o dia). Linha antiga sem marcador: "".
+const tipoAlertaTxt = (row: any): string => { const ls = String(row?.last_status || ""); return ls.includes(" {O}") ? "oportunidade" : ls.includes(" {R}") ? "reversão" : ""; };
 const ladoUltimoAlerta = (row: any): string | null => {
   const ls = String(row?.last_status || "");
   return ls.includes(" [L]") ? "long" : ls.includes(" [S]") ? "short" : (row?.watch_side ?? null);
@@ -2976,7 +2991,7 @@ async function runAlertaProativo() {
     const registro = {
       // V74: " ✔" = o alerta saiu com o preço JÁ além da linha (cruzado). Serve pro aviso "voltou pra dentro da faixa" (checarListaAcompanhamento);
       // rankStatus/🆕/🛡️ usam includes(), então o marcador não atrapalha nada.
-      last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : "") + (c.info.idadeCandles !== null ? " ✔" : "") + (c.lado === "long" ? " [L]" : " [S]"),
+      last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : "") + (c.info.idadeCandles !== null ? " ✔" : "") + (c.tipo === "oportunidade" ? " {O}" : " {R}") + (c.lado === "long" ? " [L]" : " [S]"),
       last_alert_at: new Date().toISOString(),
       watch_side: c.lado,
     };
@@ -4391,7 +4406,7 @@ async function runLista(chatId: number | string, tudo = false) {
     const virou = !!ladoAl && ladoAl !== r.watch_side;
     b += `🪙 <b>${r.instid}</b> — vigiando ${ladoVig} (faltam ${falta})\n`;
     b += r.last_alert_at
-      ? `🔔 alerta ${ladoAl === "long" ? "LONG" : ladoAl === "short" ? "SHORT" : ladoVig} há ${horasDesde}h${virou ? ` · virou pra ${ladoVig} há ~${horasVirada.toFixed(1)}h` : ""}\n`
+      ? `🔔 alerta ${ladoAl === "long" ? "LONG" : ladoAl === "short" ? "SHORT" : ladoVig}${tipoAlertaTxt(r) ? ` (${tipoAlertaTxt(r)})` : ""} há ${horasDesde}h${virou ? ` · virou pra ${ladoVig} há ~${horasVirada.toFixed(1)}h` : ""}\n`
       : `⭐ seguida por você (sem alerta ainda)\n`;
     if (pct !== undefined) b += `${pct >= 0 ? "📈 +" : "📉 "}${pct.toFixed(2)}% (24h)\n`;
     if (!info) return b + `Indicador: sem dado agora\n\n`;
@@ -4724,6 +4739,56 @@ function placar15mTxt(rows: any[]): string {
   if (kExt > 0) m += `🔎 <b>Extremos (confira se são dado ruim)</b>\npiores: ${ord.slice(0, kExt).map(fmtI).join(" · ")}\nmelhores: ${ord.slice(-kExt).reverse().map(fmtI).join(" · ")}\n\n`;
   if (frescos.length < 30) m += `⚠️ <i>Só ${frescos.length} frescos com 15m conferido: ruído domina, não tire conclusão ainda.</i>\n`;
   return m;
+}
+// V83: /compressao [dias] — a compressão aberta por confiança, ADX e lado, pra saber QUAL faixa contribui melhor (o /placar mistura tudo e já sai cortado).
+// Retorno = a favor do lado do 1º fechamento fora da faixa (só entradas que realmente "entraram"), contado desde esse fechamento, já com a taxa.
+async function runCompressao(chatId: number | string, dias: number) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const desde = new Date(Date.now() - dias * 86400000).toISOString();
+  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
+  const comp = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && r.tipo === "compressao");
+  const ent = comp.filter((r) => r.ent_status === "entrou");
+  if (!comp.length) { await sendTelegram(chatId, `🗜️ <b>COMPRESSÃO POR FAIXA</b>\n\nNenhum alerta de compressão nos últimos ${dias} dia(s).`); return; }
+  const rets = (g: any[], h: number) => g.map((r) => retornoLog(r, h)).filter((x): x is number => x !== null);
+  const linha = (nome: string, g: any[]) => {
+    const r4 = rets(g, 240), pf = _profitFactor(r4);
+    return `<b>${nome}</b> (n=${g.length})\n${linhaStats(g)}${r4.length >= 5 && isFinite(pf) ? ` · PF 4h ${pf.toFixed(2)}` : ""}${g.length < 30 ? "\n<i>amostra pequena</i>" : ""}\n\n`;
+  };
+  const faixasConf: [string, (r: any) => boolean][] = [
+    ["Confiança ≤ 5", (r) => r.conf != null && Number(r.conf) <= 5],
+    ["Confiança 6", (r) => Number(r.conf) === 6],
+    ["Confiança 7", (r) => Number(r.conf) === 7],
+    ["Confiança 8", (r) => Number(r.conf) === 8],
+    ["Confiança 9–10", (r) => r.conf != null && Number(r.conf) >= 9],
+  ];
+  let m = `🗜️ <b>COMPRESSÃO POR FAIXA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${comp.length} alerta(s), ${ent.length} com rompimento (entrada)\n<i>acerto = preço a favor do lado do 1º fechamento fora da faixa; % = retorno mediano já com taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta). Colunas: 1h · 4h · 24h</i>\n\n`;
+  m += `<b>Geral (compressão com rompimento)</b>\n${linhaStats(ent)}\n\n`;
+  m += `${MINI_DIVISOR}\n<b>Por confiança</b>\n${MINI_DIVISOR}\n\n`;
+  const ranque: { nome: string; n: number; med: number }[] = [];
+  for (const [nome, fn2] of faixasConf) {
+    const g = ent.filter(fn2);
+    if (!g.length) continue;
+    m += linha(nome, g);
+    const r4 = rets(g, 240);
+    if (r4.length >= 20) ranque.push({ nome, n: r4.length, med: _med(r4) });
+  }
+  m += `${MINI_DIVISOR}\n<b>Por força da tendência (ADX)</b>\n${MINI_DIVISOR}\n\n`;
+  const adxA = ent.filter((r) => r.adx != null && Number(r.adx) >= 25), adxB = ent.filter((r) => r.adx != null && Number(r.adx) < 25);
+  if (adxA.length) m += linha("💪 ADX ≥ 25", adxA);
+  if (adxB.length) m += linha("😐 ADX < 25", adxB);
+  m += `${MINI_DIVISOR}\n<b>Por lado do rompimento</b>\n${MINI_DIVISOR}\n\n`;
+  const lg = ent.filter((r) => r.lado === "long"), sh = ent.filter((r) => r.lado === "short");
+  if (lg.length) m += linha("🟢 LONG", lg);
+  if (sh.length) m += linha("🔴 SHORT", sh);
+  if (ranque.length >= 2) {
+    ranque.sort((a, b) => b.med - a.med);
+    const mel = ranque[0], pior = ranque[ranque.length - 1];
+    m += `🏆 <b>Leitura (4h, só faixas com 20+ conferidos):</b> melhor ${mel.nome} (${_sg(mel.med)}, n=${mel.n}) · pior ${pior.nome} (${_sg(pior.med)}, n=${pior.n})\n`;
+  } else m += `⚠️ <i>Poucos conferidos por faixa ainda (precisa de 20+ em 4h pra ranquear). Tente /compressao 60.</i>\n`;
+  m += `<i>Se uma faixa for claramente pior, suba o COMPRESS_CONF_MIN até cortá-la; se for tudo parecido, o spam se resolve com COMPRESS_MAX_POR_RODADA. Uso: /compressao 30</i>`;
+  for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
 async function runPlacar(chatId: number | string, dias: number) {
   const SB = getSupabase();
@@ -8195,6 +8260,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   ]);
 
   sec("📊 Resultados", [
+    ["🗜️ /compressao 30", "compressão por faixa de confiança, ADX e lado", "mostra, só pra compressão, qual faixa de confiança (6, 7, 8, 9–10), de ADX e de lado rende melhor (acerto e retorno mediano em 1h, 4h e 24h) — pra decidir se vale subir o COMPRESS_CONF_MIN. O número é a quantidade de dias"],
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
     ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
@@ -8562,6 +8628,11 @@ Deno.serve(async (req) => {
       if (cfg && !(cfg.trava > 0 && cfg.cb > 0)) { await sendTelegram(chatId, "⚠️ Trava e callback precisam ser maiores que zero. Ex.: /saida 9 QNT 5/3.5"); return new Response("ok"); }
       const filtro = tudo || !SAIDA_FILTRO_PADRAO ? null : { mov: SAIDA_MOV_PADRAO, adx: SAIDA_ADX_PADRAO, subindo: SAIDA_ADX_SUBINDO };
       await comAguarde("🚪 Simulando a saída real, aguarde...", () => runSaida(chatId, dias, { moeda, cfg: cfg ?? SAIDA_CFG_PADRAO, filtro }));
+      return new Response("ok");
+    }
+    if (text === "/compressao" || text.startsWith("/compressao ") || text.startsWith("/compressao@") || text === "/comp" || text.startsWith("/comp ")) {
+      const diasC = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 30)));
+      await rodarEmBackground(runCompressao(chatId, diasC));
       return new Response("ok");
     }
     if (text.startsWith("/placar")) {
