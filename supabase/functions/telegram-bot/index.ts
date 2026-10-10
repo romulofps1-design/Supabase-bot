@@ -2,7 +2,7 @@
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
 // já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V74 (V73 + acompanhamento das hipóteses dos radares de topo/fundo/repique: aviso ao vivo "invalidado"/"funcionou" (HIP_*) e /radar com o que aconteceu depois de cada alerta + filtro de ADX das moedas: mínimo 14 (era 15); corte "ADX subindo" opcional e DESLIGADO por padrão (FILTRO_ADX_SUBINDO=1 liga, FILTRO_ADX_SUBINDO_ATE) + o cooldown de alerta novo e o "loop já avisou" do alerta final passam a usar o lado do ÚLTIMO ALERTA (marcador [L]/[S] no last_status), não o watch_side que a lista de acompanhamento troca a cada virada — a lista não atrasa mais um alerta bom + /trades: histórico REAL do motor (outro Supabase) por chave só de leitura (MOTOR_URL, MOTOR_LEITURA_SECRET) + /saida passa a ser enviado em partes (dividirHtml) em vez de cortar o fim com "...(cortado)" + DIV_MODO=tv: divergência do BTC com as MESMAS regras do indicador Pine (pivô do RSI 5/5, 5 a 60 velas, sem zona, vale 5 velas) + controle do volume de logs: Secret LOG_NIVEL (tudo | normal | erro | mudo), LOG_OCULTAR, LOG_MOSTRAR, LOG_REPETIDO_MIN e comando /logs + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
+// telegram-bot V74 (V73 + acompanhamento das hipóteses dos radares de topo/fundo/repique: aviso ao vivo "invalidado"/"funcionou" (HIP_*) e /radar com o que aconteceu depois de cada alerta (inclusive por faixa de confiança) + filtro de ADX das moedas: mínimo 14 (era 15); corte "ADX subindo" opcional e DESLIGADO por padrão (FILTRO_ADX_SUBINDO=1 liga, FILTRO_ADX_SUBINDO_ATE) + o cooldown de alerta novo e o "loop já avisou" do alerta final passam a usar o lado do ÚLTIMO ALERTA (marcador [L]/[S] no last_status), não o watch_side que a lista de acompanhamento troca a cada virada — a lista não atrasa mais um alerta bom + /trades: histórico REAL do motor (outro Supabase) por chave só de leitura (MOTOR_URL, MOTOR_LEITURA_SECRET) + /saida passa a ser enviado em partes (dividirHtml) em vez de cortar o fim com "...(cortado)" + DIV_MODO=tv: divergência do BTC com as MESMAS regras do indicador Pine (pivô do RSI 5/5, 5 a 60 velas, sem zona, vale 5 velas) + controle do volume de logs: Secret LOG_NIVEL (tudo | normal | erro | mudo), LOG_OCULTAR, LOG_MOSTRAR, LOG_REPETIDO_MIN e comando /logs + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
 // auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
 // telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
 // com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
@@ -3630,8 +3630,8 @@ function hipMsg(h: Hip, res: "invalida" | "funcionou", p: number): string {
   const nome = HIP_NOME[h.tipo], lado = h.lado === "long" ? "LONG" : "SHORT", mov = ((p - h.preco) / h.preco) * 100, idade = hipIdade(Date.now() - h.t);
   const base = `O radar de ${nome} avisou ${lado} a ${fmtPrice(h.preco)} (há ${idade}). Agora ${fmtPrice(p)} (${mov >= 0 ? "+" : ""}${mov.toFixed(1)}% desde o alerta).`;
   const extremos = `Pior ponto contra: ${h.mae.toFixed(1)}% · melhor a favor: ${h.mfe.toFixed(1)}%`;
-  if (res === "invalida") return `❌ <b>${h.inst}</b> — ${nome} ${lado} invalidado\\n${DIVISOR}\\n\\n${base}\\nO preço andou contra a ideia além do limite (${HIP_INV_ATR} ATR, mín. ${HIP_INV_PCT}%): a reversão falhou por enquanto.\\n${extremos}\\nSe você abriu ${lado}, reavalie; se não, ignore esta ideia até um novo alerta.`;
-  return `✅ <b>${h.inst}</b> — ${nome} ${lado} funcionou\\n${DIVISOR}\\n\\n${base}\\nO preço andou a favor além do alvo (${HIP_ALVO_ATR} ATR, mín. ${HIP_ALVO_PCT}%). Considere proteger ou realizar: o movimento principal já veio.\\n${extremos}`;
+  if (res === "invalida") return `❌ <b>${h.inst}</b> — ${nome} ${lado} invalidado\n${DIVISOR}\n\n${base}\nO preço andou contra a ideia além do limite (${HIP_INV_ATR} ATR, mín. ${HIP_INV_PCT}%): a reversão falhou por enquanto.\n${extremos}\nSe você abriu ${lado}, reavalie; se não, ignore esta ideia até um novo alerta.`;
+  return `✅ <b>${h.inst}</b> — ${nome} ${lado} funcionou\n${DIVISOR}\n\n${base}\nO preço andou a favor além do alvo (${HIP_ALVO_ATR} ATR, mín. ${HIP_ALVO_PCT}%). Considere proteger ou realizar: o movimento principal já veio.\n${extremos}`;
 }
 async function checarHipoteses(SB: any): Promise<void> {
   if (!HIP_ON || !ALERT_CHAT_IDS.length) return;
@@ -3656,20 +3656,45 @@ async function checarHipoteses(SB: any): Promise<void> {
   }
   if (mudou) await hipSalvar(SB, ficam);
 }
+// V74: banda da nota de confiança do alerta (o /radar compara desempenho por banda pra ver se a nota separa os bons dos maus)
+type HipBanda = "alta" | "media" | "baixa" | "sem";
+const hipBanda = (conf: number | null | undefined): HipBanda => (conf == null || !isFinite(Number(conf)) ? "sem" : Number(conf) >= 7 ? "alta" : Number(conf) >= 5 ? "media" : "baixa");
+const HIP_BANDA_TXT: Record<HipBanda, string> = { alta: "confiança ≥ 7", media: "confiança 5–6", baixa: "confiança ≤ 4", sem: "sem nota" };
+function hipLinhasBanda(g: { res: HipRes; conf: number | null }[]): string {
+  const faixas: HipBanda[] = ["alta", "media", "baixa", "sem"];
+  const linhas: string[] = [], pcts: Partial<Record<HipBanda, { n: number; func: number }>> = {};
+  for (const b of faixas) {
+    const x = g.filter((i) => hipBanda(i.conf) === b);
+    if (!x.length) continue;
+    const inv = x.filter((i) => i.res === "invalida").length, fun = x.filter((i) => i.res === "funcionou").length;
+    pcts[b] = { n: x.length, func: fun / x.length };
+    linhas.push(`  ${HIP_BANDA_TXT[b]} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}%${x.length < 8 ? " ⚠️" : ""}`);
+  }
+  if (linhas.length < 2 || (linhas.length === 1 && pcts.sem)) return linhas.length ? linhas.join("\n") + "\n" : "";
+  const alta = pcts.alta, resto = [pcts.media, pcts.baixa].filter((x): x is { n: number; func: number } => !!x && x.n > 0);
+  let leitura = "";
+  if (alta && alta.n >= 8 && resto.reduce((t, x) => t + x.n, 0) >= 8) {
+    const nResto = resto.reduce((t, x) => t + x.n, 0), fResto = resto.reduce((t, x) => t + x.func * x.n, 0) / nResto, dif = (alta.func - fResto) * 100;
+    leitura = Math.abs(dif) < 10 ? "  → a nota quase não separa (diferença < 10 pontos)\n" : dif > 0 ? `  → a nota ajuda: ≥ 7 funciona ${Math.round(dif)} pontos mais que as demais\n` : `  → a nota NÃO ajuda: ≥ 7 funciona ${Math.round(-dif)} pontos MENOS que as demais\n`;
+  } else leitura = "  → amostra pequena pra concluir se a nota separa\n";
+  return linhas.join("\n") + "\n" + leitura;
+}
 // /radar [dias] — com os alertas de radar JÁ enviados (alertas_log) e as velas seguintes, o que aconteceu depois de cada tipo
 async function runRadarStats(chatId: number | string, dias: number) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const dd = Math.min(9, Math.max(1, Math.round(dias || 7)));
   const desde = new Date(Date.now() - dd * 86400000).toISOString();
-  const { data, error } = await SB.from(PLACAR_TABELA).select("instid, lado, tipo, status, preco, criado_em").gt("criado_em", desde).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).limit(500);
+  const busca = (cols: string) => SB.from(PLACAR_TABELA).select(cols).gt("criado_em", desde).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).limit(500);
+  let { data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf");
+  if (error && /conf/i.test(String(error.message || ""))) ({ data, error } = await busca("instid, lado, tipo, status, preco, criado_em")); // coluna conf ausente: segue sem a quebra por nota
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas de radar: ${String(error.message || error).slice(0, 120)}`); return; }
   const rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em);
-  if (!rows.length) { await sendTelegram(chatId, `📡 <b>RADARES</b>\\n\\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
+  if (!rows.length) { await sendTelegram(chatId, `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
-  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number };
+  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number; conf: number | null };
   const itens: Item[] = [];
   await emLotes([...porMoeda.keys()], 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
@@ -3682,25 +3707,26 @@ async function runRadarStats(chatId: number | string, dias: number) {
       const preco0 = Number(r.preco), atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
       const tipo: HipTipo = String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
       const lado: HipLado = r.lado === "long" ? "long" : "short";
-      itens.push({ tipo, inst: id, lado, emMs, preco: preco0, ...hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN) });
+      itens.push({ tipo, inst: id, lado, emMs, preco: preco0, conf: r.conf == null ? null : Number(r.conf), ...hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN) });
     }
   });
   const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
   const sg = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
-  let m = `📡 <b>RADARES — o que aconteceu depois do alerta</b> · ${dd} dia(s)\\n${DIVISOR}\\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\\n\\n`;
+  let m = `📡 <b>RADARES — o que aconteceu depois do alerta</b> · ${dd} dia(s)\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
   for (const tipo of ["topo", "fundo", "repique"] as HipTipo[]) {
     const g = itens.filter((x) => x.tipo === tipo);
     if (!g.length) continue;
     const c = (r: HipRes) => g.filter((x) => x.res === r).length, pc = (n: number) => `${Math.round((n / g.length) * 100)}%`;
     const inval = g.filter((x) => x.res === "invalida");
-    m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\\n`;
-    m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}) · sem desfecho ${c("expirou") + c("aberta")}\\n`;
-    m += `a favor mediano ${sg(_med(g.map((x) => x.mfe)))}% · contra mediano ${sg(-_med(g.map((x) => x.mae)))}%${inval.length ? ` · invalida em ~${(_med(inval.map((x) => x.barras)) * TF_MIN / 60).toFixed(1)}h` : ""}\\n`;
-    if (g.length < 15) m += `<i>amostra pequena (n&lt;15)</i>\\n`;
-    m += "\\n";
+    m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
+    m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
+    m += `a favor mediano ${sg(_med(g.map((x) => x.mfe)))}% · contra mediano ${sg(-_med(g.map((x) => x.mae)))}%${inval.length ? ` · invalida em ~${(_med(inval.map((x) => x.barras)) * TF_MIN / 60).toFixed(1)}h` : ""}\n`;
+    m += hipLinhasBanda(g); // V74: por nota de confiança do alerta
+    if (g.length < 15) m += `<i>amostra pequena (n&lt;15)</i>\n`;
+    m += "\n";
   }
   const piores = itens.filter((x) => x.res === "invalida").sort((a, b) => b.mae - a.mae).slice(0, 5);
-  if (piores.length) m += `<b>Maiores invalidações</b>\\n` + piores.map((x) => `${x.inst.replace("-USDT", "")} ${HIP_NOME[x.tipo]} ${fm(x.emMs)} → ${x.mae.toFixed(1)}% contra em ${(x.barras * TF_MIN / 60).toFixed(1)}h`).join("\\n") + "\\n\\n";
+  if (piores.length) m += `<b>Maiores invalidações</b>\n` + piores.map((x) => `${x.inst.replace("-USDT", "")} ${HIP_NOME[x.tipo]} ${fm(x.emMs)} → ${x.mae.toFixed(1)}% contra em ${(x.barras * TF_MIN / 60).toFixed(1)}h`).join("\n") + "\n\n";
   m += `<i>Só alertas com vela e ATR disponíveis (até 9 dias). Aviso ao vivo: HIP_ON (1), limites HIP_INV_ATR/HIP_INV_PCT/HIP_ALVO_ATR/HIP_ALVO_PCT, prazo HIP_HORAS.</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
