@@ -4842,18 +4842,36 @@ async function runCompressaoBase(chatId: number | string) {
   const seleciona = new Set(insts);
   const passo = Math.max(1, Math.round(60 / TF_MIN)), jan = Math.round(1440 / TF_MIN); // uma janela por hora, olhando 24h à frente
   let nJan = 0, nGrande = 0, nLimpo = 0, nMoedas = 0;
+  let qJan = 0, qGrande = 0, qLimpo = 0; // janelas "quietas": faixa comprimida e preço perto dela, as mesmas condições que o radar de compressão exige (largura ≤ SQUEEZE_REL da típica e distância ≤ COMPRESS_DIST_MAX_PCT)
   await emLotes(insts, 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
     if (!d || d.c.length < jan + 10) return;
     nMoedas++;
+    const jd = superV2(d.c, PESO_SUPREMA);
+    const larg = (k: number) => ((Math.max(jd[k].suprema, jd[k].j6) - Math.min(jd[k].suprema, jd[k].j6)) / d.c[k]) * 100;
     for (let k = 0; k + jan < d.c.length; k += passo) {
       const p0 = d.c[k];
       if (!(p0 > 0)) continue;
+      // essa hora é "quieta"? (precisa de histórico pra largura típica: 96 velas)
+      let quieta = false;
+      if (k >= 100) {
+        const w = larg(k), hist: number[] = [];
+        for (let q = k - 96; q < k; q++) { const x = larg(q); if (isFinite(x) && x > 0) hist.push(x); }
+        const med = xMediana(hist);
+        const tp = Math.max(jd[k].suprema, jd[k].j6), fn = Math.min(jd[k].suprema, jd[k].j6);
+        if (med > 0 && isFinite(w) && isFinite(tp) && isFinite(fn) && w / med <= SQUEEZE_REL) {
+          const dist = p0 > tp ? ((p0 - tp) / tp) * 100 : p0 < fn ? ((fn - p0) / fn) * 100 : Math.min(((tp - p0) / p0) * 100, ((p0 - fn) / p0) * 100);
+          quieta = dist <= COMPRESS_DIST_MAX_PCT;
+        }
+      }
       let mx = -Infinity, mn = Infinity;
       for (let i = k + 1; i <= k + jan; i++) { if (d.h[i] > mx) mx = d.h[i]; if (d.l[i] < mn) mn = d.l[i]; }
       const up = ((mx - p0) / p0) * 100, dn = ((p0 - mn) / p0) * 100;
       nJan++;
-      if (Math.max(up, dn) >= COMPRESS_ROMPE_PCT) { nGrande++; if (Math.min(up, dn) < COMPRESS_LIMPO_PCT) nLimpo++; }
+      const grande = Math.max(up, dn) >= COMPRESS_ROMPE_PCT, limpo = grande && Math.min(up, dn) < COMPRESS_LIMPO_PCT;
+      if (grande) nGrande++;
+      if (limpo) nLimpo++;
+      if (quieta) { qJan++; if (grande) qGrande++; if (limpo) qLimpo++; }
     }
   });
   if (nJan < 50) { await sendTelegram(chatId, "⚠️ Não consegui velas suficientes pra montar a base agora. Tente de novo."); return; }
@@ -4865,14 +4883,20 @@ async function runCompressaoBase(chatId: number | string) {
   const sg = (x: number) => `${x >= 0 ? "+" : ""}${x}`;
   let m = `🗜️ <b>COMPRESSÃO × BASE</b> — últimos ~${diasJ} dias\n${DIVISOR}\n<i>Mesmas ${nMoedas} moedas que tiveram compressão. "Andou ${COMPRESS_ROMPE_PCT}%+" = o preço foi ${COMPRESS_ROMPE_PCT}% ou mais pra algum lado nas 24h seguintes; "limpo" = o outro lado ficou abaixo de ${COMPRESS_LIMPO_PCT}%.</i>\n\n`;
   m += `📊 <b>Sem alerta (qualquer hora)</b>: andou ${COMPRESS_ROMPE_PCT}%+ em ${baseG}% das janelas (${nGrande}/${nJan}) · limpo ${baseL}%\n`;
+  const qOk = qJan >= 30, quietaG = pc(qGrande, qJan), quietaL = pc(qLimpo, qJan);
+  m += qOk
+    ? `🤫 <b>Moeda quieta, sem alerta</b> (faixa comprimida e preço perto dela, como o radar exige): ${quietaG}% (${qGrande}/${qJan}) · limpo ${quietaL}%\n`
+    : `🤫 Moeda quieta, sem alerta: poucas janelas (${qJan}) pra comparar.\n`;
   m += `🗜️ <b>Depois de um alerta de compressão</b>: ${cG}% (${pctG(mesmas).length}/${mesmas.length}) · limpo ${cL}%\n`;
-  m += `↔️ Diferença: ${sg(cG - baseG)} pontos no movimento · ${sg(cL - baseL)} pontos no limpo\n\n`;
+  m += `↔️ Contra qualquer hora: ${sg(cG - baseG)} pontos no movimento · ${sg(cL - baseL)} pontos no limpo\n`;
+  if (qOk) m += `↔️ <b>Contra moeda quieta</b>: ${sg(cG - quietaG)} pontos no movimento · ${sg(cL - quietaL)} pontos no limpo\n`;
+  m += `\n`;
   for (const [nome, f] of [["Confiança 6", (r: any) => Number(r.conf) === 6], ["Confiança 7", (r: any) => Number(r.conf) === 7], ["Confiança 8", (r: any) => Number(r.conf) === 8]] as [string, (r: any) => boolean][]) {
     const g = mesmas.filter(f);
     if (g.length >= 10) m += `• ${nome}: ${pc(pctG(g).length, g.length)}% (${pctG(g).length}/${g.length}) · limpo ${pc(pctL(g).length, g.length)}%\n`;
   }
-  const dif = cG - baseG;
-  m += `\n<b>Leitura:</b> ${Math.abs(dif) < 5 ? "a compressão praticamente NÃO anda mais que essas moedas já andam sozinhas — o alerta não está antecipando movimento, só avisando de uma moeda que se mexe muito." : dif > 0 ? `depois do alerta a moeda anda ${dif} pontos a mais que o normal dela: o alerta tem valor como aviso de movimento.` : `depois do alerta a moeda anda ${-dif} pontos a MENOS que o normal dela: o alerta está pegando momentos de calmaria.`}\n`;
+  const dif = qOk ? cG - quietaG : cG - baseG, refNome = qOk ? "uma moeda quieta qualquer (sem alerta)" : "essas moedas em qualquer hora";
+  m += `\n<b>Leitura (contra ${refNome}):</b> ${Math.abs(dif) < 5 ? `a compressão do bot anda praticamente o MESMO que ${refNome}: o alerta não está separando o que vai se mexer do que não vai — o filtro de confiança e de volume não acrescenta nada visível.` : dif > 0 ? `depois do alerta a moeda anda ${dif} pontos a MAIS que ${refNome}: o alerta (confiança e volume) acrescenta valor sobre só achar faixa comprimida.` : `depois do alerta a moeda anda ${-dif} pontos a MENOS que ${refNome}: o alerta não só não ajuda como parece pegar casos piores que a calmaria comum.`}\n`;
   m += `<i>Cuidado: janelas de hora em hora se sobrepõem (não são independentes), a base só cobre ~${diasJ} dias de velas e a lista é das moedas que já tiveram alerta. Serve de ordem de grandeza, não de prova.</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
