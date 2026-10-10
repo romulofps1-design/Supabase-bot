@@ -1,4 +1,4 @@
-// telegram-bot V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -308,6 +308,10 @@ const COMPRESS_VOL_MIN = numEnv("COMPRESS_VOL_MIN", "1.1");
 const COMPRESS_DIST_MAX_PCT = numEnv("COMPRESS_DIST_MAX_PCT", "1.5");
 const COMPRESS_CONF_MIN = numEnv("COMPRESS_CONF_MIN", "6");
 const COMPRESS_COOLDOWN_MIN = numEnv("COMPRESS_COOLDOWN_MIN", "180");
+// V85: no /compressao, "rompeu de verdade" = o preço andou pelo menos COMPRESS_ROMPE_PCT% (padrão 5) pra algum lado, a partir da entrada, dentro da janela do mfe/mae do placar (≈24h);
+// "limpo" = andou isso a favor de um lado e menos que COMPRESS_LIMPO_PCT% (padrão 2,5) pro outro.
+const COMPRESS_ROMPE_PCT = numEnv("COMPRESS_ROMPE_PCT", "5");
+const COMPRESS_LIMPO_PCT = numEnv("COMPRESS_LIMPO_PCT", "2.5");
 const COMPRESS_MAX_POR_RODADA = numEnv("COMPRESS_MAX_POR_RODADA", "2");
 const COMPRESS_ROT_N = numEnv("COMPRESS_ROT_N", "25");
 const COMPRESS_PTS_MAX = 12;
@@ -4760,9 +4764,17 @@ async function runCompressao(chatId: number | string, dias: number) {
     const pct = (lim: number) => Math.round((t.filter((x) => x <= lim).length / t.length) * 100);
     return `\n⏱ rompe em ~${Math.round(_med(t))} min (mediana) · ${pct(30)}% em até 30 min · ${pct(60)}% em até 60 min`;
   };
+  const comMov = (g: any[]) => g.filter((r) => r.mfe_pct != null && r.mae_pct != null);
+  const movTxt = (g: any[]) => {
+    const mv = comMov(g);
+    if (mv.length < 5) return "";
+    const grande = mv.filter((r) => Math.max(Number(r.mfe_pct), Number(r.mae_pct)) >= COMPRESS_ROMPE_PCT);
+    const limpo = grande.filter((r) => Math.min(Number(r.mfe_pct), Number(r.mae_pct)) < COMPRESS_LIMPO_PCT);
+    return `\n🚀 andou ${COMPRESS_ROMPE_PCT}%+ pra algum lado (24h): ${Math.round((grande.length / mv.length) * 100)}% (${grande.length}/${mv.length}) · limpo (outro lado &lt; ${COMPRESS_LIMPO_PCT}%): ${Math.round((limpo.length / mv.length) * 100)}% (${limpo.length}/${mv.length})`;
+  };
   const linha = (nome: string, g: any[]) => {
     const r4 = rets(g, 240), pf = _profitFactor(r4);
-    return `<b>${nome}</b> (n=${g.length})\n${linhaStats(g)}${r4.length >= 5 && isFinite(pf) ? ` · PF 4h ${pf.toFixed(2)}` : ""}${tempoTxt(g)}${g.length < 30 ? "\n<i>amostra pequena</i>" : ""}\n\n`;
+    return `<b>${nome}</b> (n=${g.length})\n${linhaStats(g)}${r4.length >= 5 && isFinite(pf) ? ` · PF 4h ${pf.toFixed(2)}` : ""}${tempoTxt(g)}${movTxt(g)}${g.length < 30 ? "\n<i>amostra pequena</i>" : ""}\n\n`;
   };
   const faixasConf: [string, (r: any) => boolean][] = [
     ["Confiança ≤ 5", (r) => r.conf != null && Number(r.conf) <= 5],
@@ -4772,10 +4784,11 @@ async function runCompressao(chatId: number | string, dias: number) {
     ["Confiança 9–10", (r) => r.conf != null && Number(r.conf) >= 9],
   ];
   let m = `🗜️ <b>COMPRESSÃO POR FAIXA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${comp.length} alerta(s), ${ent.length} com rompimento (entrada)\n<i>acerto = preço a favor do lado do 1º fechamento fora da faixa; % = retorno mediano já com taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta). Colunas: 1h · 4h · 24h</i>\n\n`;
-  m += `<b>Geral (compressão com rompimento)</b>\n${linhaStats(ent)}${tempoTxt(ent)}\n\n`;
+  m += `<b>Geral (compressão com rompimento)</b>\n${linhaStats(ent)}${tempoTxt(ent)}${movTxt(ent)}\n\n`;
   m += `${MINI_DIVISOR}\n<b>Por confiança</b>\n${MINI_DIVISOR}\n\n`;
   const ranque: { nome: string; n: number; med: number }[] = [];
   const rapidez: { nome: string; n: number; min: number }[] = [];
+  const movRank: { nome: string; n: number; pct: number }[] = [];
   for (const [nome, fn2] of faixasConf) {
     const g = ent.filter(fn2);
     if (!g.length) continue;
@@ -4784,6 +4797,8 @@ async function runCompressao(chatId: number | string, dias: number) {
     if (r4.length >= 20) ranque.push({ nome, n: r4.length, med: _med(r4) });
     const tm = minAteRomper(g);
     if (tm.length >= 20) rapidez.push({ nome, n: tm.length, min: _med(tm) });
+    const mv = comMov(g);
+    if (mv.length >= 20) movRank.push({ nome, n: mv.length, pct: mv.filter((r) => Math.max(Number(r.mfe_pct), Number(r.mae_pct)) >= COMPRESS_ROMPE_PCT).length / mv.length });
   }
   m += `${MINI_DIVISOR}\n<b>Por força da tendência (ADX)</b>\n${MINI_DIVISOR}\n\n`;
   const adxA = ent.filter((r) => r.adx != null && Number(r.adx) >= 25), adxB = ent.filter((r) => r.adx != null && Number(r.adx) < 25);
@@ -4798,6 +4813,10 @@ async function runCompressao(chatId: number | string, dias: number) {
     const mel = ranque[0], pior = ranque[ranque.length - 1];
     m += `🏆 <b>Leitura (4h, só faixas com 20+ conferidos):</b> melhor ${mel.nome} (${_sg(mel.med)}, n=${mel.n}) · pior ${pior.nome} (${_sg(pior.med)}, n=${pior.n})\n`;
   } else m += `⚠️ <i>Poucos conferidos por faixa ainda (precisa de 20+ em 4h pra ranquear). Tente /compressao 60.</i>\n`;
+  if (movRank.length >= 2) {
+    movRank.sort((a, b) => b.pct - a.pct);
+    m += `🚀 <b>Mais movimento de ${COMPRESS_ROMPE_PCT}%+ (20+ alertas):</b> ${movRank[0].nome} (${Math.round(movRank[0].pct * 100)}%) · menos ${movRank[movRank.length - 1].nome} (${Math.round(movRank[movRank.length - 1].pct * 100)}%)\n`;
+  }
   if (rapidez.length >= 2) {
     rapidez.sort((a, b) => a.min - b.min);
     m += `⏱ <b>Rompe mais rápido (mediana, 20+ alertas):</b> ${rapidez[0].nome} (~${Math.round(rapidez[0].min)} min) · mais devagar ${rapidez[rapidez.length - 1].nome} (~${Math.round(rapidez[rapidez.length - 1].min)} min)\n`;
