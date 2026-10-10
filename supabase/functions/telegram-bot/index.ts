@@ -1,4 +1,4 @@
-// telegram-bot V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -159,6 +159,9 @@ const WATCH_HORAS = numEnv("WATCH_HORAS", "48");
 // passar de novo pelo classificar()+confiança+ESTRATEGIA_PUMP, o que pro lado "contra o dia" pode nunca acontecer.
 // Com WATCH_REPETIR=1 (padrão), em vez de fechar, o acompanhamento continua no NOVO lado: se virar de novo, avisa de
 // novo. WATCH_REPETIR=0 volta ao comportamento antigo (avisa 1x e some).
+// V79: teto de moedas mostradas no /lista (0 = sem teto) e idade máxima do alerta original pra continuar renovando a vigilância a cada virada (0 = sem teto).
+const LISTA_MAX = numEnv("LISTA_MAX", "20");
+const WATCH_IDADE_MAX_H = numEnv("WATCH_IDADE_MAX_H", "168");
 const WATCH_REPETIR = (Deno.env.get("WATCH_REPETIR") || "1") !== "0";
 // V72: o aviso de "cruzou CONTRA" (ACOMP_) some em 5 min por padrão, mais rápido que o auto-apagar geral (15 min) —
 // é um aviso informativo, e com WATCH_REPETIR ligado pode chegar de novo a cada virada; não precisa ficar muito tempo.
@@ -2198,7 +2201,30 @@ async function salvarEstado(SB: any) {
     else await SB.from("alertas_indicador").insert({ instid: ESTADO_ROW, ...campos });
   } catch (e) { console.log("⚠️ salvarEstado falhou", e); }
 }
-async function avisarVoltouPraDentro(SB: any, row: any, info: IndicadorInfo, posMap: Map<string, Pos[] | null>): Promise<void> {
+// V80: a LISTA DE ACOMPANHAMENTO é por chat. Cada chat tem a própria linha por moeda: WL_<chat>_<moeda> (mesmas colunas watch_* / last_status / last_alert_at).
+// A linha da moeda sozinha (instid = moeda) fica só com o cooldown/último alerta global; não carrega mais vigilância.
+const WL_PREFIXO = "WL_";
+const wlId = (ch: string | number, inst: string) => `${WL_PREFIXO}${ch}_${inst}`;
+function parseWL(row: any): { chat: string; inst: string } | null {
+  const m = String(row?.instid || "").slice(WL_PREFIXO.length).match(/^(-?\d+)_(.+)$/);
+  return String(row?.instid || "").startsWith(WL_PREFIXO) && m ? { chat: m[1], inst: m[2] } : null;
+}
+// Migração única: vigilância antiga (na linha da moeda) vira uma linha por chat de alerta, e a linha antiga é fechada.
+async function migrarWatchLegado(SB: any) {
+  try {
+    const { data } = await SB.from(TAB).select("*").not("watch_until", "is", null).gt("watch_until", new Date().toISOString()).eq("watch_notificado", false)
+      .not("instid", "like", `${WL_PREFIXO}%`).not("instid", "like", `${SEG_PREFIXO}%`);
+    for (const r of (data || []) as any[]) {
+      if (r.watch_side !== "long" && r.watch_side !== "short") continue;
+      for (const ch of ALERT_CHAT_IDS) {
+        await upsertLinha(SB, wlId(ch, r.instid), { last_status: r.last_status ?? "novo", last_alert_at: r.last_alert_at ?? null, watch_side: r.watch_side, watch_until: r.watch_until, watch_notificado: false });
+      }
+      await SB.from(TAB).update({ watch_until: null }).eq("instid", r.instid);
+      console.log(`📋 migrei a vigilância de ${r.instid} pra ${ALERT_CHAT_IDS.length} chat(s)`);
+    }
+  } catch (e) { console.log("⚠️ migrarWatchLegado falhou", e); }
+}
+async function avisarVoltouPraDentro(SB: any, row: any, info: IndicadorInfo, posMap: Map<string, Pos[] | null>, soChat?: string): Promise<void> {
   if (WATCH_VOLTA_ATR <= 0 || !String(row.last_status || "").includes("✔")) return;
   const lado: "long" | "short" = row.watch_side;
   if (lado !== "long" && lado !== "short") return;
@@ -2211,7 +2237,7 @@ async function avisarVoltouPraDentro(SB: any, row: any, info: IndicadorInfo, pos
   if (dentroPct < margem) return;
   const psDe = (ch: string) => posDaMoeda(posMap.get(ch) ?? null, info.instId);
   // sem filtro de _watchEnviado: o marcador ✔ da linha já garante 1 aviso por alerta
-  const dest = ALERT_CHAT_IDS.filter((ch) => !silChat(ch) || (SILENCIO_PROTECAO && psDe(ch).some((p) => p.lado === lado)));
+  const dest = (soChat ? [soChat] : ALERT_CHAT_IDS).filter((ch) => !silChat(ch) || (SILENCIO_PROTECAO && psDe(ch).some((p) => p.lado === lado)));
   if (!dest.length) return;
   const nome = lado === "long" ? "LONG" : "SHORT";
   const horasDesde = row.last_alert_at ? ((Date.now() - new Date(row.last_alert_at).getTime()) / 3_600_000).toFixed(1) : "?";
@@ -2224,48 +2250,69 @@ async function avisarVoltouPraDentro(SB: any, row: any, info: IndicadorInfo, pos
   const oks = await Promise.all(dest.map(async (ch) =>
     !!(await enviarAlertaMoeda(SB, ch, `VOLTA_${info.instId}`, cortar(msg + (await blocoPosicao(SB, ch, psDe(ch), info))), botaoAnalisar(info.instId), ACOMP_AUTOAPAGAR_MIN))));
   if (oks.some(Boolean)) {
-    await SB.from(TAB).update({ last_status: String(row.last_status).replace(/\s*✔/g, "") }).eq("instid", row.instid);
+    await SB.from(TAB).update({ last_status: String(row.last_status).replace(/\s*✔/g, "") }).eq("instid", row._wlId ?? row.instid);
     console.log(`↩️ ${info.instId} voltou pra dentro da faixa (${nome}, ${dentroPct.toFixed(2)}% dentro)`);
   }
 }
+// V79/V80: moeda SEGUIDA (/seguir) fica na lista de acompanhamento DO CHAT que a segue, enquanto for seguida. Quando a vigilância dela acaba (prazo vencido
+// ou fechada), reabre no lado atual. Vigilância ainda ativa nunca é mexida (apagaria um "cruzou contra" pendente). Dentro da faixa (sem lado) não reabre.
+async function renovarSeguidasNaLista(SB: any, poolInfoMap: Map<string, IndicadorInfo>) {
+  try {
+    const seg = await listarSeguidas(SB);
+    if (!seg.length) return;
+    const { data } = await SB.from(TAB).select("instid, watch_until, watch_notificado").in("instid", seg.map((x) => wlId(x.chat, x.inst)));
+    const porId = new Map(((data || []) as any[]).map((r) => [String(r.instid), r] as [string, any]));
+    const infos = new Map<string, IndicadorInfo | null>();
+    const agora = Date.now();
+    for (const sg of seg) {
+      const id = wlId(sg.chat, sg.inst), ex = porId.get(id);
+      const ativa = !!ex && !!ex.watch_until && new Date(ex.watch_until).getTime() > agora && ex.watch_notificado === false;
+      if (ativa) continue;
+      if (!infos.has(sg.inst)) infos.set(sg.inst, poolInfoMap.get(sg.inst) || (await calcIndicador500(sg.inst)));
+      const info = infos.get(sg.inst);
+      const atual = info ? ladoAtual(info) : null;
+      if (!atual) continue;
+      const w = { watch_side: atual, watch_notificado: false, watch_until: new Date(agora + WATCH_HORAS * 3600 * 1000).toISOString() };
+      if (ex) await SB.from(TAB).update(w).eq("instid", id);
+      else await SB.from(TAB).insert({ instid: id, last_status: "novo", ...w });
+      console.log(`📋 ${sg.inst} (seguida por ${sg.chat}) reaberta na lista de acompanhamento (${atual})`);
+    }
+  } catch (e) { console.log("⚠️ renovar seguidas na lista falhou", e); }
+}
 async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, IndicadorInfo>, posMap: Map<string, Pos[] | null>) {
+  await migrarWatchLegado(SB);
+  await renovarSeguidasNaLista(SB, poolInfoMap);
   const agoraIso = new Date().toISOString();
-  const { data: watchRows } = await SB.from("alertas_indicador").select("*").not("watch_until", "is", null).gt("watch_until", agoraIso).eq("watch_notificado", false);
+  const { data: watchRows } = await SB.from(TAB).select("*").like("instid", `${WL_PREFIXO}%`).not("watch_until", "is", null).gt("watch_until", agoraIso).eq("watch_notificado", false);
   if (!watchRows || watchRows.length === 0) { console.log("👀 lista de acompanhamento vazia"); return; }
-  console.log(`👀 ${watchRows.length} moeda(s) na lista de acompanhamento`);
-  await emLotes(watchRows as any[], 5, async (row: any) => {
+  console.log(`👀 ${watchRows.length} vigilância(s) na lista de acompanhamento (todos os chats)`);
+  await emLotes(watchRows as any[], 5, async (wl: any) => {
     try { // V74: erro numa moeda não derruba o lote inteiro (Promise.all) nem as moedas seguintes
-    let info = poolInfoMap.get(row.instid) || null;
-    if (!info) info = await calcIndicador500(row.instid);
+    const pw = parseWL(wl);
+    if (!pw) return;
+    const ch = pw.chat;
+    const row = { ...wl, instid: pw.inst, _wlId: wl.instid }; // mesma forma da linha antiga; o dono é o chat `ch`
+    let info = poolInfoMap.get(pw.inst) || null;
+    if (!info) info = await calcIndicador500(pw.inst);
     if (!info) return;
     const atual = ladoAtual(info);
-    const kw = (ch: string) => `${info.instId}|${ch}`;
     if (atual === null || atual === row.watch_side) {
-      // V74: sem cruzamento contra pendente, qualquer chave de "já avisei" é velha — se ficasse, a próxima virada não avisaria esse chat
-      // (acontecia quando um chat não recebia: silêncio, falha ou o intervalo; a linha não avançava e a chave ficava presa).
-      ALERT_CHAT_IDS.forEach((ch) => _watchEnviado.delete(kw(ch)));
-      if (atual === null) await avisarVoltouPraDentro(SB, row, info, posMap).catch((e) => console.log("⚠️ erro aviso voltou pra dentro", e));
+      if (atual === null) await avisarVoltouPraDentro(SB, row, info, posMap, ch).catch((e) => console.log("⚠️ erro aviso voltou pra dentro", e));
       return;
     }
-    const psDe = (ch: string) => posDaMoeda(posMap.get(ch) ?? null, info.instId);
-    let dest = ALERT_CHAT_IDS.filter((ch) => !_watchEnviado.has(kw(ch)) && (!silChat(ch) || (SILENCIO_PROTECAO && psDe(ch).some((p) => p.lado !== atual))));
+    const ps = posDaMoeda(posMap.get(ch) ?? null, info.instId);
+    if (silChat(ch) && !(SILENCIO_PROTECAO && ps.some((p) => p.lado !== atual))) return;
     // V74: intervalo mínimo desde o último aviso desta moeda neste chat. Dentro dele não envia e não mexe na linha:
     // a próxima rodada reavalia (se ainda estiver contra, sai quando o intervalo passar; se desvirou, o `atual === watch_side` acima já barra).
-    if (ACOMP_INTERVALO_MIN > 0 && dest.length) {
-      const livres: string[] = [];
-      for (const ch of dest) {
-        let ultimo = 0;
-        try {
-          const { data: lt } = await SB.from(TAB).select("last_status").eq("instid", `${ACOMP_INTERVALO_PREFIXO}${ch}_${info.instId}`).maybeSingle();
-          const n = Number(lt?.last_status);
-          if (isFinite(n) && n > 0) ultimo = n;
-        } catch { }
-        if (Date.now() - ultimo >= ACOMP_INTERVALO_MIN * 60000) livres.push(ch);
-        else console.log(`⏳ ${info.instId} cruzou contra, mas o último aviso foi há ${Math.round((Date.now() - ultimo) / 60000)}min (< ${ACOMP_INTERVALO_MIN}min) — aguardo`);
-      }
-      dest = livres;
+    if (ACOMP_INTERVALO_MIN > 0) {
+      let ultimo = 0;
+      try {
+        const { data: lt } = await SB.from(TAB).select("last_status").eq("instid", `${ACOMP_INTERVALO_PREFIXO}${ch}_${info.instId}`).maybeSingle();
+        const n = Number(lt?.last_status);
+        if (isFinite(n) && n > 0) ultimo = n;
+      } catch { }
+      if (Date.now() - ultimo < ACOMP_INTERVALO_MIN * 60000) { console.log(`⏳ ${info.instId} (${ch}) cruzou contra, mas o último aviso foi há ${Math.round((Date.now() - ultimo) / 60000)}min (< ${ACOMP_INTERVALO_MIN}min) — aguardo`); return; }
     }
-    if (!dest.length) return;
     const desdeMs = row.last_alert_at ? new Date(row.last_alert_at).getTime() : null;
     const horasDesde = desdeMs ? ((Date.now() - desdeMs) / 3_600_000).toFixed(1) : "?";
     const msg =
@@ -2275,26 +2322,22 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     `${idadeTxt(info.idadeCandles)}\n` +
     `${indicadorTxt(info)}\n` +
     `preço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}`;
-    await Promise.all(dest.map(async (ch) => {
-      const id = await enviarAlertaMoeda(SB, ch, `ACOMP_${info!.instId}`, cortar(msg + (await blocoPosicao(SB, ch, psDe(ch), info!))), botaoAnalisar(info!.instId), ACOMP_AUTOAPAGAR_MIN);
-      if (id) {
-        _watchEnviado.add(kw(ch));
-        if (ACOMP_INTERVALO_MIN > 0) { try { await upsertLinha(SB, `${ACOMP_INTERVALO_PREFIXO}${ch}_${info!.instId}`, { last_status: String(Date.now()) }); } catch { } }
-      }
-    }));
-    if (!ALERT_CHAT_IDS.every((ch) => _watchEnviado.has(kw(ch)))) return;
-    ALERT_CHAT_IDS.forEach((ch) => _watchEnviado.delete(kw(ch)));
-    if (WATCH_REPETIR) {
-      await SB.from("alertas_indicador").update({
+    const id = await enviarAlertaMoeda(SB, ch, `ACOMP_${info.instId}`, cortar(msg + (await blocoPosicao(SB, ch, ps, info))), botaoAnalisar(info.instId), ACOMP_AUTOAPAGAR_MIN);
+    if (!id) return; // não entregou: a linha fica como está e a próxima rodada tenta de novo
+    if (ACOMP_INTERVALO_MIN > 0) { try { await upsertLinha(SB, `${ACOMP_INTERVALO_PREFIXO}${ch}_${info.instId}`, { last_status: String(Date.now()) }); } catch { } }
+    // V79: depois de WATCH_IDADE_MAX_H do alerta original, a virada não renova mais (a vigilância fecha).
+    const idadeAlertaH = row.last_alert_at ? (Date.now() - new Date(row.last_alert_at).getTime()) / 3600000 : 0;
+    if (WATCH_REPETIR && !(WATCH_IDADE_MAX_H > 0 && idadeAlertaH > WATCH_IDADE_MAX_H)) {
+      await SB.from(TAB).update({
         watch_side: atual, watch_notificado: false,
         watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString(),
-      }).eq("instid", row.instid);
-      console.log(`🔁 ${info.instId} virou de novo (${row.watch_side} -> ${atual}); continuo acompanhando`);
+      }).eq("instid", wl.instid);
+      console.log(`🔁 ${info.instId} (${ch}) virou de novo (${row.watch_side} -> ${atual}); continuo acompanhando`);
     } else {
-      await SB.from("alertas_indicador").update({ watch_notificado: true, watch_until: null }).eq("instid", row.instid);
-      console.log(`🔁 ${info.instId} saiu da lista de acompanhamento (cruzou contra: ${row.watch_side} -> ${atual})`);
+      await SB.from(TAB).update({ watch_notificado: true, watch_until: null }).eq("instid", wl.instid);
+      console.log(`🔁 ${info.instId} (${ch}) saiu da lista de acompanhamento (cruzou contra: ${row.watch_side} -> ${atual})`);
     }
-    } catch (e) { console.log(`⚠️ lista de acompanhamento: erro em ${row?.instid}`, e); }
+    } catch (e) { console.log(`⚠️ lista de acompanhamento: erro em ${wl?.instid}`, e); }
   });
 }
 // V74: lado do ÚLTIMO ALERTA, gravado no fim do last_status (" [L]"/" [S]"). O watch_side muda quando a moeda vira na lista de acompanhamento; usar ele aqui fazia um alerta
@@ -2935,12 +2978,13 @@ async function runAlertaProativo() {
       // rankStatus/🆕/🛡️ usam includes(), então o marcador não atrapalha nada.
       last_status: c.status + (c.fresco ? " 🆕" : "") + (contraPos ? " 🛡️" : "") + (c.info.idadeCandles !== null ? " ✔" : "") + (c.lado === "long" ? " [L]" : " [S]"),
       last_alert_at: new Date().toISOString(),
-      watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString(),
       watch_side: c.lado,
-      watch_notificado: false,
     };
     if (row) await SB.from("alertas_indicador").update(registro).eq("instid", c.info.instId);
     else await SB.from("alertas_indicador").insert({ instid: c.info.instId, ...registro });
+    // V80: a vigilância (lista de acompanhamento) é por chat: só quem recebeu o alerta passa a acompanhar a moeda.
+    const watchAte = new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString();
+    for (const ch of entregues) await upsertLinha(SB, wlId(ch, c.info.instId), { last_status: registro.last_status, last_alert_at: registro.last_alert_at, watch_side: c.lado, watch_until: watchAte, watch_notificado: false });
   }
   // Fix: o alerta dos minutos finais (🚨) tem janela curta (1–5 min antes do fechamento). Antes rodava no fim da rodada, depois dos radares
   // de topo/fundo/compressão, lista de acompanhamento e antecipações; se a rodada demorava ou era pulada pela trava do cron, o 🚨 não saía.
@@ -4291,13 +4335,19 @@ function lateralStatusTxt(est: LateralEst | null): string {
     : `🧱 Filtro lateral: ✅ liberado`;
   return `${cab}${barr}${velho}\n   BTC ${indTxt(indBtc(est))}\n   ETH ${indTxt(indEth(est))}\n${est.fonte ? `   <i>Velas: ${est.fonte}</i>\n` : ""}`;
 }
-async function runLista(chatId: number | string) {
+async function runLista(chatId: number | string, tudo = false) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)."); return; }
-  const { data, error } = await SB.from("alertas_indicador").select("*")
+  const { data, error } = await SB.from(TAB).select("*").like("instid", `${WL_PREFIXO}%`)
   .not("watch_until", "is", null).gt("watch_until", new Date().toISOString()).eq("watch_notificado", false);
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler a lista de acompanhamento: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
-  const rows = (data || []) as any[];
+  // V80: só as vigilâncias DESTE chat; a linha ganha instid = moeda pra o resto da função funcionar igual.
+  const rows = ((data || []) as any[]).map((r) => ({ r, p: parseWL(r) })).filter((x) => x.p && x.p.chat === String(chatId)).map((x) => ({ ...x.r, instid: x.p!.inst })) as any[];
+  // V80: moeda SEGUIDA por este chat que ainda não tem vigilância (ex.: está dentro da faixa, sem lado) aparece mesmo assim, marcada como seguida.
+  try {
+    const tem = new Set(rows.map((r) => String(r.instid)));
+    (await listarSeguidas(SB, chatId)).filter((x) => !tem.has(x.inst)).forEach((x) => rows.push({ instid: x.inst, _soSeguida: true }));
+  } catch (e) { console.log("⚠️ /lista: não consegui ler as seguidas", e); }
   if (rows.length === 0) {
     await sendTelegram(chatId, `📋 <b>LISTA DE ACOMPANHAMENTO</b>\n\nNenhuma moeda em acompanhamento agora. Cada alerta enviado coloca a moeda na lista por ${WATCH_HORAS}h.`);
     return;
@@ -4313,15 +4363,36 @@ async function runLista(chatId: number | string) {
     const info = infos[i];
     const atual = info ? ladoAtual(info) : null;
     return { r, info, contra: atual !== null && atual !== r.watch_side };
-  }).sort((a, b) => Number(b.contra) - Number(a.contra) || (a.info ? a.info.distAbs : 999) - (b.info ? b.info.distAbs : 999));
-  const cab = `📋 <b>LISTA DE ACOMPANHAMENTO</b> — ${rows.length} moeda(s), janela de ${WATCH_HORAS}h\n⏰ Agora: ${xTxtJanela(perfil)}\n${DIVISOR}\n<i>quem já cruzou contra vem primeiro, depois as mais perto da linha</i>\n\n`;
+  }).sort((a, b) => Number(b.contra) - Number(a.contra) || Number(!!a.r._soSeguida) - Number(!!b.r._soSeguida) || (a.info ? a.info.distAbs : 999) - (b.info ? b.info.distAbs : 999));
+  // V79: a lista pode crescer (cada virada renova a janela). Mostra as LISTA_MAX mais relevantes (já ordenadas: quem cruzou contra primeiro, depois as mais perto da linha); "/lista tudo" mostra todas.
+  const totalRows = itens.length;
+  if (!tudo && LISTA_MAX > 0 && itens.length > LISTA_MAX) itens.length = LISTA_MAX;
+  const ocultas = totalRows - itens.length;
+  const cab = `📋 <b>LISTA DE ACOMPANHAMENTO</b> — ${rows.length} moeda(s), janela de ${WATCH_HORAS}h${ocultas > 0 ? ` · mostrando as ${itens.length} mais relevantes` : ""}\n⏰ Agora: ${xTxtJanela(perfil)}\n${DIVISOR}\n<i>quem já cruzou contra vem primeiro, depois as mais perto da linha</i>\n\n`;
   const blocos = itens.map(({ r, info, contra }, i) => {
     const horasDesde = r.last_alert_at ? ((agora - new Date(r.last_alert_at).getTime()) / 3600000).toFixed(1) : "?";
     const faltamH = (new Date(r.watch_until).getTime() - agora) / 3600000;
     const falta = faltamH >= 1 ? `${Math.round(faltamH)}h` : `${Math.max(0, Math.round(faltamH * 60))}min`;
     const pct = pctMap.get(r.instid);
     let b = i > 0 ? `${MINI_DIVISOR}\n` : "";
-    b += `🪙 <b>${r.instid}</b> — alerta ${r.watch_side === "long" ? "LONG" : "SHORT"} há ${horasDesde}h (faltam ${falta})\n`;
+    if (r._soSeguida) {
+      b += `⭐ <b>${r.instid}</b> — seguida, ainda sem lado pra vigiar (dentro da faixa)\n`;
+      const pctS = pctMap.get(r.instid);
+      if (pctS !== undefined) b += `${pctS >= 0 ? "📈 +" : "📉 "}${pctS.toFixed(2)}% (24h)\n`;
+      if (!info) return b + `Indicador: sem dado agora\n\n`;
+      return b + `📍 ${indicadorTxt(info)}\n${idadeTxt(info.idadeCandles)}\npreço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}\n\n`;
+    }
+    // V79: com WATCH_REPETIR, cada virada troca o watch_side e renova o watch_until, mas o last_alert_at continua sendo o do alerta original.
+    // Antes a lista juntava "lado atual" + "há (alerta original)" + "faltam (da última virada)" na mesma frase e ficava contraditória
+    // (ex.: "alerta SHORT há 135.9h (faltam 93h)" numa janela de 96h). Agora separa: o lado vigiado e o prazo numa linha, o alerta original na outra.
+    const ladoAl = ladoUltimoAlerta(r), ladoVig = r.watch_side === "long" ? "LONG" : "SHORT";
+    const inicioMs = new Date(r.watch_until).getTime() - WATCH_HORAS * 3600000;
+    const horasVirada = Math.max(0, (agora - inicioMs) / 3600000);
+    const virou = !!ladoAl && ladoAl !== r.watch_side;
+    b += `🪙 <b>${r.instid}</b> — vigiando ${ladoVig} (faltam ${falta})\n`;
+    b += r.last_alert_at
+      ? `🔔 alerta ${ladoAl === "long" ? "LONG" : ladoAl === "short" ? "SHORT" : ladoVig} há ${horasDesde}h${virou ? ` · virou pra ${ladoVig} há ~${horasVirada.toFixed(1)}h` : ""}\n`
+      : `⭐ seguida por você (sem alerta ainda)\n`;
     if (pct !== undefined) b += `${pct >= 0 ? "📈 +" : "📉 "}${pct.toFixed(2)}% (24h)\n`;
     if (!info) return b + `Indicador: sem dado agora\n\n`;
     if (contra) b += `🔁 JÁ CRUZOU CONTRA o alerta — o aviso 🔁 sai na próxima varredura\n`;
@@ -4333,7 +4404,7 @@ async function runLista(chatId: number | string) {
     if (parte.length + b.length > 3800) { await sendTelegram(chatId, parte); parte = ""; }
     parte += b;
   }
-  if (parte.trim()) await sendTelegram(chatId, parte + `<i>Toque em 🔎 para a análise completa.</i>`, botoesAnalisarLista(itens.map((x) => String(x.r.instid))));
+  if (parte.trim()) await sendTelegram(chatId, parte + `${ocultas > 0 ? `<i>+${ocultas} moeda(s) ocultas (as mais longe da linha). Use /lista tudo pra ver todas.</i>\n` : ""}<i>Toque em 🔎 para a análise completa.</i>`, botoesAnalisarLista(itens.map((x) => String(x.r.instid))));
 }
 const PLACAR_TABELA = "alertas_log";
 const PLACAR_HORIZONTES = [15, 60, 240, 1440];
@@ -6217,7 +6288,16 @@ async function runSeguir(chatId: number | string, entrada: string, seguir: boole
     const tinha = antes.some((x) => x.inst === inst);
     await SB.from(TAB).delete().eq("instid", id);
     if (legado) await SB.from(TAB).delete().eq("instid", SEG_PREFIXO + inst);
-    await sendTelegram(chatId, tinha ? `🛑 Parei de seguir <b>${inst}</b>. (restam ${antes.length - 1}/${SEG_MAX})` : `ℹ️ <b>${inst}</b> não estava na sua lista de seguidas.`);
+    // V79/V80: a /lista é do chat: ao parar de seguir, a moeda sai da lista DESTE chat — a não ser que a vigilância venha de um alerta recente (aí segue até o prazo).
+    let saiuLista = false;
+    try {
+      if (tinha) {
+        const { data: ex } = await SB.from(TAB).select("last_alert_at, watch_until").eq("instid", wlId(chatId, inst)).maybeSingle();
+        const recente = !!ex?.last_alert_at && Date.now() - new Date(ex.last_alert_at).getTime() < WATCH_HORAS * 3600000;
+        if (ex?.watch_until && !recente) { await SB.from(TAB).update({ watch_until: null }).eq("instid", wlId(chatId, inst)); saiuLista = true; }
+      }
+    } catch (e) { console.log("⚠️ /parar: não consegui tirar da lista de acompanhamento", e); }
+    await sendTelegram(chatId, tinha ? `🛑 Parei de seguir <b>${inst}</b>. (restam ${antes.length - 1}/${SEG_MAX})${saiuLista ? "\n📋 Saiu da /lista de acompanhamento." : ""}` : `ℹ️ <b>${inst}</b> não estava na sua lista de seguidas.`);
     return;
   }
   const lista = await listarSeguidas(SB, chatId);
@@ -6227,7 +6307,24 @@ async function runSeguir(chatId: number | string, entrada: string, seguir: boole
   if (!unicas.has(inst) && unicas.size >= SEG_MAX_GLOBAL) { await sendTelegram(chatId, `⚠️ O bot já acompanha ${SEG_MAX_GLOBAL} moedas seguidas no total (limite para o robô rodar dentro do tempo). Tente mais tarde ou peça ao administrador para aumentar SEG_MAX_GLOBAL.`); return; }
   if (legado) await SB.from(TAB).delete().eq("instid", SEG_PREFIXO + inst);
   await upsertLinha(SB, id, { last_status: "novo", last_alert_at: null });
-  await sendTelegram(chatId, `⭐ Seguindo <b>${inst}</b> (${jaSegue ? lista.length : lista.length + 1}/${SEG_MAX}). Aviso quando cruzar a linha ou chegar PERTO (mesmo fora do top 40 do dia).`, botaoAnalisar(inst));
+  // V79: moeda seguida também entra na LISTA DE ACOMPANHAMENTO (/lista): vigia o lado atual dela por WATCH_HORAS e avisa se cruzar CONTRA.
+  // Se ela já está na lista (alerta recente ou virada pendente), não mexe: sobrescrever o lado apagaria um "cruzou contra" ainda não avisado.
+  let notaLista = "";
+  try {
+    const info = await calcIndicador500(inst);
+    const atual = info ? ladoAtual(info) : null;
+    const { data: ex } = await SB.from(TAB).select("instid, watch_until, watch_notificado").eq("instid", wlId(chatId, inst)).maybeSingle();
+    const jaNaLista = !!ex && !!ex.watch_until && new Date(ex.watch_until).getTime() > Date.now() && ex.watch_notificado === false;
+    if (jaNaLista) notaLista = "\n📋 Já está na /lista de acompanhamento.";
+    else if (!atual) notaLista = "\n📋 Ela está dentro da faixa agora, então ainda não tem lado pra vigiar. Aparece na /lista como seguida e passa a ser vigiada assim que sair da faixa.";
+    else {
+      const w = { watch_side: atual, watch_notificado: false, watch_until: new Date(Date.now() + WATCH_HORAS * 3600 * 1000).toISOString() };
+      const gr = ex ? await SB.from(TAB).update(w).eq("instid", wlId(chatId, inst)) : await SB.from(TAB).insert({ instid: wlId(chatId, inst), last_status: "novo", ...w });
+      if (gr?.error) { console.log("⚠️ /seguir: gravar na lista falhou", gr.error); notaLista = `\n⚠️ Não consegui gravar na /lista: ${String(gr.error.message || gr.error).replace(/</g, "&lt;")}`; }
+      else notaLista = `\n📋 Entrou na /lista de acompanhamento vigiando ${atual === "long" ? "LONG" : "SHORT"} enquanto você seguir.`;
+    }
+  } catch (e) { console.log("⚠️ /seguir: não consegui colocar na lista de acompanhamento", e); }
+  await sendTelegram(chatId, `⭐ Seguindo <b>${inst}</b> (${jaSegue ? lista.length : lista.length + 1}/${SEG_MAX}). Aviso quando cruzar a linha ou chegar PERTO (mesmo fora do top 40 do dia).${notaLista}`, botaoAnalisar(inst));
 }
 async function runSeguidas(chatId: number | string) {
   const SB = getSupabase();
@@ -6340,8 +6437,9 @@ async function montarResumoNoite(SB: any, chat?: string | number, inicioMs?: num
     const ontem = r14.filter((r) => { const t = new Date(r.criado_em).getTime(); return t >= inicioDia - 86400000 && t < inicioDia; });
     if (ontem.length) anterior = `\n📆 <b>Ciclo anterior</b> (${ontem.length} alerta(s), já conferido)\n⏱️ ${linhaStats(ontem, [15])}\n📊 ${linhaStats(ontem)}\n`;
   } catch (e) { console.log("⚠️ resumo noite (14d)", e); }
-  const { data: w } = await SB.from(TAB).select("instid").not("watch_until", "is", null).gt("watch_until", new Date().toISOString()).eq("watch_notificado", false);
-  msg += real + lista + anterior + `\n📋 ${(w || []).length} moeda(s) seguem em acompanhamento.`;
+  const { data: w } = await SB.from(TAB).select("instid").like("instid", `${WL_PREFIXO}%`).not("watch_until", "is", null).gt("watch_until", new Date().toISOString()).eq("watch_notificado", false);
+  const nAcomp = new Set(((w || []) as any[]).map((r) => parseWL(r)?.inst).filter(Boolean)).size; // moedas distintas (cada chat tem a própria lista)
+  msg += real + lista + anterior + `\n📋 ${nAcomp} moeda(s) seguem em acompanhamento.`;
   return cortar(msg);
 }
 // ─── V55: AGENDA ECONÔMICA ────────────────────────────────────────────────────────────────────────
@@ -8357,7 +8455,7 @@ Deno.serve(async (req) => {
       return new Response("ok");
     }
     if (text.startsWith("/lista")) {
-      await comAguarde("🔍 Montando a lista de acompanhamento, aguarde...", () => runLista(chatId));
+      await comAguarde("🔍 Montando a lista de acompanhamento, aguarde...", () => runLista(chatId, /\b(tudo|todas|all)\b/i.test(text)));
       return new Response("ok");
     }
     if (text.startsWith("/pergunta") || text.startsWith("/veredito")) {
