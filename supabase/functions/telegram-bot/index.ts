@@ -3858,13 +3858,13 @@ function rupVirada(d: { o: number[]; h: number[]; l: number[]; c: number[] }, k0
   }
   return { res: "ok", r: totR, pct: totPct, pernas, fim, esperou: k1 - k0 };
 }
-function virLinha(x: VirSim[]): string {
+function virLinha(x: VirSim[], pernas: number = RUP_PERNAS): string {
   const ok = x.filter((i) => i.res !== "semdados");
   if (!ok.length) return "";
   const dec = ok.filter((i) => i.res === "ok");
   const c = (r: VirSim["res"]) => ok.filter((i) => i.res === r).length;
   const sg = (v: number, nd = 2) => `${v >= 0 ? "+" : ""}${v.toFixed(nd)}`;
-  let t = `  <b>Virada (entra no 1º rompimento; se o stop vier, vira pro outro lado · até ${RUP_PERNAS} pernas)</b>\n`;
+  let t = `  <b>Virada (entra no 1º rompimento; se o stop vier, vira pro outro lado · até ${pernas} ${pernas === 1 ? "perna" : "pernas"})</b>\n`;
   t += `    entrou ${dec.length + c("aberta")} de ${ok.length} · não rompeu em ${RUP_ESPERA} velas ${c("naoentrou")}${c("aberta") ? ` · em aberto ${c("aberta")}` : ""}\n`;
   if (!dec.length) return t + `    sem operação concluída ainda\n`;
   const a = dec.filter((i) => i.fim === "alvo").length, te = dec.filter((i) => i.fim === "tempo").length, st = dec.filter((i) => i.fim === "stop").length;
@@ -3912,7 +3912,8 @@ function rupLinha(nome: string, x: RupSim[], comEspera: boolean): string {
   return t;
 }
 // /radar [dias] — com os alertas de radar JÁ enviados (alertas_log) e as velas seguintes, o que aconteceu depois de cada tipo
-async function runRadarStats(chatId: number | string, dias: number) {
+async function runRadarStats(chatId: number | string, dias: number, opt?: { pernas?: number; alvo?: number }) {
+  const alvoR = opt?.alvo && opt.alvo > 0 ? opt.alvo : RUP_ALVO_R, pernasMax = opt?.pernas && opt.pernas >= 1 ? Math.round(opt.pernas) : RUP_PERNAS; // V77: /radar [dias] pernasX alvoX
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const dd = Math.min(9, Math.max(1, Math.round(dias || 7)));
@@ -3945,12 +3946,12 @@ async function runRadarStats(chatId: number | string, dias: number) {
       const adxA = adxS[k0 - 1], adxAlerta = Number.isFinite(adxA) ? adxA : null;
       const opostoLado: HipLado = lado === "long" ? "short" : "long", maxB = Math.max(1, Math.round((HIP_HORAS * 60) / TF_MIN)); // V77: simulação do rompimento da vela do alerta
       itens.push({ tipo, inst: id, lado, emMs, preco: preco0, conf: r.conf == null ? null : Number(r.conf), ext, adx: adxAlerta, ...hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN),
-        rA: rupRompimento(d, k0, lado, RUP_ESPERA, RUP_ALVO_R, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, RUP_ALVO_R, maxB), rD: rupDireto(d, k0, lado, preco0, RUP_ALVO_R, maxB), rV: rupVirada(d, k0, RUP_ESPERA, RUP_ALVO_R, maxB, RUP_PERNAS) });
+        rA: rupRompimento(d, k0, lado, RUP_ESPERA, alvoR, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, alvoR, maxB), rD: rupDireto(d, k0, lado, preco0, alvoR, maxB), rV: rupVirada(d, k0, RUP_ESPERA, alvoR, maxB, pernasMax) });
     }
   });
   const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
   const sg = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
-  let m = `📡 <b>RADARES — o que aconteceu depois do alerta</b> · ${dd} dia(s)\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
+  let m = `📡 <b>RADARES — o que aconteceu depois do alerta</b> · ${dd} dia(s)${opt?.pernas || opt?.alvo ? ` · 🚪 teste: ${pernasMax} ${pernasMax === 1 ? "perna" : "pernas"} · alvo ${alvoR}R` : ""}\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
   for (const tipo of ["topo", "fundo", "repique"] as HipTipo[]) {
     const g = itens.filter((x) => x.tipo === tipo);
     if (!g.length) continue;
@@ -3964,10 +3965,10 @@ async function runRadarStats(chatId: number | string, dias: number) {
     { // V77: operar só no rompimento da vela do alerta
       const regraA = tipo === "fundo" ? "fundo (LONG) só entra rompendo a MÁXIMA da vela do alerta" : "topo (SHORT) só entra rompendo a MÍNIMA da vela do alerta";
       const regraB = tipo === "fundo" ? "contrária: fundo entra VENDIDO rompendo a mínima" : "contrária: topo entra COMPRADO rompendo a máxima";
-      m += `\n🚪 <b>Só no rompimento da vela do alerta</b> (stop no extremo oposto · alvo ${RUP_ALVO_R}R · espera até ${RUP_ESPERA} velas)\n`;
+      m += `\n🚪 <b>Só no rompimento da vela do alerta</b> (stop no extremo oposto · alvo ${alvoR}R · espera até ${RUP_ESPERA} velas)\n`;
       m += rupLinha(`A) ${regraA}`, g.map((x) => x.rA), true);
       m += rupLinha(`B) ${regraB}`, g.map((x) => x.rB), true);
-      m += virLinha(g.map((x) => x.rV));
+      m += virLinha(g.map((x) => x.rV), pernasMax);
       m += virFatiaAdx(g.map((x) => ({ v: x.rV, adx: x.adx })));
       m += rupLinha("Direto no alerta (mesmo stop, sem esperar rompimento)", g.map((x) => x.rD), false);
     }
@@ -3976,7 +3977,7 @@ async function runRadarStats(chatId: number | string, dias: number) {
   }
   const piores = itens.filter((x) => x.res === "invalida").sort((a, b) => b.mae - a.mae).slice(0, 5);
   if (piores.length) m += `<b>Maiores invalidações</b>\n` + piores.map((x) => `${x.inst.replace("-USDT", "")} ${HIP_NOME[x.tipo]} ${fm(x.emMs)} → ${x.mae.toFixed(1)}% contra em ${(x.barras * TF_MIN / 60).toFixed(1)}h`).join("\n") + "\n\n";
-  m += `<i>🚪 R = distância da entrada até o stop; alvo/stop na mesma vela conta stop (pior caso). "Direto" usa a máxima/mínima final da vela do alerta como stop, então o risco dele tem outra base: compare pela média em % de preço também. Virada: o resultado é a soma de todas as pernas. Ajustes: RADAR_ENTRADA_VELAS (8), RADAR_ALVO_R (2), RADAR_VIRADA_PERNAS (3).</i>\n\n` + `<i>Esticada = variacao do preco em 24h ate o alerta; ADX medido na vela anterior ao alerta. Só alertas com vela e ATR disponíveis (até 9 dias). Aviso ao vivo: HIP_ON (1), limites HIP_INV_ATR/HIP_INV_PCT/HIP_ALVO_ATR/HIP_ALVO_PCT, prazo HIP_HORAS.</i>`;
+  m += `<i>🚪 R = distância da entrada até o stop; alvo/stop na mesma vela conta stop (pior caso). "Direto" usa a máxima/mínima final da vela do alerta como stop, então o risco dele tem outra base: compare pela média em % de preço também. Virada: o resultado é a soma de todas as pernas. Teste sem mexer nos secrets: /radar 9 pernas2 alvo3. Padrões: RADAR_ENTRADA_VELAS (8), RADAR_ALVO_R (2), RADAR_VIRADA_PERNAS (3).</i>\n\n` + `<i>Esticada = variacao do preco em 24h ate o alerta; ADX medido na vela anterior ao alerta. Só alertas com vela e ATR disponíveis (até 9 dias). Aviso ao vivo: HIP_ON (1), limites HIP_INV_ATR/HIP_INV_PCT/HIP_ALVO_ATR/HIP_ALVO_PCT, prazo HIP_HORAS.</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
 async function runDiv(chatId: number | string) {
@@ -7984,7 +7985,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
     ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
-    ["📡 /radar 7", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
+    ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
     ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET"],
     ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
     ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso. /div diag mostra por que avisou ou não (regra a regra, com 15m pra comparar com o TradingView)"],
@@ -8291,8 +8292,22 @@ Deno.serve(async (req) => {
       return new Response("ok");
     }
     if (text === "/radar" || text.startsWith("/radar ") || text.startsWith("/radar@")) {
-      const dR = Math.min(9, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
-      await comAguarde("📡 Conferindo o que aconteceu depois dos alertas de radar, aguarde...", () => runRadarStats(chatId, dR));
+      // V77: /radar [dias] [pernasN] [alvoN] — ex.: /radar 9 pernas2 alvo3 (ordem livre; alvo aceita decimal: alvo1.5 ou alvo1,5)
+      const argsR = text.split(/\s+/).slice(1);
+      let dRn: number | undefined, pernasR: number | undefined, alvoRn: number | undefined, argInval = "";
+      for (const a of argsR) {
+        const mp = a.match(/^pernas?[=:]?(\d+)$/i), ma = a.match(/^alvo[=:]?(\d+(?:[.,]\d+)?)$/i);
+        if (mp) pernasR = Number(mp[1]);
+        else if (ma) alvoRn = Number(ma[1].replace(",", "."));
+        else if (/^\d+$/.test(a) && dRn === undefined) dRn = Number(a);
+        else if (a) argInval = a;
+      }
+      if (argInval || (pernasR !== undefined && (pernasR < 1 || pernasR > 6)) || (alvoRn !== undefined && (!(alvoRn >= 0.5) || alvoRn > 10))) {
+        await sendTelegram(chatId, `⚠️ Não entendi${argInval ? ` "${argInval.slice(0, 20)}"` : ""}. Use: /radar [dias] [pernasN] [alvoN]\nExemplos: /radar 9 pernas2 alvo3 · /radar pernas1 · /radar 7 alvo1.5\nPernas: 1 a 6 · alvo: 0.5 a 10 (em R).`);
+        return new Response("ok");
+      }
+      const dR = Math.min(9, Math.max(1, Math.round(dRn || 7)));
+      await comAguarde("📡 Conferindo o que aconteceu depois dos alertas de radar, aguarde...", () => runRadarStats(chatId, dR, { pernas: pernasR, alvo: alvoRn }));
       return new Response("ok");
     }
     if (text === "/trades" || text.startsWith("/trades ") || text.startsWith("/trades@")) {
