@@ -1,4 +1,4 @@
-// telegram-bot V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -5012,9 +5012,61 @@ async function runCompressaoBase(chatId: number | string) {
     const pesos = grupos.map(([, g]) => { const ids = new Set(g.map((x) => x.id)); return mesmas.filter((r) => ids.has(r.instid)).length; });
     if (totAl > 0) m += `\n<i>Onde ficam os alertas: ${grupos.map(([n], i) => `${n.replace(/^\S+ /, "")} ${pc(pesos[i], totAl)}%`).join(" · ")} (o ideal pra uma comparação justa seria 33% em cada).</i>\n`;
   }
+  // V90: simulação do filtro COMPRESS_AMP_MIN_PCT com os alertas que já existem (amplitude medida nas mesmas velas, então tem um pouco de "visão do futuro": serve de ordem de grandeza)
+  if (porMoedaVol.length >= 9 && mesmas.length >= 30) {
+    m += `\n${MINI_DIVISOR}\n<b>Simulação do filtro de amplitude</b>\n${MINI_DIVISOR}\n<i>Se o bot só mandasse compressão de moeda com amplitude de 24h ≥ X (COMPRESS_AMP_MIN_PCT):</i>\n`;
+    m += `• sem filtro: ${mesmas.length} alertas · ${pc(pctG(mesmas).length, mesmas.length)}% andaram ${COMPRESS_ROMPE_PCT}%+ · limpo ${pc(pctL(mesmas).length, mesmas.length)}%\n`;
+    for (const T of [5, 6, 7, 8, 10]) {
+      const ids = new Set(porMoedaVol.filter((x) => x.vol >= T).map((x) => x.id));
+      const al = mesmas.filter((r) => ids.has(r.instid));
+      if (al.length < 15) { m += `• ≥ ${T}%: poucos alertas (${al.length})\n`; continue; }
+      m += `• ≥ ${T}%: ${al.length} alertas (${pc(al.length, mesmas.length)}% do total) · ${pc(pctG(al).length, al.length)}% andaram ${COMPRESS_ROMPE_PCT}%+ · limpo ${pc(pctL(al).length, al.length)}% · ${ids.size} moedas\n`;
+    }
+    m += `<i>Um alerta de moeda volátil andar 5%+ não prova que o SINAL é bom — só que a moeda se mexe. Pro robô, que quer moeda em movimento, isso já vale.</i>\n`;
+  }
   const dif = qOk ? cG - quietaG : cG - baseG, refNome = qOk ? "uma moeda quieta qualquer (sem alerta)" : "essas moedas em qualquer hora";
   m += `\n<b>Leitura (contra ${refNome}):</b> ${Math.abs(dif) < 5 ? `a compressão do bot anda praticamente o MESMO que ${refNome}: o alerta não está separando o que vai se mexer do que não vai — o filtro de confiança e de volume não acrescenta nada visível.` : dif > 0 ? `depois do alerta a moeda anda ${dif} pontos a MAIS que ${refNome}: o alerta (confiança e volume) acrescenta valor sobre só achar faixa comprimida.` : `depois do alerta a moeda anda ${-dif} pontos a MENOS que ${refNome}: o alerta não só não ajuda como parece pegar casos piores que a calmaria comum.`}\n`;
   m += `<i>Cuidado: janelas de hora em hora se sobrepõem (não são independentes), a base só cobre ~${diasJ} dias de velas e a lista é das moedas que já tiveram alerta. Serve de ordem de grandeza, não de prova.</i>`;
+  for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
+}
+// V91: /radarconf [dias] — radar de TOPO e de FUNDO por nota de confiança (cada nota separada + faixas baixa/média/alta), pra ver se nota maior acerta mais.
+// Mesma régua do /placar: acerto = preço a favor do lado do robô na hora do alerta (topo = SHORT, fundo = LONG), % = retorno mediano já com taxa.
+async function runRadarConf(chatId: number | string, dias: number) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const desde = new Date(Date.now() - dias * 86400000).toISOString();
+  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
+  const todas = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && !String(r.status || "").includes("REPIQUE"));
+  const rets = (g: any[], h: number) => g.map((r) => retornoLog(r, h)).filter((x): x is number => x !== null);
+  const bloco = (nome: string, g: any[]) => {
+    const r4 = rets(g, 240), pf = _profitFactor(r4);
+    return `<b>${nome}</b> (n=${g.length})\n${linhaStats(g)}${r4.length >= 5 && isFinite(pf) ? ` · PF 4h ${pf.toFixed(2)}` : ""}${g.length < 15 ? "\n<i>amostra pequena</i>" : ""}\n\n`;
+  };
+  let m = `🎯 <b>RADAR POR CONFIANÇA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n<i>Colunas: 1h · 4h · 24h. Acerto = preço a favor do lado do robô (topo = SHORT, fundo = LONG) desde o alerta; % = retorno mediano com taxa.</i>\n\n`;
+  for (const [tipo, titulo] of [["topo", "🔴 RADAR DE TOPO"], ["fundo", "🟢 RADAR DE FUNDO"]] as [string, string][]) {
+    const g = todas.filter((r) => r.tipo === tipo && r.conf != null);
+    if (!g.length) { m += `${titulo}: sem alertas com confiança gravada.\n\n`; continue; }
+    m += `${MINI_DIVISOR}\n<b>${titulo}</b> — ${g.length} alertas\n${MINI_DIVISOR}\n\n`;
+    const niveis = [...new Set(g.map((r) => Number(r.conf)))].sort((a, b) => a - b);
+    for (const n of niveis) m += bloco(`Confiança ${n}/10`, g.filter((r) => Number(r.conf) === n));
+    const faixas: [string, (n: number) => boolean][] = [["⬇️ baixa (≤ 4)", (n) => n <= 4], ["➖ média (5–6)", (n) => n >= 5 && n <= 6], ["⬆️ alta (≥ 7)", (n) => n >= 7]];
+    m += `<b>Resumo por faixa</b>\n`;
+    const resumo: { nome: string; n: number; med: number }[] = [];
+    for (const [nome, f] of faixas) {
+      const gg = g.filter((r) => f(Number(r.conf)));
+      if (!gg.length) continue;
+      m += `${bloco(nome, gg)}`;
+      const r24 = rets(gg, 1440);
+      if (r24.length >= 15) resumo.push({ nome, n: r24.length, med: _med(r24) });
+    }
+    if (resumo.length >= 2) {
+      resumo.sort((a, b) => b.med - a.med);
+      m += `🏆 <b>Melhor em 24h (15+ conferidos):</b> ${resumo[0].nome} (${_sg(resumo[0].med)}, n=${resumo[0].n}) · pior ${resumo[resumo.length - 1].nome} (${_sg(resumo[resumo.length - 1].med)}, n=${resumo[resumo.length - 1].n})\n`;
+    }
+    m += `\n`;
+  }
+  m += `<i>Cuidado: cada nota isolada tem poucos alertas; olhe o resumo por faixa e espere o n crescer antes de mudar o corte de confiança do radar. Uso: /radarconf 30</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
 async function runPlacar(chatId: number | string, dias: number) {
@@ -8487,6 +8539,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   ]);
 
   sec("📊 Resultados", [
+    ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
     ["🗜️ /compressao 30", "compressão por faixa de confiança, ADX e lado", "mostra, só pra compressão, qual faixa de confiança (6, 7, 8, 9–10), de ADX e de lado rende melhor (acerto e retorno mediano em 1h, 4h e 24h) — pra decidir se vale subir o COMPRESS_CONF_MIN. O número é a quantidade de dias"],
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
@@ -8855,6 +8908,11 @@ Deno.serve(async (req) => {
       if (cfg && !(cfg.trava > 0 && cfg.cb > 0)) { await sendTelegram(chatId, "⚠️ Trava e callback precisam ser maiores que zero. Ex.: /saida 9 QNT 5/3.5"); return new Response("ok"); }
       const filtro = tudo || !SAIDA_FILTRO_PADRAO ? null : { mov: SAIDA_MOV_PADRAO, adx: SAIDA_ADX_PADRAO, subindo: SAIDA_ADX_SUBINDO };
       await comAguarde("🚪 Simulando a saída real, aguarde...", () => runSaida(chatId, dias, { moeda, cfg: cfg ?? SAIDA_CFG_PADRAO, filtro }));
+      return new Response("ok");
+    }
+    if (text === "/radarconf" || text.startsWith("/radarconf ") || text.startsWith("/radarconf@")) {
+      const diasR = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 30)));
+      await rodarEmBackground(runRadarConf(chatId, diasR));
       return new Response("ok");
     }
     if (text === "/compressao" || text.startsWith("/compressao ") || text.startsWith("/compressao@") || text === "/comp" || text.startsWith("/comp ")) {
