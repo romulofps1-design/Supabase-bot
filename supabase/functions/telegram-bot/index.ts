@@ -1,4 +1,4 @@
-// telegram-bot V94 (V93 + /radarconf retro fundo: o mesmo teste retroativo pro radar de fundo) · V93 (V92 + colunas de 15 min no /radarconf, no /compressao e no /radarconf retro) · V92 (V91 + /radarconf retro: refaz a nota do radar de topo com as velas e compara 2/10..5/10 sem esperar alerta novo) · V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V96 (V95 + radar de topo e de fundo: "nota subiu" fura o cooldown (RADAR_UPGRADE_DELTA=2, RADAR_UPGRADE_GAP_MIN=30) — 2º alerta marcado ⬆️ quando a nota sobe 2+ pontos desde o último alerta da moeda) · V95 (V94 + filtro opcional COMPRESS_PCT24_MIN (movimento mínimo no dia pra mandar compressão; 0 = desligado)) · V94 (V93 + /radarconf retro fundo: o mesmo teste retroativo pro radar de fundo) · V93 (V92 + colunas de 15 min no /radarconf, no /compressao e no /radarconf retro) · V92 (V91 + /radarconf retro: refaz a nota do radar de topo com as velas e compara 2/10..5/10 sem esperar alerta novo) · V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -291,6 +291,11 @@ const TOPO_TOQUE_VALE_MIN = numEnv("TOPO_TOQUE_VALE_MIN", String(TOPO_ALTA_MIN))
 const REPIQUE_MOV_ANTES_MIN = numEnv("REPIQUE_MOV_ANTES_MIN", String(Math.min(FUNDO_QUEDA_MIN, TOPO_ALTA_MIN)));
 const REPIQUE_LADO_ATR = numEnv("REPIQUE_LADO_ATR", "1");
 const TOPO_COOLDOWN_MIN = numEnv("TOPO_COOLDOWN_MIN", "240");
+// V96: "nota subiu" fura o cooldown. Antes, qualquer alerta do radar (topo/fundo) bloqueava a moeda por TOPO/FUNDO_COOLDOWN_MIN mesmo que a nota subisse de 3 pra 5/10 logo depois
+// (só aparecia na lista do /topo e /fundo). Agora, se a nota subir RADAR_UPGRADE_DELTA pontos ou mais desde o último alerta da moeda, sai um 2º alerta marcado "⬆️ NOTA SUBIU",
+// respeitando um intervalo mínimo de RADAR_UPGRADE_GAP_MIN minutos desde o alerta anterior. RADAR_UPGRADE_DELTA = 0 desliga.
+const RADAR_UPGRADE_DELTA = numEnv("RADAR_UPGRADE_DELTA", "2");
+const RADAR_UPGRADE_GAP_MIN = numEnv("RADAR_UPGRADE_GAP_MIN", "30");
 const TOPO_MAX_POR_RODADA = numEnv("TOPO_MAX_POR_RODADA", "2");
 // V74: quantas candidatas (já ordenadas por força) os radares de fundo/topo/compressão olham por rodada. O cooldown é checado DENTRO do laço, então
 // com janela de 8 (ou 6) as mesmas moedas fortes, em cooldown, bloqueavam as seguintes. O limite por rodada (*_MAX_POR_RODADA) continua mandando no spam.
@@ -315,6 +320,9 @@ const COMPRESS_ROMPE_PCT = numEnv("COMPRESS_ROMPE_PCT", "5");
 // COMPRESS_AMP_MIN_PCT = 0 (padrão) NÃO filtra nada: só grava a amplitude de cada alerta. Ex.: 7 manda alerta só de moeda com amplitude de 24h ≥ 7%.
 const COMPRESS_AMP_MIN_PCT = numEnv("COMPRESS_AMP_MIN_PCT", "0");
 const COMPRESS_AMP_VELAS = numEnv("COMPRESS_AMP_VELAS", "480");
+// V95: movimento mínimo da moeda no dia (|variação 24h| na hora do alerta) pra mandar compressão. 0 (padrão) = não filtra. Ex.: 3 corta a compressão de moeda parada (< 3% no dia).
+// Diferente da amplitude acima, esse número é conhecido NA HORA do alerta (sem "visão do futuro"), então a medição do /compressao por movimento do dia é honesta.
+const COMPRESS_PCT24_MIN = numEnv("COMPRESS_PCT24_MIN", "0");
 const COMPRESS_LIMPO_PCT = numEnv("COMPRESS_LIMPO_PCT", "2.5");
 const COMPRESS_MAX_POR_RODADA = numEnv("COMPRESS_MAX_POR_RODADA", "2");
 const COMPRESS_ROT_N = numEnv("COMPRESS_ROT_N", "25");
@@ -1528,7 +1536,12 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     if (ehRep ? enviadosRep >= REPIQUE_MAX_POR_RODADA : enviados >= FUNDO_MAX_POR_RODADA) continue;
     const inst = c.info.instId;
     const row = rowsMap.get("_FUNDO_" + inst);
-    if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < (ehRep ? REPIQUE_COOLDOWN_MIN : FUNDO_COOLDOWN_MIN) * 60000) continue;
+    let subidaDe: number | null = null; // V96: nota anterior, quando este é um alerta de "nota subiu" dentro do cooldown
+    if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < (ehRep ? REPIQUE_COOLDOWN_MIN : FUNDO_COOLDOWN_MIN) * 60000) {
+      const prevC = parseUltimaConf(row?.last_status), idadeMin = (agora - new Date(row.last_alert_at).getTime()) / 60000;
+      if (RADAR_UPGRADE_DELTA <= 0 || prevC === null || idadeMin < RADAR_UPGRADE_GAP_MIN || (c.info.bottom!.conf ?? 0) < prevC + RADAR_UPGRADE_DELTA - 2) continue;
+      subidaDe = prevC;
+    }
     // Auditoria (achado #18, mesmo em radarTopo/radarCompressao): _fundoAvaliado marcava a moeda como "já
     // avaliada nesta vela" ANTES de saber se o envio ia ser confirmado — undermineava o "não vou queimar o
     // cooldown" logo abaixo: o cooldown ficava livre pra tentar de novo, mas esse guard de "1x por vela"
@@ -1537,10 +1550,11 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     // no caso de falha de envio, não marca, pra tentar de novo no próximo ciclo.
     if (_fundoAvaliado.get(inst) === ckVela) continue;
     const [fin, vivo] = await Promise.all([fundoFinal(c.info.bottom!, inst), precoAoVivo(inst)]);
+    if (subidaDe !== null && fin.conf < subidaDe + RADAR_UPGRADE_DELTA) { _fundoAvaliado.set(inst, ckVela); continue; }
     const minConf = fin.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : FUNDO_CONF_MIN;
     if (fin.conf < minConf) { _fundoAvaliado.set(inst, ckVela); console.log(`🟢 radar: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "faca caindo" : "sinais insuficientes"})`); continue; }
     const seta = setaTxt(row?.last_status, fin.conf);
-    const msg = msgFundo(c.info, c.pct, c.queda, fin, vivo, seta);
+    const msg = (subidaDe !== null ? `⬆️ <b>NOTA SUBIU</b> ${subidaDe}/10 → ${fin.conf}/10 (2º alerta da mesma moeda)\n\n` : "") + msgFundo(c.info, c.pct, c.queda, fin, vivo, seta);
     const ids = await Promise.all(ativos.map(async (ch) => {
       const atrRadar = typeof (c.info as any).atr === "number" ? (c.info as any).atr : 0;
       let extra = "";
@@ -1554,7 +1568,7 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     await registrarAlertaFundo(SB, c.info, c.pct, fin.conf, !!fin.repique);
     await upsertLinha(SB, "_FUNDO_" + inst, { last_status: `${fin.conf}/10`, last_alert_at: new Date().toISOString() });
     if (ehRep) enviadosRep++; else enviados++;
-    console.log(`🟢 radar de fundo enviado: ${inst} ${fin.conf}/10${ehRep ? " ⭐ repique" : ""}`);
+    console.log(`🟢 radar de fundo enviado: ${inst} ${fin.conf}/10${ehRep ? " ⭐ repique" : ""}${subidaDe !== null ? ` (nota subiu de ${subidaDe})` : ""}`);
   }
 }
 async function runFundo(chatId: number | string) {
@@ -1751,14 +1765,20 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
     if (ehRep ? enviadosRep >= REPIQUE_MAX_POR_RODADA : enviados >= TOPO_MAX_POR_RODADA) continue;
     const inst = c.info.instId;
     const row = rowsMap.get("_TOPO_" + inst);
-    if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < (ehRep ? REPIQUE_COOLDOWN_MIN : TOPO_COOLDOWN_MIN) * 60000) continue;
+    let subidaDe: number | null = null; // V96: nota anterior, quando este é um alerta de "nota subiu" dentro do cooldown
+    if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < (ehRep ? REPIQUE_COOLDOWN_MIN : TOPO_COOLDOWN_MIN) * 60000) {
+      const prevC = parseUltimaConf(row?.last_status), idadeMin = (agora - new Date(row.last_alert_at).getTime()) / 60000;
+      if (RADAR_UPGRADE_DELTA <= 0 || prevC === null || idadeMin < RADAR_UPGRADE_GAP_MIN || (c.info.top!.conf ?? 0) < prevC + RADAR_UPGRADE_DELTA - 2) continue;
+      subidaDe = prevC;
+    }
     // Auditoria (achado #18, mesmo bug em radarFundo/radarCompressao): ver comentário lá.
     if (_fundoAvaliado.get("topo|" + inst) === ckVela) continue;
     const [fin, vivo] = await Promise.all([topoFinal(c.info.top!, inst), precoAoVivo(inst)]);
+    if (subidaDe !== null && fin.conf < subidaDe + RADAR_UPGRADE_DELTA) { _fundoAvaliado.set("topo|" + inst, ckVela); continue; }
     const minConf = fin.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : TOPO_CONF_MIN;
     if (fin.conf < minConf) { _fundoAvaliado.set("topo|" + inst, ckVela); console.log(`🔴 radar de topo: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "foguete" : "sinais insuficientes"})`); continue; }
     const seta = setaTxt(row?.last_status, fin.conf);
-    const msg = msgTopo(c.info, c.pct, c.alta, fin, vivo, seta);
+    const msg = (subidaDe !== null ? `⬆️ <b>NOTA SUBIU</b> ${subidaDe}/10 → ${fin.conf}/10 (2º alerta da mesma moeda)\n\n` : "") + msgTopo(c.info, c.pct, c.alta, fin, vivo, seta);
     const ids = await Promise.all(ativos.map(async (ch) => {
       const atrRadar = typeof (c.info as any).atr === "number" ? (c.info as any).atr : 0;
       let extra = "";
@@ -1772,7 +1792,7 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
     await registrarAlertaTopo(SB, c.info, c.pct, fin.conf, !!fin.repique);
     await upsertLinha(SB, "_TOPO_" + inst, { last_status: `${fin.conf}/10`, last_alert_at: new Date().toISOString() });
     if (ehRep) enviadosRep++; else enviados++;
-    console.log(`🔴 radar de topo enviado: ${inst} ${fin.conf}/10${ehRep ? " ⭐ repique" : ""}`);
+    console.log(`🔴 radar de topo enviado: ${inst} ${fin.conf}/10${ehRep ? " ⭐ repique" : ""}${subidaDe !== null ? ` (nota subiu de ${subidaDe})` : ""}`);
   }
 }
 async function runTopo(chatId: number | string) {
@@ -1945,6 +1965,12 @@ async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: st
     if (row?.last_alert_at && agora - new Date(row.last_alert_at).getTime() < COMPRESS_COOLDOWN_MIN * 60000) continue;
     // Auditoria (achado #18, mesmo bug em radarFundo/radarTopo): ver comentário lá.
     if (_fundoAvaliado.get("comp|" + inst) === ckVela) continue;
+    // V95: moeda parada no dia não gera compressão quando COMPRESS_PCT24_MIN > 0.
+    if (COMPRESS_PCT24_MIN > 0 && Math.abs(c.pct) < COMPRESS_PCT24_MIN) {
+      console.log(`🗜️ ${inst}: compressão ${c.res.conf}/10 ignorada — |24h| ${Math.abs(c.pct).toFixed(1)}% < ${COMPRESS_PCT24_MIN}%`);
+      _fundoAvaliado.set("comp|" + inst, ckVela);
+      continue;
+    }
     // V90: volatilidade da moeda. Com COMPRESS_AMP_MIN_PCT > 0, moeda menos volátil que isso não gera alerta (amplitude desconhecida deixa passar).
     const amp = await amplitude24h(inst);
     if (COMPRESS_AMP_MIN_PCT > 0 && amp !== null && amp < COMPRESS_AMP_MIN_PCT) {
