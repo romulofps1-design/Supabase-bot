@@ -1,6 +1,6 @@
 // telegram-bot V107 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX; placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
+// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX; /radarsim cruz (ligo no alerta, o robô entra, desligo e sigo com stop: uma operação por alerta, sem virar); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const BOT_VERSAO = "V107"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
@@ -6097,34 +6097,40 @@ function simSegurar(d: XVelas, kIni: number, lado: HipLado, entrada: number, atr
   }
   return fecha(d.c[kFim], "prazo");
 }
-async function runRadarSim(chatId: number | string, dias: number, soRegra: boolean, cfg: SimCfg, horas: number[], porBtc: { ent: "direto" | "romp"; por?: "btc" | "mov" } | null = null) {
+async function runRadarSim(chatId: number | string, dias: number, soRegra: boolean, cfg: SimCfg, horas: number[], porBtc: { ent: "direto" | "romp"; por?: "btc" | "mov" } | null = null, cruz = false) {
+  // V107: cruz = em vez dos radares, os alertas do CRUZAMENTO (oportunidade, reversão, compressão), entrando no MESMO preço em que o robô entrou
+  // (fechamento da vela do cruzamento) e saindo pelo stop/alvo/prazo escolhido: mede "ligo no alerta, o robô entra, desligo e sigo com stop manual".
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const dd = Math.min(9, Math.max(1, Math.round(dias || 9)));
-  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(Date.now() - dd * 86400000).toISOString()).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(Date.now() - dd * 86400000).toISOString()).in("tipo", cruz ? ["oportunidade", "reversao", "compressao"] : ["topo", "fundo"]).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
-  const rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em && !ehFinalLog(r) && !ehDescartadoLog(r));
-  if (!rows.length) { await sendTelegram(chatId, `🧪 <b>SIMULAÇÃO DOS RADARES</b>\n\nNenhum alerta de radar nos últimos ${dd} dia(s).`); return; }
+  // cruz: só o que o robô de fato entrou (ent_status 'entrou'); o alerta dos minutos finais conta (o repetido do mesmo cruzamento já sai pelo ehDescartadoLog)
+  const rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em && !ehDescartadoLog(r) && (cruz ? r.ent_status === "entrou" && !!r.ent_em : !ehFinalLog(r)));
+  if (!rows.length) { await sendTelegram(chatId, cruz ? `🧪 <b>SIMULAÇÃO DO CRUZAMENTO</b>\n\nNenhuma entrada conferida nos últimos ${dd} dia(s).` : `🧪 <b>SIMULAÇÃO DOS RADARES</b>\n\nNenhum alerta de radar nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
   const chave = (ent: string, h: number) => `${ent}|${h}`;
-  type Item = { tipo: HipTipo; res: Map<string, SimRes>; naoEntrou: number; btc: RegimeBtc | null; mov: number | null };
+  type Item = { tipo: string; fresco: boolean; res: Map<string, SimRes>; naoEntrou: number; btc: RegimeBtc | null; mov: number | null };
   const itens: Item[] = [];
   let foraRegra = 0;
   const regimeBtc = porBtc && porBtc.por !== "mov" ? await btcRegimeFn() : () => null; // V107: só busca o BTC quando pedido (/radarsim ... btc)
   await emLotes([...porMoeda.keys()], 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
     if (!d) return;
-    const adxS = soRegra ? xAdxSerie(d.h, d.l, d.c, 14) : [];
+    const adxS = soRegra && !cruz ? xAdxSerie(d.h, d.l, d.c, 14) : [];
     for (const r of porMoeda.get(id)!) {
       const emMs = new Date(r.criado_em).getTime();
       let k0 = -1;
-      for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= emMs && emMs < d.t[i] + TFMS) { k0 = i; break; } }
+      if (cruz) { // vela do cruzamento: a que FECHA em ent_em
+        const entMs = new Date(r.ent_em).getTime();
+        for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] < entMs && entMs <= d.t[i] + TFMS) { k0 = i; break; } }
+      } else for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= emMs && emMs < d.t[i] + TFMS) { k0 = i; break; } }
       if (k0 < 20 || k0 >= d.c.length - 1) continue;
-      const tipo: HipTipo = String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
+      const tipo: string = cruz ? String(r.tipo) : String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
       const lado: HipLado = r.lado === "long" ? "long" : "short";
-      if (soRegra) {
+      if (soRegra && !cruz) {
         const a = adxS[k0 - 1];
         const ok = !Number.isFinite(a) ? true
           : tipo === "repique" ? !(REPIQUE_ADX_MIN > 0) || a >= REPIQUE_ADX_MIN
@@ -6147,7 +6153,7 @@ async function runRadarSim(chatId: number | string, dias: number, soRegra: boole
         res.set(chave("direto", h), simSegurar(d, k0 + 1, lado, Number(r.preco), atr, barras, cfg, false));
         res.set(chave("romp", h), kR > 0 ? simSegurar(d, kR + 1, lado, pxR, atr, barras, cfg, true) : null);
       }
-      itens.push({ tipo, res, naoEntrou: kR > 0 ? 0 : cancelou || k0 + RUP_ESPERA <= d.c.length - 1 ? 1 : 0, btc: regimeBtc(emMs), mov: r.pct24 != null && isFinite(Number(r.pct24)) ? Math.abs(Number(r.pct24)) : null });
+      itens.push({ tipo, fresco: r.fresco === true, res, naoEntrou: kR > 0 ? 0 : cancelou || k0 + RUP_ESPERA <= d.c.length - 1 ? 1 : 0, btc: regimeBtc(emMs), mov: r.pct24 != null && isFinite(Number(r.pct24)) ? Math.abs(Number(r.pct24)) : null });
     }
   });
   if (!itens.length) { await sendTelegram(chatId, "🧪 <b>SIMULAÇÃO DOS RADARES</b>\n\nNão consegui as velas dos alertas. Tente de novo em alguns minutos."); return; }
@@ -6188,16 +6194,24 @@ async function runRadarSim(chatId: number | string, dias: number, soRegra: boole
     return t + "\n";
   };
   const cfgTxt = `${cfg.stopAtr > 0 ? `stop ${cfg.stopAtr} ATR` : "sem stop"} · ${cfg.alvoR > 0 ? `alvo ${cfg.alvoR}R` : "sem alvo"} · prazo ${horas.map(hTxt).join("/")}`;
-  let m = `🧪 <b>SIMULAÇÃO: OPERAR SÓ PELOS RADARES</b> — ${dd} dia(s)${soRegra ? " · só o que passa no ADX das regras atuais" : ""}${porBtc ? (porBtc.por === "mov" ? " · por movimento da moeda no dia" : " · por humor do BTC") : ""}\n<b>${cfgTxt}</b> (velas de 15m)\n${DIVISOR}\n`;
+  let m = cruz ? `🧪 <b>SIMULAÇÃO: LIGO NO ALERTA, O ROBÔ ENTRA, DESLIGO E SIGO COM STOP</b> — ${dd} dia(s)${porBtc ? (porBtc.por === "mov" ? " · por movimento da moeda no dia" : " · por humor do BTC") : ""}\n<b>${cfgTxt}</b> (velas de 15m)\n${DIVISOR}\n<i>Entrada = preço em que o robô entrou (fechamento da vela do cruzamento), uma operação por alerta, SEM virar. "Direto" = a partir daí; "rompimento" = só se a vela seguinte romper o extremo da vela do cruzamento.</i>\n` : `🧪 <b>SIMULAÇÃO: OPERAR SÓ PELOS RADARES</b> — ${dd} dia(s)${soRegra ? " · só o que passa no ADX das regras atuais" : ""}${porBtc ? (porBtc.por === "mov" ? " · por movimento da moeda no dia" : " · por humor do BTC") : ""}\n<b>${cfgTxt}</b> (velas de 15m)\n${DIVISOR}\n`;
   if (porBtc && porBtc.por !== "mov") m += `<i>Humor do BTC = variação nas 24h até a vela anterior ao alerta: subindo ≥ +${REGIME_BTC_PCT}% · caindo ≤ −${REGIME_BTC_PCT}% · resto = de lado (REGIME_BTC_PCT).</i>\n`;
   m += `<i>Mesma régua do /saida: 1R = 1×ATR do 15m na entrada, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada, sem funding. Sai no stop, no alvo ou no prazo, o que vier primeiro; stop e alvo na mesma vela = stop (pior caso). "Contra máx." = quanto o preço andou contra (em % do preço, sem alavancagem) antes de sair: multiplique pela alavancagem pra ver o tamanho do susto. ± = margem de erro do acerto.</i>\n`;
-  if (soRegra) m += `<i>${foraRegra} alerta(s) ficaram de fora por ADX (topo &lt; ${TOPO_ADX_MAX} · fundo &lt; ${FUNDO_ADX_MAX} · repique ≥ ${REPIQUE_ADX_MIN}); o DI não entra no filtro.</i>\n`;
+  if (soRegra && !cruz) m += `<i>${foraRegra} alerta(s) ficaram de fora por ADX (topo &lt; ${TOPO_ADX_MAX} · fundo &lt; ${FUNDO_ADX_MAX} · repique ≥ ${REPIQUE_ADX_MIN}); o DI não entra no filtro.</i>\n`;
   m += "\n";
-  m += bloco("🔴 Topo (SHORT)", itens.filter((i) => i.tipo === "topo"));
-  m += bloco("🟢 Fundo (LONG)", itens.filter((i) => i.tipo === "fundo"));
-  m += bloco("⭐ Repique", itens.filter((i) => i.tipo === "repique"));
-  m += bloco("📡 Todos os radares", itens);
-  m += `<i>Os alertas entram em sequência, sem limite de posições nem de capital. Prazo ainda não terminado = fora da conta. Ex.: /radarsim 9 regra stop1 alvo2 horas 1,2,4 · /radarsim 9 stop3 horas 4,8,24 · stop0 = sem stop · alvo0 = sem alvo · btc = separa pelo humor do BTC · mov = separa pelo movimento da moeda no dia (com "romp", no rompimento). Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h.</i>`;
+  if (cruz) {
+    m += bloco("🚀 Oportunidade", itens.filter((i) => i.tipo === "oportunidade"));
+    m += bloco("🔄 Reversão", itens.filter((i) => i.tipo === "reversao"));
+    m += bloco("🆕 Oportunidade + reversão, só cruzou agora", itens.filter((i) => i.tipo !== "compressao" && i.fresco));
+    m += bloco("🗜️ Compressão", itens.filter((i) => i.tipo === "compressao"));
+    m += bloco("📊 Oportunidade + reversão", itens.filter((i) => i.tipo !== "compressao"));
+  } else {
+    m += bloco("🔴 Topo (SHORT)", itens.filter((i) => i.tipo === "topo"));
+    m += bloco("🟢 Fundo (LONG)", itens.filter((i) => i.tipo === "fundo"));
+    m += bloco("⭐ Repique", itens.filter((i) => i.tipo === "repique"));
+    m += bloco("📡 Todos os radares", itens);
+  }
+  m += `<i>Os alertas entram em sequência, sem limite de posições nem de capital. Prazo ainda não terminado = fora da conta. Ex.: /radarsim 9 regra stop1 alvo2 horas 1,2,4 · /radarsim 9 stop3 horas 4,8,24 · stop0 = sem stop · alvo0 = sem alvo · btc = separa pelo humor do BTC · mov = separa pelo movimento da moeda no dia (com "romp", no rompimento) · cruz = alertas do cruzamento (ligo no alerta, o robô entra, desligo e sigo com stop). Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h.</i>`;
   await enviarEmPartes(chatId, m);
 }
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
@@ -9803,7 +9817,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
     ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
     ["💧 /volconf 7", "resultado por volume (USDT x unidades) + sombra abaixo do filtro", "mostra, pros radares (topo, fundo, repique) e pros alertas de oportunidade/reversão, quanto funcionou e quanto foi invalidado: (A) só o que passa no filtro de volume (FILTRO_VOL_MIN_USDT), (B) sem filtro, incluindo a 🌑 sombra gravada abaixo dele, (C) por faixa de volume em USDT, (D) por quartis de volume em unidades da moeda e (E) os dois filtros juntos. No fim diz quantos pontos o USDT e as unidades separam. ⚠️ = menos de 8 alertas. Só os últimos 9 dias (usa as velas). Os alertas de antes da V106 não têm volume."],
-    ["🧪 /radarsim 9 regra stop1 alvo2 horas 1,2,4", "operar só pelos radares (stop, alvo e prazo à escolha)", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta) e sair no stop (stopX = X ATR do 15m; stop0 = sem stop), no alvo (alvoX = X R; alvo0 = sem alvo) ou no prazo (horas 1,2,4), o que vier primeiro. Mostra acerto, média em R, PF, sem os 3 melhores, o pior trade e quanto o preço andou contra antes de sair. Mesma régua do /saida, pra comparar com o robô no cruzamento. regra = só os alertas que passariam no ADX das regras atuais. btc = separa pelo humor do BTC na hora do alerta (subindo, caindo, de lado); mov = separa pelo movimento da moeda no dia (|24h|: abaixo de 8%, 8 a 15%, 15 a 25%, 25% ou mais); com romp, usa a entrada no rompimento. Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h. Padrões: stop SAIDA_STOP_ATR, sem alvo, horas RADARSIM_HORAS."],
+    ["🧪 /radarsim 9 regra stop1 alvo2 horas 1,2,4", "operar só pelos radares (stop, alvo e prazo à escolha)", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta) e sair no stop (stopX = X ATR do 15m; stop0 = sem stop), no alvo (alvoX = X R; alvo0 = sem alvo) ou no prazo (horas 1,2,4), o que vier primeiro. Mostra acerto, média em R, PF, sem os 3 melhores, o pior trade e quanto o preço andou contra antes de sair. Mesma régua do /saida, pra comparar com o robô no cruzamento. regra = só os alertas que passariam no ADX das regras atuais. btc = separa pelo humor do BTC na hora do alerta (subindo, caindo, de lado); mov = separa pelo movimento da moeda no dia (|24h|: abaixo de 8%, 8 a 15%, 15 a 25%, 25% ou mais); com romp, usa a entrada no rompimento. cruz = em vez dos radares, os alertas do cruzamento (oportunidade, reversão, compressão): entra no preço em que o robô entrou e sai pelo stop/alvo/prazo, uma operação por alerta, sem virar — mede \"ligo no alerta, o robô entra, desligo e sigo com stop manual\". Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h. Padrões: stop SAIDA_STOP_ATR, sem alvo, horas RADARSIM_HORAS."],
     ["🌑 /sombras 7", "resumo real x sombra (reversão, repique, volume)", "num só lugar, compara o que alertou com o que a regra barrou e ficou gravado em silêncio, pra reversão (ADX/DI), repique (ADX/DI) e volume (filtro de USDT): acerto em 4h com margem de erro e uma leitura (regra ajuda, atrapalha ou ainda dentro da margem). Sai sozinho 1x por semana (SOMBRA_RESUMO_DIA, padrão domingo, a partir de SOMBRA_RESUMO_H = 20h; SOMBRA_RESUMO=0 desliga)."],
     ["🔎 ... desde V107", "julgar uma regra só com dados depois dela", "acrescente \"desde V107\" (versão) ou \"desde 05/10\" (data) no fim de /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf, /compressao ou /sombras. Ex.: /radarconf 90 desde V104. Alertas gravados antes da V107 não têm versão: pra incluí-los, defina o Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). O ± depois das porcentagens é a margem de erro (95%): se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte."],
     ["⚙️ /config mudou", "só os ajustes diferentes do padrão (admin)", "lista os Secrets numéricos que você mudou (com o padrão ao lado), os valores inválidos que o bot está ignorando e os demais Secrets definidos (tokens e chaves ocultos). /config sozinho mostra tudo por seção."],
@@ -10074,7 +10088,8 @@ Deno.serve(async (req) => {
       const cfgRs: SimCfg = { stopAtr: Math.min(10, numArg("stop", SAIDA_STOP_ATR)), alvoR: Math.min(20, numArg("alvo", 0)) };
       const entRs = (argsRs.some((a) => /^romp/.test(a)) ? "romp" : "direto") as "direto" | "romp";
       const porBtcRs = argsRs.some((a) => a === "btc") ? { ent: entRs, por: "btc" as const } : argsRs.some((a) => a === "mov") ? { ent: entRs, por: "mov" as const } : null; // V107: "btc" = por humor do BTC · "mov" = por movimento da moeda no dia
-      await comAguarde("🧪 Simulando a operação pelos radares, aguarde (busca as velas de cada moeda)...", () => runRadarSim(chatId, diasRs, argsRs.some((a) => /^regra/.test(a)), cfgRs, horasRs.length ? horasRs : RADARSIM_HORAS, porBtcRs));
+      const cruzRs = argsRs.some((a) => /^cruz/.test(a)); // V107: cruz = alertas do cruzamento (oportunidade, reversão, compressão), uma operação por alerta, sem virar
+      await comAguarde(cruzRs ? "🧪 Simulando: ligar no alerta, desligar e seguir com stop, aguarde..." : "🧪 Simulando a operação pelos radares, aguarde (busca as velas de cada moeda)...", () => runRadarSim(chatId, diasRs, argsRs.some((a) => /^regra/.test(a)), cfgRs, horasRs.length ? horasRs : RADARSIM_HORAS, porBtcRs, cruzRs));
       return new Response("ok");
     }
     if (text === "/sombras" || text.startsWith("/sombras ") || text.startsWith("/sombras@")) {
