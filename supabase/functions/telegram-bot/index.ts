@@ -1,6 +1,6 @@
 // telegram-bot V107 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares segurando X horas, régua do /saida); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
+// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX; placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const BOT_VERSAO = "V107"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
@@ -1637,6 +1637,85 @@ async function radarFaca(SB: any, pool: { instId: string; pct: number; volUsdt: 
     }
   }
   if (gravou) await facaSalvar(SB, lista);
+}
+// ===== V107: MODO FOGUETE — espelho do modo faca =====
+// Topo com ADX ALTO (que o radar de topo não avisa, TOPO_ADX_MAX) vira candidato LONG de CONTINUAÇÃO da alta. Só grava em silêncio
+// (linha própria _FOGUETE_SOMBRA_, fora do /placar); o resultado sai no /foguete [dias], com as mesmas regras do /radar.
+// FOGUETE_MODO=sombra (padrão) | off · FOGUETE_ADX_MIN (padrão = FACA_ADX_MIN, 30) · FOGUETE_GRAVA_MIN (3) = nota mínima do radar de topo pra gravar
+// · FOGUETE_COOLDOWN_MIN (240) por moeda · FOGUETE_MAX_POR_RODADA (2) · FOGUETE_DIAS_GUARDA (14).
+// Leitura da nota: ela mede o quanto a alta PARECE topo; o LONG aposta contra isso (nota maior ≠ LONG melhor), igual à faca.
+const FOGUETE_MODO: "off" | "sombra" = String(Deno.env.get("FOGUETE_MODO") || "sombra").trim().toLowerCase() === "off" ? "off" : "sombra";
+const FOGUETE_ADX_MIN = numEnv("FOGUETE_ADX_MIN", String(FACA_ADX_MIN));
+const FOGUETE_GRAVA_MIN = numEnv("FOGUETE_GRAVA_MIN", "3");
+const FOGUETE_COOLDOWN_MIN = numEnv("FOGUETE_COOLDOWN_MIN", "240");
+const FOGUETE_MAX_POR_RODADA = numEnv("FOGUETE_MAX_POR_RODADA", "2");
+const FOGUETE_DIAS_GUARDA = numEnv("FOGUETE_DIAS_GUARDA", "14");
+const FOGUETE_ROW = "_FOGUETE_SOMBRA_";
+const _fogueteAvaliado = new Map<string, number>();
+async function fogueteLer(SB: any): Promise<FacaReg[] | null> {
+  try {
+    const { data, error } = await SB.from(TAB).select("last_status").eq("instid", FOGUETE_ROW).maybeSingle();
+    if (error) { console.log("⚠️ modo foguete: leitura falhou, pulo a rodada", error.message ?? error); return null; }
+    if (!data?.last_status) return [];
+    try { const j = JSON.parse(data.last_status); return Array.isArray(j) ? j : []; } catch { return []; }
+  } catch (e) { console.log("⚠️ modo foguete: leitura falhou", e); return null; }
+}
+async function radarFoguete(SB: any, pool: { instId: string; pct: number; volUsdt: number; up?: number }[], indicadores: (InfoFiltravel | null)[]) {
+  if (FOGUETE_MODO === "off" || !TOPO_ON || !(FOGUETE_ADX_MIN > 0)) return;
+  const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
+  for (const [k, v] of _fogueteAvaliado) if (v !== ckVela) _fogueteAvaliado.delete(k);
+  const cands: { info: InfoFiltravel; alta: number }[] = [];
+  indicadores.forEach((info, i) => {
+    const p = pool[i];
+    if (!info || !info.top || !p || info.top.repique) return;
+    if (!(typeof info.adx === "number" && isFinite(info.adx) && info.adx >= FOGUETE_ADX_MIN)) return;
+    const alta = altaEfetiva(p.pct, Math.max(p.up ?? 0, info.altaVale ?? 0));
+    if (alta < TOPO_ALTA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
+    if (ladoAtual(info) === "short") return; // mesma população do radar de topo
+    if (info.top.pts < TOPO_PRE_MIN) return;
+    cands.push({ info, alta });
+  });
+  if (!cands.length) return;
+  cands.sort((a, b) => b.info.top!.pts - a.info.top!.pts);
+  const lista = await fogueteLer(SB);
+  if (!lista) return;
+  const agora = Date.now();
+  let gravou = 0;
+  for (const c of cands.slice(0, RADAR_CAND_JANELA)) {
+    if (gravou >= FOGUETE_MAX_POR_RODADA) break;
+    const inst = c.info.instId;
+    if (_fogueteAvaliado.get(inst) === ckVela) continue;
+    const ult = lista.filter((r) => r.i === inst).reduce((m, r) => Math.max(m, r.t), 0);
+    if (ult && agora - ult < FOGUETE_COOLDOWN_MIN * 60000) continue;
+    const fin = await topoFinal(c.info.top!, inst);
+    _fogueteAvaliado.set(inst, ckVela);
+    if (fin.conf < FOGUETE_GRAVA_MIN) continue;
+    const r1 = (v: number) => Math.round(v * 10) / 10, vf = volDe(inst);
+    lista.push({ i: inst, t: agora, p: Number(c.info.preco), a: r1(c.info.adx), c: fin.conf, q: r1(c.alta), u: vf ? Math.round(vf.u) : null, m: vf ? vf.m : null, v: BOT_VERSAO });
+    gravou++;
+    console.log(`🚀 foguete (sombra): ${inst} nota de topo ${fin.conf}/10 · ADX ${c.info.adx.toFixed(0)} · alta ${c.alta.toFixed(1)}%`);
+  }
+  if (gravou) {
+    const corte = Date.now() - FOGUETE_DIAS_GUARDA * 86400000;
+    await upsertLinha(SB, FOGUETE_ROW, { last_status: JSON.stringify(lista.filter((r) => r.t >= corte).slice(-FACA_MAX)), last_alert_at: new Date().toISOString() });
+  }
+}
+// ===== V107: humor do BTC na hora do alerta (pra separar resultado por regime de mercado) =====
+// Variação do BTC nas 24h até a vela ANTERIOR à do alerta (sem olhar o futuro). ≥ +REGIME_BTC_PCT = subindo · ≤ −REGIME_BTC_PCT = caindo · resto = de lado.
+const REGIME_BTC_PCT = numEnv("REGIME_BTC_PCT", "2");
+type RegimeBtc = "sobe" | "cai" | "lado";
+const REGIME_TXT: Record<RegimeBtc, string> = { sobe: `📈 BTC subindo (≥ +${REGIME_BTC_PCT}% em 24h)`, cai: `📉 BTC caindo (≤ −${REGIME_BTC_PCT}% em 24h)`, lado: "↔️ BTC de lado" };
+async function btcRegimeFn(): Promise<(ms: number) => RegimeBtc | null> {
+  const d = await xCandles("BTC-USDT", TIMEFRAME, SAIDA_CANDLES).catch(() => null);
+  if (!d || !d.c.length) return () => null;
+  const TFMS = TF_MIN * 60000, n24 = Math.round(1440 / TF_MIN);
+  return (ms: number) => {
+    let k = -1;
+    for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= ms && ms < d.t[i] + TFMS) { k = i; break; } }
+    if (k < 1 || k - 1 - n24 < 0) return null;
+    const v = (d.c[k - 1] / d.c[k - 1 - n24] - 1) * 100;
+    return v >= REGIME_BTC_PCT ? "sobe" : v <= -REGIME_BTC_PCT ? "cai" : "lado";
+  };
 }
 // V104: modo sombra do repique — grava em silêncio (alertas_log, tipo repique_sombra) o repique que a regra de ADX/DI barrou, mas que teria passado na nota.
 type RepSombraCand = { info: InfoFiltravel; pct: number; motivos: string[] };
@@ -3332,7 +3411,8 @@ async function runAlertaProativo() {
   // V57: os radares são avisos antecipados (nunca LIGUE AGORA), então seguem rodando com o filtro lateral ligado — a mensagem sai com o aviso 🧱
   if (TOPO_ON) await radarTopo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de topo", e));
   if (FUNDO_ON) await radarFundo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de fundo", e));
-  if (FACA_MODO !== "off" && (FACA_MODO === "alerta" || noPrazo("faca (sombra)"))) await radarFaca(SB, pool, indicadores).catch((e) => console.log("❌ erro modo faca", e)); // V98 (V106: em modo sombra, só dentro do prazo)
+  if (FACA_MODO !== "off" && (FACA_MODO === "alerta" || noPrazo("faca (sombra)"))) await radarFaca(SB, pool, indicadores).catch((e) => console.log("❌ erro modo faca", e));
+  if (FOGUETE_MODO !== "off" && noPrazo("foguete (sombra)")) await radarFoguete(SB, pool, indicadores).catch((e) => console.log("❌ erro modo foguete", e)); // V107 // V98 (V106: em modo sombra, só dentro do prazo)
   if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
   if (noPrazo("sombra de volume")) await volSombraRodar(SB, variacoes, perfilAlerta).catch((e) => console.log("❌ erro sombra de volume", e)); // V106
   const poolInfoMap = new Map<string, IndicadorInfo>();
@@ -4022,11 +4102,11 @@ const HIP_ALVO_ATR = numEnv("HIP_ALVO_ATR", "3");
 const HIP_ALVO_PCT = numEnv("HIP_ALVO_PCT", "2");
 const HIP_AVISAR_FUNCIONOU = (Deno.env.get("HIP_AVISAR_FUNCIONOU") ?? "1") !== "0";
 const HIP_APAGAR_MIN = numEnv("HIP_APAGAR_MIN", "720");
-type HipTipo = "topo" | "fundo" | "repique" | "faca";
+type HipTipo = "topo" | "fundo" | "repique" | "faca" | "foguete";
 type HipLado = "long" | "short";
 type HipRes = "invalida" | "funcionou" | "expirou" | "aberta";
 type Hip = { inst: string; tipo: HipTipo; lado: HipLado; preco: number; atr: number; t: number; mfe: number; mae: number };
-const HIP_NOME: Record<HipTipo, string> = { topo: "topo", fundo: "fundo", repique: "repique", faca: "faca" };
+const HIP_NOME: Record<HipTipo, string> = { topo: "topo", fundo: "fundo", repique: "repique", faca: "faca", foguete: "foguete" };
 const hipDist = (preco: number, atr: number, kAtr: number, pct: number): number => Math.max(atr > 0 ? kAtr * atr : 0, (preco * pct) / 100);
 // com UM preço (acompanhamento ao vivo)
 function hipPasso(lado: HipLado, preco0: number, atr: number, p: number, idadeMin: number): { res: HipRes; contra: number; favor: number } {
@@ -4337,7 +4417,7 @@ function rupLinha(nome: string, x: RupSim[], comEspera: boolean): string {
   return t;
 }
 // /radar [dias] — com os alertas de radar JÁ enviados (alertas_log) e as velas seguintes, o que aconteceu depois de cada tipo
-async function runRadarStats(chatId: number | string, dias: number, opt?: { pernas?: number; alvo?: number; fonte?: "faca" }) {
+async function runRadarStats(chatId: number | string, dias: number, opt?: { pernas?: number; alvo?: number; fonte?: "faca" | "foguete" }) {
   const alvoR = opt?.alvo && opt.alvo > 0 ? opt.alvo : RUP_ALVO_R, pernasMax = opt?.pernas && opt.pernas >= 1 ? Math.round(opt.pernas) : RUP_PERNAS; // V77: /radar [dias] pernasX alvoX
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
@@ -4349,6 +4429,11 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
     if (!lista) { await sendTelegram(chatId, "⚠️ Não consegui ler o modo faca no Supabase."); return; }
     const corteMs = Date.now() - dd * 86400000;
     rows = lista.filter((r) => r.t > corteMs && Number(r.p) > 0 && desdeOk(desdeDoChat(chatId), r.t, r.v)).map((r) => ({ instid: r.i, lado: "short", tipo: "faca", status: "🔪 FACA", preco: r.p, criado_em: new Date(r.t).toISOString(), conf: r.c, efe: r.q }));
+  } else if (opt?.fonte === "foguete") { // V107: espelho da faca (linha própria _FOGUETE_SOMBRA_), LONG de continuação
+    const lista = await fogueteLer(SB);
+    if (!lista) { await sendTelegram(chatId, "⚠️ Não consegui ler o modo foguete no Supabase."); return; }
+    const corteMs = Date.now() - dd * 86400000;
+    rows = lista.filter((r) => r.t > corteMs && Number(r.p) > 0 && desdeOk(desdeDoChat(chatId), r.t, r.v)).map((r) => ({ instid: r.i, lado: "long", tipo: "foguete", status: "🚀 FOGUETE", preco: r.p, criado_em: new Date(r.t).toISOString(), conf: r.c, efe: r.q }));
   } else {
     const busca = (cols: string) => SB.from(PLACAR_TABELA).select(cols).gt("criado_em", desde).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).limit(500);
     let { data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf, versao"); // V107: versao pro filtro "desde"
@@ -4357,12 +4442,14 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
     if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas de radar: ${String(error.message || error).slice(0, 120)}`); return; }
     rows = aplicarDesde(chatId, ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em)); // V107
   }
+  if (!rows.length && opt?.fonte === "foguete") { await sendTelegram(chatId, `🚀 <b>MODO FOGUETE</b> (${FOGUETE_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Topo com ADX ≥ ${FOGUETE_ADX_MIN} e nota de topo ≥ ${FOGUETE_GRAVA_MIN}/10 vira candidato LONG de continuação, gravado em silêncio a cada rodada do cron (começa a partir do deploy da V107).`); return; }
   if (!rows.length) { await sendTelegram(chatId, opt?.fonte === "faca" ? `🔪 <b>MODO FACA</b> (${FACA_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Modo atual: ${FACA_MODO} · ADX ≥ ${FACA_ADX_MIN} · grava nota ≥ ${FACA_GRAVA_MIN}/10 · avisa nota ≥ ${FACA_CONF_MIN}/10. Ele grava sozinho a cada rodada do cron.` : `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
-  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number; conf: number | null; ext: number | null; efe: number | null; adx: number | null; rA: RupSim; rB: RupSim; rD: RupSim; rV: VirSim };
+  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number; conf: number | null; ext: number | null; efe: number | null; adx: number | null; rA: RupSim; rB: RupSim; rD: RupSim; rV: VirSim; btc: RegimeBtc | null };
   const itens: Item[] = [];
+  const regimeBtc = await btcRegimeFn(); // V107: humor do BTC na hora de cada alerta
   await emLotes([...porMoeda.keys()], 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
     if (!d) return;
@@ -4373,38 +4460,47 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
       for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= emMs && emMs < d.t[i] + TFMS) { k0 = i; break; } }
       if (k0 < 20) continue;
       const preco0 = Number(r.preco), atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
-      const tipo: HipTipo = r.tipo === "faca" ? "faca" : String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
+      const tipo: HipTipo = r.tipo === "faca" ? "faca" : r.tipo === "foguete" ? "foguete" : String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
       const lado: HipLado = r.lado === "long" ? "long" : "short";
       const k24 = k0 - Math.round(1440 / TF_MIN), c24 = k24 >= 0 ? d.c[k24] : 0, mov24 = c24 > 0 ? (preco0 / c24 - 1) * 100 : null; // V76: variacao de 24h ate o alerta
-      const ext = mov24 === null ? null : tipo === "faca" ? -mov24 : lado === "short" ? mov24 : -mov24; // faca: quanto a moeda já CAIU (positivo) // positivo = ja andou NO sentido que o radar quer reverter (topo: subiu; fundo: caiu)
+      const ext = mov24 === null ? null : tipo === "faca" ? -mov24 : tipo === "foguete" ? mov24 : lado === "short" ? mov24 : -mov24; // faca: quanto a moeda já CAIU (positivo) // positivo = ja andou NO sentido que o radar quer reverter (topo: subiu; fundo: caiu)
       // V105: movimento EFETIVO (o do gatilho do radar): SHORT = max(alta 24h, alta desde a mínima recente); LONG = max(queda 24h, queda desde a máxima recente). Recalculado com as velas até o alerta.
       const jn = Math.max(0, k0 + 1 - FUNDO_JAN_PICO);
       const efeRetro = mov24 === null ? null : lado === "short" ? Math.max(mov24, altaDoVale(d.l.slice(jn, k0 + 1), preco0), 0) : Math.max(-mov24, ddDoPico(d.h.slice(jn, k0 + 1), preco0), 0);
-      const efeV = tipo === "faca" ? (r.efe == null ? null : Number(r.efe)) : efeRetro; // faca: a queda efetiva já vem gravada
+      const efeV = tipo === "faca" || tipo === "foguete" ? (r.efe == null ? null : Number(r.efe)) : efeRetro; // faca: a queda efetiva já vem gravada
       const efe = efeV === null || !isFinite(efeV) ? null : Math.round(efeV * 10) / 10;
       const adxA = adxS[k0 - 1], adxAlerta = Number.isFinite(adxA) ? adxA : null;
       const opostoLado: HipLado = lado === "long" ? "short" : "long", maxB = Math.max(1, Math.round((HIP_HORAS * 60) / TF_MIN)); // V77: simulação do rompimento da vela do alerta
       itens.push({ tipo, inst: id, lado, emMs, preco: preco0, conf: r.conf == null ? null : Number(r.conf), ext, efe, adx: adxAlerta, ...hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN),
-        rA: rupRompimento(d, k0, lado, RUP_ESPERA, alvoR, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, alvoR, maxB), rD: rupDireto(d, k0, lado, preco0, alvoR, maxB), rV: rupVirada(d, k0, RUP_ESPERA, alvoR, maxB, pernasMax) });
+        rA: rupRompimento(d, k0, lado, RUP_ESPERA, alvoR, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, alvoR, maxB), rD: rupDireto(d, k0, lado, preco0, alvoR, maxB), rV: rupVirada(d, k0, RUP_ESPERA, alvoR, maxB, pernasMax), btc: regimeBtc(emMs) });
     }
   });
   const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
   const sg = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
-  let m = `${opt?.fonte === "faca" ? `🔪 <b>MODO FACA (${FACA_MODO}) — o que aconteceu depois do candidato</b> · SHORT de continuação em fundo com ADX ≥ ${FACA_ADX_MIN}` : "📡 <b>RADARES — o que aconteceu depois do alerta</b>"} · ${dd} dia(s)${opt?.pernas || opt?.alvo ? ` · 🚪 teste: ${pernasMax} ${pernasMax === 1 ? "perna" : "pernas"} · alvo ${alvoR}R` : ""}\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
-  for (const tipo of (opt?.fonte === "faca" ? ["faca"] : ["topo", "fundo", "repique"]) as HipTipo[]) {
+  let m = `${opt?.fonte === "foguete" ? `🚀 <b>MODO FOGUETE (${FOGUETE_MODO}) — o que aconteceu depois do candidato</b> · LONG de continuação em topo com ADX ≥ ${FOGUETE_ADX_MIN}` : opt?.fonte === "faca" ? `🔪 <b>MODO FACA (${FACA_MODO}) — o que aconteceu depois do candidato</b> · SHORT de continuação em fundo com ADX ≥ ${FACA_ADX_MIN}` : "📡 <b>RADARES — o que aconteceu depois do alerta</b>"} · ${dd} dia(s)${opt?.pernas || opt?.alvo ? ` · 🚪 teste: ${pernasMax} ${pernasMax === 1 ? "perna" : "pernas"} · alvo ${alvoR}R` : ""}\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
+  for (const tipo of (opt?.fonte === "faca" ? ["faca"] : opt?.fonte === "foguete" ? ["foguete"] : ["topo", "fundo", "repique"]) as HipTipo[]) {
     const g = itens.filter((x) => x.tipo === tipo);
     if (!g.length) continue;
     const c = (r: HipRes) => g.filter((x) => x.res === r).length, pc = (n: number) => `${Math.round((n / g.length) * 100)}%`;
     const inval = g.filter((x) => x.res === "invalida");
-    m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : tipo === "faca" ? "🔪" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
+    m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : tipo === "faca" ? "🔪" : tipo === "foguete" ? "🚀" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
     m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}${pmTxt(c("funcionou"), g.length)}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
     m += `a favor mediano ${sg(_med(g.map((x) => x.mfe)))}% · contra mediano ${sg(-_med(g.map((x) => x.mae)))}%${inval.length ? ` · invalida em ~${(_med(inval.map((x) => x.barras)) * TF_MIN / 60).toFixed(1)}h` : ""}\n`;
     m += hipLinhasFatias(g); // V76: por nota exata, esticada em 24h e ADX
-    m += hipLinhasCortes(g.map((x) => ({ res: x.res, f: x.mfe, a: x.mae, v: x.efe })), tipo === "topo" ? "alta efetiva" : tipo === "fundo" || tipo === "faca" ? "queda efetiva" : "movimento efetivo (alta p/ SHORT, queda p/ LONG)"); // V105
+    { // V107: humor do BTC na hora do alerta (o radar depende do regime de mercado?)
+      const com = g.filter((x) => x.btc !== null);
+      if (com.length >= 8) {
+        m += `  <i>humor do BTC nas 24h antes do alerta:</i>\n`;
+        for (const rg of ["sobe", "cai", "lado"] as RegimeBtc[]) m += hipLinhaFatia(REGIME_TXT[rg], com.filter((x) => x.btc === rg));
+        m += hipLeituraFatia("com o BTC subindo", com.filter((x) => x.btc === "sobe"), com.filter((x) => x.btc !== "sobe"));
+        m += hipLeituraFatia("com o BTC caindo", com.filter((x) => x.btc === "cai"), com.filter((x) => x.btc !== "cai"));
+      }
+    }
+    m += hipLinhasCortes(g.map((x) => ({ res: x.res, f: x.mfe, a: x.mae, v: x.efe })), tipo === "topo" ? "alta efetiva" : tipo === "fundo" || tipo === "faca" ? "queda efetiva" : tipo === "foguete" ? "alta efetiva" : "movimento efetivo (alta p/ SHORT, queda p/ LONG)"); // V105
     m += hipLinhasBanda(g); // V74: por nota de confiança do alerta
     { // V77: operar só no rompimento da vela do alerta
-      const regraA = tipo === "faca" ? "faca (SHORT, a queda continua) só entra rompendo a MÍNIMA da vela do alerta" : tipo === "fundo" ? "fundo (LONG) só entra rompendo a MÁXIMA da vela do alerta" : "topo (SHORT) só entra rompendo a MÍNIMA da vela do alerta";
-      const regraB = tipo === "faca" ? "contrária: entra COMPRADO rompendo a máxima (a reversão que o fundo clássico apostaria)" : tipo === "fundo" ? "contrária: fundo entra VENDIDO rompendo a mínima" : "contrária: topo entra COMPRADO rompendo a máxima";
+      const regraA = tipo === "foguete" ? "foguete (LONG, a alta continua) só entra rompendo a MÁXIMA da vela do alerta" : tipo === "faca" ? "faca (SHORT, a queda continua) só entra rompendo a MÍNIMA da vela do alerta" : tipo === "fundo" ? "fundo (LONG) só entra rompendo a MÁXIMA da vela do alerta" : "topo (SHORT) só entra rompendo a MÍNIMA da vela do alerta";
+      const regraB = tipo === "foguete" ? "contrária: entra VENDIDO rompendo a mínima (o SHORT que o topo clássico apostaria)" : tipo === "faca" ? "contrária: entra COMPRADO rompendo a máxima (a reversão que o fundo clássico apostaria)" : tipo === "fundo" ? "contrária: fundo entra VENDIDO rompendo a mínima" : "contrária: topo entra COMPRADO rompendo a máxima";
       m += `\n🚪 <b>Só no rompimento da vela do alerta</b> (stop no extremo oposto · alvo ${alvoR}R · espera até ${RUP_ESPERA} velas)\n`;
       m += rupLinha(`A) ${regraA}`, g.map((x) => x.rA), true);
       m += rupLinha(`B) ${regraB}`, g.map((x) => x.rB), true);
@@ -5968,27 +6064,40 @@ async function checarResumoSombras(SB: any) {
 // Saída: no prazo (fechamento da vela que completa X horas) ou no stop de SAIDA_STOP_ATR×ATR; "sem stop" = só o prazo (como o motor hoje).
 // Stop e prazo na mesma vela: conta o stop (pior caso). "regra" = só os alertas que passariam no ADX das regras atuais (topo < TOPO_ADX_MAX,
 // fundo < FUNDO_ADX_MAX, repique ≥ REPIQUE_ADX_MIN), com o ADX da vela anterior ao alerta. O DI não entra (não dá pra refazer com fidelidade).
+const qsArr = (v: number[], p: number): number => { const s = [...v].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : NaN; };
 const RADARSIM_HORAS: number[] = String(Deno.env.get("RADARSIM_HORAS") || "4,8,24").split(",").map((x: string) => Number(x.trim())).filter((x: number) => x > 0 && x <= 72);
-type SimRes = { r: number; pct: number; saida: "stop" | "prazo" } | null; // null = ainda em aberto / sem dados
-function simSegurar(d: XVelas, kIni: number, lado: HipLado, entrada: number, atr: number, barras: number, comStop: boolean, checaVelaEntrada: boolean): SimRes {
+// V107: cada simulação devolve também o MAE (quanto o preço andou CONTRA, em % do preço de entrada, até a saída) pra mostrar a cauda
+type SimRes = { r: number; pct: number; saida: "stop" | "alvo" | "prazo"; mae: number } | null; // null = ainda em aberto / sem dados
+type SimCfg = { stopAtr: number; alvoR: number }; // stopAtr 0 = sem stop · alvoR 0 = sem alvo (1R = 1×ATR)
+function simSegurar(d: XVelas, kIni: number, lado: HipLado, entrada: number, atr: number, barras: number, cfg: SimCfg, checaVelaEntrada: boolean): SimRes {
   if (!(atr > 0) || !(entrada > 0)) return null;
-  const long = lado === "long", stop = long ? entrada - SAIDA_STOP_ATR * atr : entrada + SAIDA_STOP_ATR * atr;
+  const long = lado === "long";
+  const temStop = cfg.stopAtr > 0, temAlvo = cfg.alvoR > 0;
+  const stop = long ? entrada - cfg.stopAtr * atr : entrada + cfg.stopAtr * atr;
+  const alvo = long ? entrada + cfg.alvoR * atr : entrada - cfg.alvoR * atr;
   const taxaPx = (entrada * TAXA_IDA_VOLTA_PCT) / 100;
-  const fecha = (px: number, saida: "stop" | "prazo") => {
+  let mae = 0;
+  const contraEm = (k: number) => Math.max(0, ((long ? entrada - d.l[k] : d.h[k] - entrada) / entrada) * 100);
+  const fecha = (px: number, saida: "stop" | "alvo" | "prazo") => {
     const bruto = long ? px - entrada : entrada - px, liq = bruto - taxaPx;
-    return { r: liq / atr, pct: (liq / entrada) * 100, saida };
+    return { r: liq / atr, pct: (liq / entrada) * 100, saida, mae };
   };
   const kFim = kIni + barras - 1;
   if (kFim > d.c.length - 1) return null; // o prazo ainda não terminou
-  const tocou = (k: number) => (long ? d.l[k] <= stop : d.h[k] >= stop);
-  const pxStop = (k: number) => (long ? Math.min(stop, d.o[k]) : Math.max(stop, d.o[k])); // abriu além do stop: sai na abertura
-  if (comStop && checaVelaEntrada && tocou(kIni - 1)) return fecha(stop, "stop"); // na própria vela do rompimento (pior caso)
+  const tocouStop = (k: number) => temStop && (long ? d.l[k] <= stop : d.h[k] >= stop);
+  const tocouAlvo = (k: number) => temAlvo && (long ? d.h[k] >= alvo : d.l[k] <= alvo);
+  if (checaVelaEntrada) { // vela do rompimento: só o stop conta (pior caso), o alvo não
+    mae = Math.max(mae, contraEm(kIni - 1));
+    if (tocouStop(kIni - 1)) return fecha(stop, "stop");
+  }
   for (let k = kIni; k <= kFim; k++) {
-    if (comStop && tocou(k)) return fecha(pxStop(k), "stop");
+    if (tocouStop(k)) { mae = Math.max(mae, (cfg.stopAtr * atr / entrada) * 100); return fecha(long ? Math.min(stop, d.o[k]) : Math.max(stop, d.o[k]), "stop"); } // stop antes do alvo na mesma vela
+    mae = Math.max(mae, contraEm(k));
+    if (tocouAlvo(k)) return fecha(long ? Math.max(alvo, d.o[k]) : Math.min(alvo, d.o[k]), "alvo");
   }
   return fecha(d.c[kFim], "prazo");
 }
-async function runRadarSim(chatId: number | string, dias: number, soRegra: boolean) {
+async function runRadarSim(chatId: number | string, dias: number, soRegra: boolean, cfg: SimCfg, horas: number[], porBtc: { ent: "direto" | "romp"; por?: "btc" | "mov" } | null = null) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const dd = Math.min(9, Math.max(1, Math.round(dias || 9)));
@@ -5999,13 +6108,11 @@ async function runRadarSim(chatId: number | string, dias: number, soRegra: boole
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
-  type Cfg = { ent: "direto" | "romp"; stop: boolean; h: number };
-  const cfgs: Cfg[] = [];
-  for (const ent of ["direto", "romp"] as const) for (const stop of [true, false]) for (const h of RADARSIM_HORAS) cfgs.push({ ent, stop, h });
-  const chave = (c: Cfg) => `${c.ent}|${c.stop ? 1 : 0}|${c.h}`;
-  type Item = { tipo: HipTipo; res: Map<string, SimRes>; naoEntrou: number };
+  const chave = (ent: string, h: number) => `${ent}|${h}`;
+  type Item = { tipo: HipTipo; res: Map<string, SimRes>; naoEntrou: number; btc: RegimeBtc | null; mov: number | null };
   const itens: Item[] = [];
   let foraRegra = 0;
+  const regimeBtc = porBtc && porBtc.por !== "mov" ? await btcRegimeFn() : () => null; // V107: só busca o BTC quando pedido (/radarsim ... btc)
   await emLotes([...porMoeda.keys()], 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
     if (!d) return;
@@ -6027,7 +6134,6 @@ async function runRadarSim(chatId: number | string, dias: number, soRegra: boole
       }
       const atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
       if (!(atr > 0)) continue;
-      // rompimento da vela do alerta (mesma regra do /radar)
       const hi = d.h[k0], lo = d.l[k0], long = lado === "long";
       let kR = -1, pxR = 0, cancelou = false;
       for (let k = k0 + 1; k <= Math.min(k0 + RUP_ESPERA, d.c.length - 1); k++) {
@@ -6036,43 +6142,62 @@ async function runRadarSim(chatId: number | string, dias: number, soRegra: boole
         if (contra) { cancelou = true; break; }
       }
       const res = new Map<string, SimRes>();
-      for (const c of cfgs) {
-        const barras = Math.max(1, Math.round((c.h * 60) / TF_MIN));
-        if (c.ent === "direto") res.set(chave(c), simSegurar(d, k0 + 1, lado, Number(r.preco), atr, barras, c.stop, false));
-        else res.set(chave(c), kR > 0 ? simSegurar(d, kR + 1, lado, pxR, atr, barras, c.stop, true) : null);
+      for (const h of horas) {
+        const barras = Math.max(1, Math.round((h * 60) / TF_MIN));
+        res.set(chave("direto", h), simSegurar(d, k0 + 1, lado, Number(r.preco), atr, barras, cfg, false));
+        res.set(chave("romp", h), kR > 0 ? simSegurar(d, kR + 1, lado, pxR, atr, barras, cfg, true) : null);
       }
-      itens.push({ tipo, res, naoEntrou: kR > 0 ? 0 : cancelou || k0 + RUP_ESPERA <= d.c.length - 1 ? 1 : 0 });
+      itens.push({ tipo, res, naoEntrou: kR > 0 ? 0 : cancelou || k0 + RUP_ESPERA <= d.c.length - 1 ? 1 : 0, btc: regimeBtc(emMs), mov: r.pct24 != null && isFinite(Number(r.pct24)) ? Math.abs(Number(r.pct24)) : null });
     }
   });
   if (!itens.length) { await sendTelegram(chatId, "🧪 <b>SIMULAÇÃO DOS RADARES</b>\n\nNão consegui as velas dos alertas. Tente de novo em alguns minutos."); return; }
-  const linha = (g: Item[], c: Cfg): string => {
-    const xs = g.map((i) => i.res.get(chave(c))).filter((x): x is NonNullable<SimRes> => !!x);
-    if (!xs.length) return `  ${c.h}h: <i>ainda sem resultado</i>\n`;
-    const rs = xs.map((x) => x.r), pcts = xs.map((x) => x.pct), ac = rs.filter((x) => x > 0).length, pf = _profitFactor(rs);
-    const med = rs.reduce((t, x) => t + x, 0) / rs.length;
+  const hTxt = (h: number) => (h < 1 ? `${Math.round(h * 60)}min` : `${h}h`);
+  const linha = (g: Item[], ent: string, h: number): string => {
+    const xs = g.map((i) => i.res.get(chave(ent, h))).filter((x): x is NonNullable<SimRes> => !!x);
+    if (!xs.length) return `  ${hTxt(h)}: <i>ainda sem resultado</i>\n`;
+    const rs = xs.map((x) => x.r), ac = rs.filter((x) => x > 0).length, pf = _profitFactor(rs);
+    const media = rs.reduce((t, x) => t + x, 0) / rs.length;
     const sem3 = rs.length > 5 ? [...rs].sort((a, b) => b - a).slice(3) : null;
-    const stops = xs.filter((x) => x.saida === "stop").length;
-    return `  ${c.h}h (n=${xs.length}): acerto ${Math.round((ac / xs.length) * 100)}%${pmTxt(ac, xs.length)} · média ${med >= 0 ? "+" : ""}${med.toFixed(2)}R · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"} · ${_sg(pcts.reduce((t, x) => t + x, 0) / pcts.length)} de preço${sem3 ? ` · sem os 3 melhores ${(sem3.reduce((t, x) => t + x, 0) / sem3.length).toFixed(2)}R` : ""}${c.stop ? ` · ${stops} stop` : ""}${xs.length < 15 ? " ⚠️" : ""}\n`;
+    const st = xs.filter((x) => x.saida === "stop").length, al = xs.filter((x) => x.saida === "alvo").length;
+    const maes = xs.map((x) => x.mae);
+    return `  ${hTxt(h)} (n=${xs.length}): acerto ${Math.round((ac / xs.length) * 100)}%${pmTxt(ac, xs.length)} · média ${media >= 0 ? "+" : ""}${media.toFixed(2)}R · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"}${sem3 ? ` · sem os 3 melhores ${(sem3.reduce((t, x) => t + x, 0) / sem3.length).toFixed(2)}R` : ""}${cfg.stopAtr > 0 ? ` · ${st} stop` : ""}${cfg.alvoR > 0 ? ` · ${al} alvo` : ""}${xs.length < 15 ? " ⚠️" : ""}\n` +
+      `     pior ${Math.min(...rs).toFixed(2)}R · contra máx.: mediana ${_med(maes).toFixed(1)}% · 90% até ${qsArr(maes, 0.9).toFixed(1)}% · pior ${Math.max(...maes).toFixed(1)}%\n`;
   };
   const bloco = (titulo: string, g: Item[]): string => {
     if (!g.length) return "";
+    if (porBtc) { // V107: separado pelo humor do BTC ou pelo movimento da moeda no dia, uma forma de entrada só (pra caber)
+      let t = `${MINI_DIVISOR}\n<b>${titulo}</b> (n=${g.length}) · ${porBtc.ent === "direto" ? "direto no alerta" : "no rompimento da vela"}\n${MINI_DIVISOR}\n`;
+      const fatias: [string, (i: Item) => boolean][] = porBtc.por === "mov"
+        ? MOV_FAIXAS.map(([nome, a, b]) => [`📏 |24h| ${nome}`, (i: Item) => i.mov !== null && i.mov >= a && i.mov < b] as [string, (i: Item) => boolean])
+        : (["sobe", "cai", "lado"] as RegimeBtc[]).map((rg) => [REGIME_TXT[rg], (i: Item) => i.btc === rg] as [string, (i: Item) => boolean]);
+      for (const [nome, f] of fatias) {
+        const gg = g.filter(f);
+        if (!gg.length) continue;
+        t += `<b>${nome}</b> (n=${gg.length})\n`;
+        for (const h of horas) t += linha(gg, porBtc.ent, h);
+      }
+      const sem = g.filter((i) => (porBtc.por === "mov" ? i.mov === null : i.btc === null)).length;
+      return t + (sem ? `<i>${sem} sem ${porBtc.por === "mov" ? "a variação de 24h gravada" : "o BTC da hora (fora da janela de velas)"}</i>\n` : "") + "\n";
+    }
     const ne = g.reduce((t, i) => t + i.naoEntrou, 0);
     let t = `${MINI_DIVISOR}\n<b>${titulo}</b> (n=${g.length})\n${MINI_DIVISOR}\n`;
-    for (const ent of ["direto", "romp"] as const) for (const stop of [true, false]) {
-      t += `<b>${ent === "direto" ? "Direto no alerta" : "No rompimento da vela"} · ${stop ? `stop ${SAIDA_STOP_ATR} ATR` : "sem stop"}</b>${ent === "romp" && stop ? ` <i>(não rompeu/cancelou: ${ne})</i>` : ""}\n`;
-      for (const h of RADARSIM_HORAS) t += linha(g, { ent, stop, h });
+    for (const ent of ["direto", "romp"] as const) {
+      t += `<b>${ent === "direto" ? "Direto no alerta" : "No rompimento da vela"}</b>${ent === "romp" ? ` <i>(não rompeu/cancelou: ${ne})</i>` : ""}\n`;
+      for (const h of horas) t += linha(g, ent, h);
     }
     return t + "\n";
   };
-  let m = `🧪 <b>SIMULAÇÃO: OPERAR SÓ PELOS RADARES</b> — ${dd} dia(s)${soRegra ? " · só o que passa no ADX das regras atuais" : ""}\n${DIVISOR}\n`;
-  m += `<i>Mesma régua do /saida: 1R = 1×ATR na entrada, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada, sem funding. Segura até o prazo (${RADARSIM_HORAS.join("/")}h) ou até o stop. Stop e prazo na mesma vela = stop (pior caso). Média em R; ± = margem de erro do acerto.</i>\n`;
+  const cfgTxt = `${cfg.stopAtr > 0 ? `stop ${cfg.stopAtr} ATR` : "sem stop"} · ${cfg.alvoR > 0 ? `alvo ${cfg.alvoR}R` : "sem alvo"} · prazo ${horas.map(hTxt).join("/")}`;
+  let m = `🧪 <b>SIMULAÇÃO: OPERAR SÓ PELOS RADARES</b> — ${dd} dia(s)${soRegra ? " · só o que passa no ADX das regras atuais" : ""}${porBtc ? (porBtc.por === "mov" ? " · por movimento da moeda no dia" : " · por humor do BTC") : ""}\n<b>${cfgTxt}</b> (velas de 15m)\n${DIVISOR}\n`;
+  if (porBtc && porBtc.por !== "mov") m += `<i>Humor do BTC = variação nas 24h até a vela anterior ao alerta: subindo ≥ +${REGIME_BTC_PCT}% · caindo ≤ −${REGIME_BTC_PCT}% · resto = de lado (REGIME_BTC_PCT).</i>\n`;
+  m += `<i>Mesma régua do /saida: 1R = 1×ATR do 15m na entrada, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada, sem funding. Sai no stop, no alvo ou no prazo, o que vier primeiro; stop e alvo na mesma vela = stop (pior caso). "Contra máx." = quanto o preço andou contra (em % do preço, sem alavancagem) antes de sair: multiplique pela alavancagem pra ver o tamanho do susto. ± = margem de erro do acerto.</i>\n`;
   if (soRegra) m += `<i>${foraRegra} alerta(s) ficaram de fora por ADX (topo &lt; ${TOPO_ADX_MAX} · fundo &lt; ${FUNDO_ADX_MAX} · repique ≥ ${REPIQUE_ADX_MIN}); o DI não entra no filtro.</i>\n`;
   m += "\n";
   m += bloco("🔴 Topo (SHORT)", itens.filter((i) => i.tipo === "topo"));
   m += bloco("🟢 Fundo (LONG)", itens.filter((i) => i.tipo === "fundo"));
   m += bloco("⭐ Repique", itens.filter((i) => i.tipo === "repique"));
   m += bloco("📡 Todos os radares", itens);
-  m += `<i>Compare com o /saida (robô no cruzamento): mesma unidade (R de 1 ATR). Os alertas entram em sequência, sem limite de posições ao mesmo tempo nem de capital. Prazo ainda não terminado = fora da conta. Uso: /radarsim 9 · /radarsim 9 regra · horas no Secret RADARSIM_HORAS (ex.: 2,6,12,24).</i>`;
+  m += `<i>Os alertas entram em sequência, sem limite de posições nem de capital. Prazo ainda não terminado = fora da conta. Ex.: /radarsim 9 regra stop1 alvo2 horas 1,2,4 · /radarsim 9 stop3 horas 4,8,24 · stop0 = sem stop · alvo0 = sem alvo · btc = separa pelo humor do BTC · mov = separa pelo movimento da moeda no dia (com "romp", no rompimento). Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h.</i>`;
   await enviarEmPartes(chatId, m);
 }
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
@@ -6338,6 +6463,8 @@ const SAIDA_E_SL = numEnv("SAIDA_E_SL", "0");
 // V74: /saida simplificado. Filtro PADRÃO (o que você usa): moeda com |24h| ≥ 8% e ADX ≥ 14 SUBINDO (ADX da vela da entrada > ADX de 4 velas antes, igual ao scanner),
 // tudo medido NA HORA do alerta (sem olhar o futuro). "tudo" no comando mostra todas as entradas. Trailing comparado por padrão: 5/3.5 (SAIDA_CFG_PADRAO).
 const SAIDA_FILTRO_PADRAO = (Deno.env.get("SAIDA_FILTRO_PADRAO") ?? "1") !== "0";
+// V107: faixas de |variação 24h| usadas no /saida e no /radarsim ("por movimento no dia")
+const MOV_FAIXAS: [string, number, number][] = [["abaixo de 8%", 0, 8], ["8% a 15%", 8, 15], ["15% a 25%", 15, 25], ["25% ou mais", 25, Infinity]];
 const SAIDA_MOV_PADRAO = numEnv("SAIDA_MOV_PADRAO", "8");
 const SAIDA_ADX_PADRAO = numEnv("SAIDA_ADX_PADRAO", "14");
 const SAIDA_ADX_SUBINDO = (Deno.env.get("SAIDA_ADX_SUBINDO") ?? "1") !== "0";
@@ -6444,7 +6571,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
     .filter((r) => !opc?.moeda || baseDe(r.instid) === opc.moeda || baseDe(r.instid) === `1000${opc.moeda}`);
   const filtro = opc?.filtro ?? null;
   const rows = rowsBase.filter((r) => !filtro || !(filtro.mov > 0) || (r.pct24 != null && Math.abs(Number(r.pct24)) >= filtro.mov)); // |24h| da hora do alerta
-  const filtroBase = filtro ? `🔎 Filtro (valores da hora do alerta): |24h| ≥ ${filtro.mov}% · ADX ≥ ${filtro.adx}${filtro.subindo ? " e subindo" : ""}` : "";
+  const filtroBase = filtro ? `🔎 Filtro (valores da hora do alerta): |24h| ≥ ${filtro.mov}%${filtro.adx > 0 ? ` · ADX ≥ ${filtro.adx}${filtro.subindo ? " e subindo" : ""}` : ""}` : "";
   let filtroTxt = filtro ? `${filtroBase}\n` : "";
   let passaramFiltro = 0, passaramAdx = 0;
   if (!rows.length) { await sendTelegram(chatId, `🚪 <b>SAÍDA REAL</b>\n\n${filtroTxt}Nenhuma entrada registrada${opc?.moeda ? ` de ${opc.moeda}` : ""} nos últimos ${dd} dia(s)${filtro ? ` com esse filtro (tudo: /saida ${dd} tudo)` : ""}.`); return; }
@@ -6544,15 +6671,17 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
     ["🔴 SHORT", (x) => x.r.lado === "short"],
     ["🧱 Em lateral", (x) => temMarca(x.r, LAT_MARCA)],
     ["📶 Com tendência", (x) => temMarca(x.r, TEND_MARCA)],
+    // V107: por movimento da moeda no dia (|24h| na hora do alerta): o cruzamento funciona melhor nas moedas MUITO movimentadas?
+    ...MOV_FAIXAS.map(([nome, a, b]) => [`📏 |24h| ${nome}`, (x: Res) => { const v = Math.abs(Number(x.r.pct24)); return x.r.pct24 != null && isFinite(v) && v >= a && v < b; }] as [string, (x: Res) => boolean]),
   ];
   const abertos = res.filter((x) => x.a.motivo === "aberto").length;
-  if (filtro) filtroTxt = `${filtroBase} · ${passaramFiltro} de ${rowsBase.length} entradas passaram (todas: /saida ${dd} tudo)\nFunil: ${rowsBase.length} → ${rows.length} com |24h| ≥ ${filtro.mov}% → ${passaramAdx} com ADX ≥ ${filtro.adx} → ${passaramFiltro}${filtro.subindo ? " subindo" : ""}\n`;
+  if (filtro) filtroTxt = `${filtroBase} · ${passaramFiltro} de ${rowsBase.length} entradas passaram (todas: /saida ${dd} tudo)\nFunil: ${rowsBase.length} → ${rows.length} com |24h| ≥ ${filtro.mov}%${filtro.adx > 0 ? ` → ${passaramAdx} com ADX ≥ ${filtro.adx} → ${passaramFiltro}${filtro.subindo ? " subindo" : ""}` : ""}\n`;
   let msg = `🚪 <b>SAÍDA REAL DO ROBÔ</b> — últimos ${dd} dia(s)${opc?.moeda ? ` · ${opc.moeda}` : ""}\n${DIVISOR}\n${filtroTxt}${res.length} entrada(s) simuladas${abertos ? `, ${abertos} ainda aberta(s) (contadas ao preço atual)` : ""}${semHist ? `, ${semHist} sem velas suficientes` : ""}\n<i>Entrada = fechamento da vela do cruzamento. 1R = ${SAIDA_STOP_ATR}×ATR da entrada. A = sai no cruzamento contrário da faixa ou no stop. B = A + trailing por degraus de ${TRAIL_ATR_MULT}×ATR. Já desconta a taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}%); sem funding.</i>\n\n`;
   for (const [nome, fn] of grupos) {
     const g = res.filter(fn);
     if (!g.length) continue;
     msg += `<b>${nome}</b> (n=${g.length})\nA: ${statsR(g.map((x) => x.a.r))}\nB: ${statsR(g.map((x) => x.b.r))}\n`;
-    const ehLatGrupo = nome.startsWith("🧱") || nome.startsWith("📶");
+    const ehLatGrupo = nome.startsWith("🧱") || nome.startsWith("📶") || nome.startsWith("📏"); // V107: as faixas de movimento também mostram a cadeia C/D (as viradas)
     if (nome === "Geral" || ehLatGrupo) {
       const avg = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
       const comVirada = (xs: Res[]) => xs.filter((x) => x.c.flips > 0).length;
@@ -6595,7 +6724,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
   if (truncou600) msg += `⚠️ <i>Há 600 entradas ou mais no período: só as 600 mais recentes entram. Use menos dias pra ver tudo.</i>\n`;
   if (res.length < 30) msg += `⚠️ <i>Só ${res.length} entradas: se poucos trades sustentam o resultado, ele é frágil. Compare "R médio" com "sem os 3 melhores".</i>\n`;
   msg += `<i>A/B = só a 1ª perna. C/D = virada encadeada: sai no cruzamento → entra na contrária no mesmo fechamento; sai no stop → espera o próximo cruzamento (robô "vira sozinho" depois de ligado, com ou sem alerta).</i>\n`;
-  msg += `<i>Uso: /saida 7 (até ${maxDias} dias, limitado pelas ${SAIDA_CANDLES} velas de 15m)</i>`;
+  msg += `<i>Uso: /saida 7 (até ${maxDias} dias, limitado pelas ${SAIDA_CANDLES} velas de 15m) · /saida 9 mov15 (só |24h| ≥ 15%, mantém o ADX do filtro) · /saida 9 tudo mov15 (só o corte de movimento) · 📏 = faixas de movimento no dia</i>`;
   for (const parte of dividirHtml(msg)) await sendTelegram(chatId, parte); // V74: em partes, sem cortar o fim
   // V74: trailing do motor numa mensagem à parte (a principal já enche a tela do Telegram)
   {
@@ -9674,7 +9803,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
     ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
     ["💧 /volconf 7", "resultado por volume (USDT x unidades) + sombra abaixo do filtro", "mostra, pros radares (topo, fundo, repique) e pros alertas de oportunidade/reversão, quanto funcionou e quanto foi invalidado: (A) só o que passa no filtro de volume (FILTRO_VOL_MIN_USDT), (B) sem filtro, incluindo a 🌑 sombra gravada abaixo dele, (C) por faixa de volume em USDT, (D) por quartis de volume em unidades da moeda e (E) os dois filtros juntos. No fim diz quantos pontos o USDT e as unidades separam. ⚠️ = menos de 8 alertas. Só os últimos 9 dias (usa as velas). Os alertas de antes da V106 não têm volume."],
-    ["🧪 /radarsim 9", "operar só pelos radares, segurando 4/8/24h", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta), com stop de SAIDA_STOP_ATR × ATR ou sem stop, e sair no prazo. Mesma régua do /saida (1R = 1 ATR, com taxa), pra comparar com o robô no cruzamento. /radarsim 9 regra = só os alertas que passariam no ADX das regras atuais. Horas no Secret RADARSIM_HORAS."],
+    ["🧪 /radarsim 9 regra stop1 alvo2 horas 1,2,4", "operar só pelos radares (stop, alvo e prazo à escolha)", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta) e sair no stop (stopX = X ATR do 15m; stop0 = sem stop), no alvo (alvoX = X R; alvo0 = sem alvo) ou no prazo (horas 1,2,4), o que vier primeiro. Mostra acerto, média em R, PF, sem os 3 melhores, o pior trade e quanto o preço andou contra antes de sair. Mesma régua do /saida, pra comparar com o robô no cruzamento. regra = só os alertas que passariam no ADX das regras atuais. btc = separa pelo humor do BTC na hora do alerta (subindo, caindo, de lado); mov = separa pelo movimento da moeda no dia (|24h|: abaixo de 8%, 8 a 15%, 15 a 25%, 25% ou mais); com romp, usa a entrada no rompimento. Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h. Padrões: stop SAIDA_STOP_ATR, sem alvo, horas RADARSIM_HORAS."],
     ["🌑 /sombras 7", "resumo real x sombra (reversão, repique, volume)", "num só lugar, compara o que alertou com o que a regra barrou e ficou gravado em silêncio, pra reversão (ADX/DI), repique (ADX/DI) e volume (filtro de USDT): acerto em 4h com margem de erro e uma leitura (regra ajuda, atrapalha ou ainda dentro da margem). Sai sozinho 1x por semana (SOMBRA_RESUMO_DIA, padrão domingo, a partir de SOMBRA_RESUMO_H = 20h; SOMBRA_RESUMO=0 desliga)."],
     ["🔎 ... desde V107", "julgar uma regra só com dados depois dela", "acrescente \"desde V107\" (versão) ou \"desde 05/10\" (data) no fim de /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf, /compressao ou /sombras. Ex.: /radarconf 90 desde V104. Alertas gravados antes da V107 não têm versão: pra incluí-los, defina o Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). O ± depois das porcentagens é a margem de erro (95%): se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte."],
     ["⚙️ /config mudou", "só os ajustes diferentes do padrão (admin)", "lista os Secrets numéricos que você mudou (com o padrão ao lado), os valores inválidos que o bot está ignorando e os demais Secrets definidos (tokens e chaves ocultos). /config sozinho mostra tudo por seção."],
@@ -9682,8 +9811,9 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🗜️ /compressao 30", "compressão por faixa de confiança, ADX e lado", "mostra, só pra compressão, qual faixa de confiança (6, 7, 8, 9–10), de ADX e de lado rende melhor (acerto e retorno mediano em 1h, 4h e 24h) — pra decidir se vale subir o COMPRESS_CONF_MIN. O número é a quantidade de dias"],
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
-    ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
+    ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro) V107: acrescente mov15 (ou mov20, mov25) pra ver só as moedas que andaram 15%+ no dia; a mensagem também separa por faixa de movimento (📏)."],
     ["📚 /radarhist 30", "histórico dos radares acumulado no Supabase", "o que o /radar mostra, mas guardado dia a dia (além dos 9 dias das velas): por tipo, por esticada em 24h (inclui 25% ou mais) e por ADX. Grava sozinho na virada das 21h; /radarhist gravar força agora"],
+    ["🚀 /foguete 7", "modo foguete: topo com ADX alto como continuação (LONG)", "espelho do modo faca: o topo que o radar não avisa por ADX alto (≥ FOGUETE_ADX_MIN, padrão 30) e com nota de topo ≥ FOGUETE_GRAVA_MIN (3) é gravado em silêncio como candidato LONG de continuação da alta. Mostra o que aconteceu depois, com as mesmas regras do /radar (inclusive por humor do BTC). FOGUETE_MODO=off desliga. A nota mede o quanto a alta parece topo: o LONG aposta contra ela, então nota maior não é LONG melhor."],
     ["🔪 /faca 7", "modo faca: fundo com ADX alto como continuação (SHORT)", "candidatos do modo faca (FACA_MODO: sombra grava em silêncio, alerta também avisa, off desliga): o que aconteceu depois, com as mesmas regras do /radar (invalidou/funcionou, rompimento da vela, virada). Fica fora do /placar. O número é a quantidade de dias (até 9)"],
     ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
     ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET"],
@@ -9934,10 +10064,17 @@ Deno.serve(async (req) => {
       return new Response("ok");
     }
     if (text === "/radarsim" || text.startsWith("/radarsim ") || text.startsWith("/radarsim@")) {
-      // V107: /radarsim [dias] [regra] — operar só pelos radares segurando X horas, na régua do /saida
+      // V107: /radarsim [dias] [regra] [stopX] [alvoX] [horas a,b,c] — operar só pelos radares, na régua do /saida
       const argsRs = text.split(/\s+/).slice(1);
-      const diasRs = Math.min(9, Math.max(1, Math.round(Number(argsRs.find((a) => /^\d+$/.test(a))) || 9)));
-      await comAguarde("🧪 Simulando a operação pelos radares, aguarde (busca as velas de cada moeda)...", () => runRadarSim(chatId, diasRs, argsRs.some((a) => /^regra/.test(a))));
+      const iH = argsRs.findIndex((a) => a.startsWith("horas"));
+      const diasRs = Math.min(9, Math.max(1, Math.round(Number(argsRs.find((a, i) => /^\d+$/.test(a) && !(iH >= 0 && argsRs[iH] === "horas" && i === iH + 1))) || 9)));
+      const numArg = (pref: string, padrao: number) => { const a = argsRs.find((x) => x.startsWith(pref)); const v = a ? Number(a.slice(pref.length).replace(",", ".")) : NaN; return isFinite(v) && v >= 0 ? v : padrao; };
+      const hArg = iH >= 0 ? (argsRs[iH] === "horas" ? argsRs[iH + 1] : argsRs[iH].slice(5)) : "";
+      const horasRs = (hArg ? hArg.split(/[,;]/).map((x) => Number(x.replace(",", "."))) : RADARSIM_HORAS).filter((x) => x > 0 && x <= 72).slice(0, 6);
+      const cfgRs: SimCfg = { stopAtr: Math.min(10, numArg("stop", SAIDA_STOP_ATR)), alvoR: Math.min(20, numArg("alvo", 0)) };
+      const entRs = (argsRs.some((a) => /^romp/.test(a)) ? "romp" : "direto") as "direto" | "romp";
+      const porBtcRs = argsRs.some((a) => a === "btc") ? { ent: entRs, por: "btc" as const } : argsRs.some((a) => a === "mov") ? { ent: entRs, por: "mov" as const } : null; // V107: "btc" = por humor do BTC · "mov" = por movimento da moeda no dia
+      await comAguarde("🧪 Simulando a operação pelos radares, aguarde (busca as velas de cada moeda)...", () => runRadarSim(chatId, diasRs, argsRs.some((a) => /^regra/.test(a)), cfgRs, horasRs.length ? horasRs : RADARSIM_HORAS, porBtcRs));
       return new Response("ok");
     }
     if (text === "/sombras" || text.startsWith("/sombras ") || text.startsWith("/sombras@")) {
@@ -10043,6 +10180,12 @@ Deno.serve(async (req) => {
       await comAguarde("📚 Lendo o histórico dos radares, aguarde...", () => runRadarHist(chatId, dH, gravarH));
       return new Response("ok");
     }
+    if (text === "/foguete" || text.startsWith("/foguete ") || text.startsWith("/foguete@")) {
+      // V107: /foguete [dias] — espelho do /faca: topo com ADX alto como LONG de continuação (só sombra)
+      const dFg = Math.min(9, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
+      await comAguarde("🚀 Avaliando o modo foguete, aguarde...", () => runRadarStats(chatId, dFg, { fonte: "foguete" }));
+      return new Response("ok");
+    }
     if (text === "/faca" || text.startsWith("/faca ") || text.startsWith("/faca@")) {
       // V98: /faca [dias] — resultado do modo faca (candidatos gravados em silêncio ou enviados), com as mesmas regras do /radar
       const dF = Math.min(9, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
@@ -10084,10 +10227,12 @@ Deno.serve(async (req) => {
     }
     if (text.startsWith("/saida")) {
       // V74: /saida [dias] [MOEDA] [trava/callback[/sl]] [tudo] — tudo é opcional: sem nada usa 7 dias, o filtro padrão e o trailing 5/3.5
-      let dias = 7, diasSet = false, moeda: string | undefined, cfg: { trava: number; cb: number; sl: number } | undefined, tudo = false;
+      let dias = 7, diasSet = false, moeda: string | undefined, cfg: { trava: number; cb: number; sl: number } | undefined, tudo = false, movArg: number | null = null;
       const num = (x: string) => Number(x.replace(",", "."));
       for (const p of text.split(/\s+/).slice(1)) {
         if (/^tudo$/i.test(p)) { tudo = true; continue; }
+        const mm = p.match(/^mov(\d+(?:[.,]\d+)?)$/i); // V107: movX = só entradas com |24h| ≥ X% (sem precisar de Secret)
+        if (mm) { movArg = num(mm[1]); continue; }
         const mc = p.match(/^(\d+(?:[.,]\d+)?)\/(\d+(?:[.,]\d+)?)(?:\/(\d+(?:[.,]\d+)?))?$/);
         if (mc) { cfg = { trava: num(mc[1]), cb: num(mc[2]), sl: mc[3] ? num(mc[3]) : 0 }; continue; }
         if (!diasSet && /^\d+$/.test(p)) { dias = Number(p); diasSet = true; continue; }
@@ -10096,7 +10241,8 @@ Deno.serve(async (req) => {
       }
       dias = Math.min(9, Math.max(1, Math.round(dias || 7)));
       if (cfg && !(cfg.trava > 0 && cfg.cb > 0)) { await sendTelegram(chatId, "⚠️ Trava e callback precisam ser maiores que zero. Ex.: /saida 9 QNT 5/3.5"); return new Response("ok"); }
-      const filtro = tudo || !SAIDA_FILTRO_PADRAO ? null : { mov: SAIDA_MOV_PADRAO, adx: SAIDA_ADX_PADRAO, subindo: SAIDA_ADX_SUBINDO };
+      const filtroPad = tudo || !SAIDA_FILTRO_PADRAO ? null : { mov: SAIDA_MOV_PADRAO, adx: SAIDA_ADX_PADRAO, subindo: SAIDA_ADX_SUBINDO };
+      const filtro = movArg !== null ? { mov: movArg, adx: filtroPad?.adx ?? 0, subindo: filtroPad?.subindo ?? false } : filtroPad; // V107: "tudo mov15" = só o corte de movimento
       await comAguarde("🚪 Simulando a saída real, aguarde...", () => runSaida(chatId, dias, { moeda, cfg: cfg ?? SAIDA_CFG_PADRAO, filtro }));
       return new Response("ok");
     }
