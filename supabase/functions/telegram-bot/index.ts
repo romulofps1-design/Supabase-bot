@@ -9069,6 +9069,12 @@ Deno.serve(async (req) => {
       await comAguarde("🔍 Procurando oportunidades (a favor do dia) perto do Indicador, aguarde...", () => runCruzado(chatId, "oportunidade"));
       return new Response("ok");
     }
+    if (text === "/reversaoconf" || text.startsWith("/reversaoconf ") || text.startsWith("/reversaoconf@")) {
+      // V99 (fica ANTES do /reversao, que casa por startsWith e engolia este comando): /reversaoconf [dias] — reversão por nota, lado, ADX e esticada
+      const diasRv = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 30)));
+      await rodarEmBackground(runReversaoConf(chatId, diasRv));
+      return new Response("ok");
+    }
     if (text.startsWith("/reversao") || text.startsWith("/reversão")) {
       await comAguarde("🔍 Procurando reversões (viradas contra o dia) perto do Indicador, aguarde...", () => runCruzado(chatId, "reversao"));
       return new Response("ok");
@@ -9203,12 +9209,6 @@ Deno.serve(async (req) => {
       if (cfg && !(cfg.trava > 0 && cfg.cb > 0)) { await sendTelegram(chatId, "⚠️ Trava e callback precisam ser maiores que zero. Ex.: /saida 9 QNT 5/3.5"); return new Response("ok"); }
       const filtro = tudo || !SAIDA_FILTRO_PADRAO ? null : { mov: SAIDA_MOV_PADRAO, adx: SAIDA_ADX_PADRAO, subindo: SAIDA_ADX_SUBINDO };
       await comAguarde("🚪 Simulando a saída real, aguarde...", () => runSaida(chatId, dias, { moeda, cfg: cfg ?? SAIDA_CFG_PADRAO, filtro }));
-      return new Response("ok");
-    }
-    if (text === "/reversaoconf" || text.startsWith("/reversaoconf ") || text.startsWith("/reversaoconf@")) {
-      // V99: /reversaoconf [dias] — reversão por nota, lado, ADX e esticada
-      const diasRv = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 30)));
-      await rodarEmBackground(runReversaoConf(chatId, diasRv));
       return new Response("ok");
     }
     if (text === "/radarconf" || text.startsWith("/radarconf ") || text.startsWith("/radarconf@")) {
