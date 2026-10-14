@@ -1,6 +1,6 @@
 // telegram-bot V107 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
+// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares segurando X horas, régua do /saida); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const BOT_VERSAO = "V107"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
@@ -1313,6 +1313,11 @@ function dividirTexto(texto: string, max = 3800): string[] {
 }
 // V74: divide texto longo em várias mensagens SEM perder o fim (o cortar() jogava fora o que passava de ~4000 caracteres: o /saida perdia "Melhores" e o rodapé).
 // Quebra em linha divisória/em branco (dividirTexto) e, se uma tag HTML (<i>, <b>...) ficou aberta no fim de uma parte, fecha ali e reabre no começo da seguinte.
+// V107: manda uma mensagem longa em partes (sem "...(cortado)"); os botões vão na última parte
+async function enviarEmPartes(chatId: number | string, msg: string, botoes?: Botoes): Promise<void> {
+  const partes = dividirHtml(msg);
+  for (let i = 0; i < partes.length; i++) await sendTelegram(chatId, partes[i], i === partes.length - 1 ? botoes : undefined);
+}
 function dividirHtml(texto: string, max = 3800): string[] {
   const partes = dividirTexto(texto, max - 80); // folga pras tags fechadas/reabertas
   const abertas: string[] = []; // tags de abertura completas (com atributos) ainda abertas
@@ -1779,7 +1784,7 @@ async function runFundo(chatId: number | string) {
     msg += `preço ${fmtPrice(c.info.preco)} (${c.info.distAbs.toFixed(1)}% abaixo da faixa) | topo ${fmtPrice(c.info.topo)}\n\n`;
   });
   msg += `<i>⭐ repique = disparou, recuou até a faixa e segura nela (retomada da alta). Aviso antecipado, não é entrada: o robô só abre LONG quando fechar 15m acima do indicador. O alerta automático sai com confiança ≥ ${FUNDO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
-  await sendTelegram(chatId, cortar(msg), itens.length ? botoesAnalisarLista(itens.map(({ c }) => c.info.instId)) : undefined);
+  await enviarEmPartes(chatId, msg, itens.length ? botoesAnalisarLista(itens.map(({ c }) => c.info.instId)) : undefined); // V107: em partes
 }
 
 // ───── V35: radar de TOPO (espelho do radar de fundo): moeda que subiu forte e mostra exaustão → possível virada LONG → SHORT ─────
@@ -2012,7 +2017,7 @@ async function runTopo(chatId: number | string) {
     msg += `preço ${fmtPrice(c.info.preco)} (${ladoAtual(c.info) === "long" ? `${c.info.distAbs.toFixed(1)}% acima da faixa` : "dentro da faixa"}) | fundo ${fmtPrice(c.info.fundo)}\n\n`;
   });
   msg += `<i>⭐ repique = despencou, repicou até a faixa e foi rejeitada (retomada da queda). Aviso antecipado, não é entrada: o robô só abre SHORT quando fechar 15m abaixo do indicador. O alerta automático sai com confiança ≥ ${TOPO_CONF_MIN}/10. Use /seguir MOEDA pra ser avisado na linha.</i>`;
-  await sendTelegram(chatId, cortar(msg), itens.length ? botoesAnalisarLista(itens.map(({ c }) => c.info.instId)) : undefined);
+  await enviarEmPartes(chatId, msg, itens.length ? botoesAnalisarLista(itens.map(({ c }) => c.info.instId)) : undefined); // V107: em partes
 }
 // ───── V36: radar de COMPRESSÃO — faixa achatada + velas minúsculas + volume começando a subir = rompimento iminente (direção imprevisível: o robô ligado pega o lado que romper) ─────
 type CompRes = { pts: number; conf: number; motivos: Motivo[]; volOk: boolean };
@@ -2325,7 +2330,7 @@ async function runCruzado(chatId: number | string, tipoAlvo: "oportunidade" | "r
   });
   if (top.length) msg += `<i>🔔 = já no critério do alerta automático (oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% em 24h) · ⭐ = repique na faixa. Toque em 🔎 para a análise completa, com "ligar o robô?".</i>`;
   if (capturar) { capturar(msg); return; } // usado pelo /melhor: devolve o texto em vez de mandar pro chat
-  await sendTelegram(chatId, cortar(msg), top.length ? botoesAnalisarLista(top.map((j) => j.info.instId)) : undefined);
+  await enviarEmPartes(chatId, msg, top.length ? botoesAnalisarLista(top.map((j) => j.info.instId)) : undefined); // V107: em partes
 }
 function getSupabase() {
   if (!SUPABASE_URL || !SUPABASE_KEY) return null;
@@ -3226,7 +3231,19 @@ async function runAlertaProativo() {
     }
     const confRes = await calcConfiancaAlerta(c, poolMap.get(inst)?.volUsdt ?? null, perfilAlerta);
     const minConf = c.tipo === "reversao" ? (c.lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
-    if (c.tipo === "reversao") {
+    // V107: o REPIQUE segue a regra do repique (V104: ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal. Antes ela só valia
+    // no radar: aqui o mesmo repique caía na regra da REVERSÃO (ADX <= REV_ADX_MAX) quando o dia estava perto de zero, ou em nenhuma regra
+    // como oportunidade — o radar e o alerta pediam o contrário. O barrado aqui não grava sombra: o radar já grava a mesma moeda (repique_sombra).
+    const ehRepC = ehRepique(c) === 1;
+    if (ehRepC) {
+      const fi = c.info as Partial<InfoFiltravel>;
+      const rm = repMotivos(c.lado, fi.adx, fi.adxAntes, fi.diDom ?? null);
+      if (rm.length) {
+        barrarLoop();
+        console.log(`⭐ ${inst} ${c.lado} (repique, ${c.tipo}) barrado [${rm.join("+")}]: ${repRegraTxt()} · ADX ${fi.adx != null ? fi.adx.toFixed(1) : "?"} · DI ${fi.diDom ?? "neutro"}`);
+        continue;
+      }
+    } else if (c.tipo === "reversao") {
       // V100: regra nova da reversão (ADX baixo + DI a favor) junto com a nota; o que barrar vai pro modo sombra
       const fi = c.info as Partial<InfoFiltravel>;
       const rv = revMotivos(c.lado, fi.adx, fi.diDom ?? null, confRes?.conf ?? null, minConf);
@@ -3933,7 +3950,7 @@ async function runDivDiag(chatId: number | string) {
     m += `Última vela é ${nb ? "um fundo novo (candidato)" : na ? "um topo novo (candidato)" : "um extremo novo? não"} — o aviso antecipado só sai quando ela é extremo da janela.\n`;
   }
   m += `\n<i>Se o TradingView mostra divergência e aqui está ✘: a regra que falhou (zona do RSI, diferença mínima, distância) é a diferença entre o seu indicador e o bot. Se está ✅ e não avisou, me mande o horário.</i>`;
-  await sendTelegram(chatId, cortar(m));
+  await enviarEmPartes(chatId, m); // V107: em partes
 }
 // V74: /trades — histórico REAL do motor (tabela "trades", em OUTRO Supabase). O bot não tem acesso ao banco do motor: ele pergunta ao motor (action:"trades") com uma
 // chave SÓ DE LEITURA (secret MOTOR_LEITURA_SECRET = o LEITURA_SECRET do motor). Secrets: MOTOR_URL (URL da função do motor), MOTOR_LEITURA_SECRET e,
@@ -4555,7 +4572,7 @@ async function runDiv(chatId: number | string) {
     return `${fi} ${DIV_TF_NOME[e.tf] ?? e.tf} ${DIV_TXT[e.tipo].nome} · ${divDH(e.t)} · BTC ${fmtPrice(e.preco)}${e.fase !== "X" && isFinite(mov) ? ` → ${mov >= 0 ? "+" : ""}${mov.toFixed(2)}% ${mov >= 0 ? "a favor" : "contra"}` : ""}`;
   }).join("\n") + "\n";
   m += `\n<i>Divergência é contexto, não entrada: em tendência forte o RSI diverge várias vezes antes do preço virar. "A favor" = na direção do aviso (altista sobe, baixista cai). Compare por gráfico antes de confiar.</i>`;
-  await sendTelegram(chatId, cortar(m));
+  await enviarEmPartes(chatId, m); // V107: em partes
 }
 // V75: status/resumo/painel mostravam os numeros GRAVADOS pelo cron (de ate 15 min atras, ou de antes da Binance), enquanto o /analise recalcula na hora.
 // Quem so EXIBE o filtro agora refaz a leitura ao vivo (ADX/ER/caixa de BTC e ETH; cache de 4 min). O ESTADO (bloqueando/liberado, desde quando, avisos)
@@ -4830,6 +4847,7 @@ const JAN_MFE_MIN = [15, 30, 60];
 let _placarTemJanMfe = false;
 let _placarTem15m = true;
 const PLACAR_MAX_CONFERE = 60;
+const PLACAR_RESGATE_H = Math.min(numEnv("PLACAR_RESGATE_H", "72"), Math.floor((CANDLES_LIMIT_PRECISO * TF_MIN) / 60) - 6); // V107: até quantas horas atrás o placar ainda confere um alerta pendente
 const ANALISE_TARDE_CANDLES = 8;
 const ANALISE_MUITO_TARDE_CANDLES = 16;
 type VarInfo = { instId: string; pct: number; last: number; volUsdt: number; volMoeda?: number; dd: number; up: number };
@@ -4963,9 +4981,30 @@ async function conferirPlacar(SB: any) {
   const desde = new Date(agora - (PLACAR_ENTRADA_ON ? 30 : 26) * 3600000).toISOString();
   let res: any = null;
   if (PLACAR_ENTRADA_ON && _placarTemEntrada) {
-    res = await SB.from(PLACAR_TABELA).select("*")
-      .is("preco_24h", null).gt("criado_em", desde).or("ent_status.is.null,ent_status.eq.entrou")
+    // V107: duas filas separadas. Antes era UMA consulta (os 60 mais antigos das últimas 30h com preco_24h vazio): os alertas que já entraram
+    // e só esperavam completar 24h ocupavam as 60 vagas sem ter nada a fazer, os novos ficavam na fila e, passadas 30h, saíam da janela
+    // com ent_status vazio PRA SEMPRE (ex.: a sombra da reversão inteira). Agora: (1) quem ainda não teve a entrada conferida, até
+    // PLACAR_RESGATE_H (72h, dentro das 500 velas); (2) quem entrou e tem um horizonte VENCIDO (já dá pra gravar o preço).
+    const iso = (h: number) => new Date(agora - h * 3600000).toISOString();
+    const qEnt = SB.from(PLACAR_TABELA).select("*").is("ent_status", null).gt("criado_em", iso(PLACAR_RESGATE_H))
       .order("criado_em", { ascending: true }).limit(PLACAR_MAX_CONFERE);
+    const vencidos = [...(_placarTem15m ? [15] : []), 60, 240, 1440].map((m) => `and(${colH(m)}.is.null,ent_em.lt.${iso(m / 60)})`).join(",");
+    const qHor = SB.from(PLACAR_TABELA).select("*").eq("ent_status", "entrou").is("preco_24h", null).gt("criado_em", iso(PLACAR_RESGATE_H)).or(vencidos)
+      .order("criado_em", { ascending: true }).limit(PLACAR_MAX_CONFERE);
+    const [r1, r2] = await Promise.all([qEnt, qHor]);
+    if (r1.error || r2.error) {
+      res = r1.error ? r1 : r2; // cai no tratamento antigo abaixo (coluna ausente etc.)
+      if (!/ent_status/i.test(String(res.error.message || ""))) {
+        console.log("⚠️ conferirPlacar (filas V107) falhou, usando a consulta antiga:", res.error.message);
+        res = await SB.from(PLACAR_TABELA).select("*")
+          .is("preco_24h", null).gt("criado_em", desde).or("ent_status.is.null,ent_status.eq.entrou")
+          .order("criado_em", { ascending: true }).limit(PLACAR_MAX_CONFERE);
+      }
+    } else {
+      const vistos = new Set<any>(), juntos: any[] = [];
+      for (const r of [...(r1.data || []), ...(r2.data || [])] as any[]) if (!vistos.has(r.id)) { vistos.add(r.id); juntos.push(r); }
+      res = { data: juntos, error: null };
+    }
     if (res.error && /ent_status/i.test(String(res.error.message || ""))) {
       _placarTemEntrada = false;
       console.log("⚠️ alertas_log sem as colunas de entrada: rode o ALTER TABLE V30 do arquivo setup-supabase.sql (placar segue pelo preço do aviso)");
@@ -5617,10 +5656,14 @@ async function volSombraRodar(SB: any, variacoes: VarInfo[], perfil: XPerfil | n
     const s = classificar(info, p.pct);
     if (s && !motivoDescarte(info, FILTRO_VOL_MIN_USDT, false, s.lado)) {
       if (ALERT_RETESTE_MAX_CANDLES > 0 && s.info.idadeCandles !== null && s.info.idadeCandles > ALERT_RETESTE_MAX_CANDLES) continue;
-      const confRes = await calcConfiancaAlerta(s, p.volUsdt, perfil).catch(() => null);
+      // V107: a nota NÃO pode ver o volume abaixo do filtro ("volume baixo" tira 2 pontos): a sombra mede SÓ o filtro de volume; se a nota
+      // também punisse, quase nenhum setup da faixa passaria e a comparação sairia viciada. Pontua como se estivesse no limite do filtro.
+      const confRes = await calcConfiancaAlerta(s, Math.max(p.volUsdt, FILTRO_VOL_MIN_USDT), perfil).catch(() => null);
       const conf = confRes?.conf ?? null;
       const minConf = s.tipo === "reversao" ? (s.lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
-      const barra = s.tipo === "reversao" ? revMotivos(s.lado, info.adx, info.diDom ?? null, conf, minConf).length > 0 : minConf > 0 && conf !== null && conf < minConf;
+      const ehRepS = (s.lado === "long" && !!info.bottom?.repique) || (s.lado === "short" && !!info.top?.repique); // V107: repique segue a regra do repique, como no alerta real
+      const barra = ehRepS ? (repMotivos(s.lado, info.adx, info.adxAntes, info.diDom ?? null).length > 0 || (minConf > 0 && conf !== null && conf < minConf))
+        : s.tipo === "reversao" ? revMotivos(s.lado, info.adx, info.diDom ?? null, conf, minConf).length > 0 : minConf > 0 && conf !== null && conf < minConf;
       if (!barra) cands.push({ inst, lado: s.lado, cat: s.tipo, status: s.status, conf, info, pct: p.pct, idade: s.info.idadeCandles, fresco: s.fresco });
     }
   }
@@ -5918,6 +5961,120 @@ async function checarResumoSombras(SB: any) {
   if (ok) await upsertLinha(SB, SOMBRA_RESUMO_ROW, { last_alert_at: new Date().toISOString(), last_status: "enviado" });
   console.log(`🌑 resumo semanal das sombras ${ok ? "enviado" : "falhou (tento na próxima rodada)"}`);
 }
+// ===== V107: /radarsim [dias] [regra] — "operar só pelos radares, segurando X horas" =====
+// Mesma régua do /saida: 1R = 1×ATR na entrada, taxa ida e volta descontada, sem funding. Pra comparar com o robô no cruzamento.
+// Entrada: DIRETO (preço do alerta, a partir da vela seguinte) ou ROMPIMENTO (rompe a máxima da vela do alerta no LONG / a mínima no
+// SHORT, em até RADAR_ENTRADA_VELAS velas; se romper antes o lado oposto da vela, cancela — igual ao /radar).
+// Saída: no prazo (fechamento da vela que completa X horas) ou no stop de SAIDA_STOP_ATR×ATR; "sem stop" = só o prazo (como o motor hoje).
+// Stop e prazo na mesma vela: conta o stop (pior caso). "regra" = só os alertas que passariam no ADX das regras atuais (topo < TOPO_ADX_MAX,
+// fundo < FUNDO_ADX_MAX, repique ≥ REPIQUE_ADX_MIN), com o ADX da vela anterior ao alerta. O DI não entra (não dá pra refazer com fidelidade).
+const RADARSIM_HORAS: number[] = String(Deno.env.get("RADARSIM_HORAS") || "4,8,24").split(",").map((x: string) => Number(x.trim())).filter((x: number) => x > 0 && x <= 72);
+type SimRes = { r: number; pct: number; saida: "stop" | "prazo" } | null; // null = ainda em aberto / sem dados
+function simSegurar(d: XVelas, kIni: number, lado: HipLado, entrada: number, atr: number, barras: number, comStop: boolean, checaVelaEntrada: boolean): SimRes {
+  if (!(atr > 0) || !(entrada > 0)) return null;
+  const long = lado === "long", stop = long ? entrada - SAIDA_STOP_ATR * atr : entrada + SAIDA_STOP_ATR * atr;
+  const taxaPx = (entrada * TAXA_IDA_VOLTA_PCT) / 100;
+  const fecha = (px: number, saida: "stop" | "prazo") => {
+    const bruto = long ? px - entrada : entrada - px, liq = bruto - taxaPx;
+    return { r: liq / atr, pct: (liq / entrada) * 100, saida };
+  };
+  const kFim = kIni + barras - 1;
+  if (kFim > d.c.length - 1) return null; // o prazo ainda não terminou
+  const tocou = (k: number) => (long ? d.l[k] <= stop : d.h[k] >= stop);
+  const pxStop = (k: number) => (long ? Math.min(stop, d.o[k]) : Math.max(stop, d.o[k])); // abriu além do stop: sai na abertura
+  if (comStop && checaVelaEntrada && tocou(kIni - 1)) return fecha(stop, "stop"); // na própria vela do rompimento (pior caso)
+  for (let k = kIni; k <= kFim; k++) {
+    if (comStop && tocou(k)) return fecha(pxStop(k), "stop");
+  }
+  return fecha(d.c[kFim], "prazo");
+}
+async function runRadarSim(chatId: number | string, dias: number, soRegra: boolean) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const dd = Math.min(9, Math.max(1, Math.round(dias || 9)));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(Date.now() - dd * 86400000).toISOString()).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).range(a, b));
+  if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
+  const rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em && !ehFinalLog(r) && !ehDescartadoLog(r));
+  if (!rows.length) { await sendTelegram(chatId, `🧪 <b>SIMULAÇÃO DOS RADARES</b>\n\nNenhum alerta de radar nos últimos ${dd} dia(s).`); return; }
+  const porMoeda = new Map<string, any[]>();
+  for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
+  const TFMS = TF_MIN * 60000;
+  type Cfg = { ent: "direto" | "romp"; stop: boolean; h: number };
+  const cfgs: Cfg[] = [];
+  for (const ent of ["direto", "romp"] as const) for (const stop of [true, false]) for (const h of RADARSIM_HORAS) cfgs.push({ ent, stop, h });
+  const chave = (c: Cfg) => `${c.ent}|${c.stop ? 1 : 0}|${c.h}`;
+  type Item = { tipo: HipTipo; res: Map<string, SimRes>; naoEntrou: number };
+  const itens: Item[] = [];
+  let foraRegra = 0;
+  await emLotes([...porMoeda.keys()], 5, async (id) => {
+    const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
+    if (!d) return;
+    const adxS = soRegra ? xAdxSerie(d.h, d.l, d.c, 14) : [];
+    for (const r of porMoeda.get(id)!) {
+      const emMs = new Date(r.criado_em).getTime();
+      let k0 = -1;
+      for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= emMs && emMs < d.t[i] + TFMS) { k0 = i; break; } }
+      if (k0 < 20 || k0 >= d.c.length - 1) continue;
+      const tipo: HipTipo = String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
+      const lado: HipLado = r.lado === "long" ? "long" : "short";
+      if (soRegra) {
+        const a = adxS[k0 - 1];
+        const ok = !Number.isFinite(a) ? true
+          : tipo === "repique" ? !(REPIQUE_ADX_MIN > 0) || a >= REPIQUE_ADX_MIN
+          : tipo === "topo" ? !(TOPO_ADX_MAX > 0) || a < TOPO_ADX_MAX
+          : !(FUNDO_ADX_MAX > 0) || a < FUNDO_ADX_MAX;
+        if (!ok) { foraRegra++; continue; }
+      }
+      const atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
+      if (!(atr > 0)) continue;
+      // rompimento da vela do alerta (mesma regra do /radar)
+      const hi = d.h[k0], lo = d.l[k0], long = lado === "long";
+      let kR = -1, pxR = 0, cancelou = false;
+      for (let k = k0 + 1; k <= Math.min(k0 + RUP_ESPERA, d.c.length - 1); k++) {
+        const gat = long ? d.h[k] > hi : d.l[k] < lo, contra = long ? d.l[k] < lo : d.h[k] > hi;
+        if (gat) { kR = k; pxR = long ? Math.max(hi, d.o[k]) : Math.min(lo, d.o[k]); break; }
+        if (contra) { cancelou = true; break; }
+      }
+      const res = new Map<string, SimRes>();
+      for (const c of cfgs) {
+        const barras = Math.max(1, Math.round((c.h * 60) / TF_MIN));
+        if (c.ent === "direto") res.set(chave(c), simSegurar(d, k0 + 1, lado, Number(r.preco), atr, barras, c.stop, false));
+        else res.set(chave(c), kR > 0 ? simSegurar(d, kR + 1, lado, pxR, atr, barras, c.stop, true) : null);
+      }
+      itens.push({ tipo, res, naoEntrou: kR > 0 ? 0 : cancelou || k0 + RUP_ESPERA <= d.c.length - 1 ? 1 : 0 });
+    }
+  });
+  if (!itens.length) { await sendTelegram(chatId, "🧪 <b>SIMULAÇÃO DOS RADARES</b>\n\nNão consegui as velas dos alertas. Tente de novo em alguns minutos."); return; }
+  const linha = (g: Item[], c: Cfg): string => {
+    const xs = g.map((i) => i.res.get(chave(c))).filter((x): x is NonNullable<SimRes> => !!x);
+    if (!xs.length) return `  ${c.h}h: <i>ainda sem resultado</i>\n`;
+    const rs = xs.map((x) => x.r), pcts = xs.map((x) => x.pct), ac = rs.filter((x) => x > 0).length, pf = _profitFactor(rs);
+    const med = rs.reduce((t, x) => t + x, 0) / rs.length;
+    const sem3 = rs.length > 5 ? [...rs].sort((a, b) => b - a).slice(3) : null;
+    const stops = xs.filter((x) => x.saida === "stop").length;
+    return `  ${c.h}h (n=${xs.length}): acerto ${Math.round((ac / xs.length) * 100)}%${pmTxt(ac, xs.length)} · média ${med >= 0 ? "+" : ""}${med.toFixed(2)}R · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"} · ${_sg(pcts.reduce((t, x) => t + x, 0) / pcts.length)} de preço${sem3 ? ` · sem os 3 melhores ${(sem3.reduce((t, x) => t + x, 0) / sem3.length).toFixed(2)}R` : ""}${c.stop ? ` · ${stops} stop` : ""}${xs.length < 15 ? " ⚠️" : ""}\n`;
+  };
+  const bloco = (titulo: string, g: Item[]): string => {
+    if (!g.length) return "";
+    const ne = g.reduce((t, i) => t + i.naoEntrou, 0);
+    let t = `${MINI_DIVISOR}\n<b>${titulo}</b> (n=${g.length})\n${MINI_DIVISOR}\n`;
+    for (const ent of ["direto", "romp"] as const) for (const stop of [true, false]) {
+      t += `<b>${ent === "direto" ? "Direto no alerta" : "No rompimento da vela"} · ${stop ? `stop ${SAIDA_STOP_ATR} ATR` : "sem stop"}</b>${ent === "romp" && stop ? ` <i>(não rompeu/cancelou: ${ne})</i>` : ""}\n`;
+      for (const h of RADARSIM_HORAS) t += linha(g, { ent, stop, h });
+    }
+    return t + "\n";
+  };
+  let m = `🧪 <b>SIMULAÇÃO: OPERAR SÓ PELOS RADARES</b> — ${dd} dia(s)${soRegra ? " · só o que passa no ADX das regras atuais" : ""}\n${DIVISOR}\n`;
+  m += `<i>Mesma régua do /saida: 1R = 1×ATR na entrada, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada, sem funding. Segura até o prazo (${RADARSIM_HORAS.join("/")}h) ou até o stop. Stop e prazo na mesma vela = stop (pior caso). Média em R; ± = margem de erro do acerto.</i>\n`;
+  if (soRegra) m += `<i>${foraRegra} alerta(s) ficaram de fora por ADX (topo &lt; ${TOPO_ADX_MAX} · fundo &lt; ${FUNDO_ADX_MAX} · repique ≥ ${REPIQUE_ADX_MIN}); o DI não entra no filtro.</i>\n`;
+  m += "\n";
+  m += bloco("🔴 Topo (SHORT)", itens.filter((i) => i.tipo === "topo"));
+  m += bloco("🟢 Fundo (LONG)", itens.filter((i) => i.tipo === "fundo"));
+  m += bloco("⭐ Repique", itens.filter((i) => i.tipo === "repique"));
+  m += bloco("📡 Todos os radares", itens);
+  m += `<i>Compare com o /saida (robô no cruzamento): mesma unidade (R de 1 ATR). Os alertas entram em sequência, sem limite de posições ao mesmo tempo nem de capital. Prazo ainda não terminado = fora da conta. Uso: /radarsim 9 · /radarsim 9 regra · horas no Secret RADARSIM_HORAS (ex.: 2,6,12,24).</i>`;
+  await enviarEmPartes(chatId, m);
+}
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
 async function runRepiqueSombra(chatId: number | string, dias: number) {
   const SB = getSupabase();
@@ -6114,7 +6271,7 @@ async function runPlacar(chatId: number | string, dias: number) {
   msg += await montarCalibracao(SB, dias).catch(() => "");
   if (comResultado < 30) msg += `⚠️ <i>Amostra pequena (${comResultado} conferidos): ainda não tire conclusões.</i>\n`;
   msg += `<i>Já desconta a taxa da BloFin; não considera funding, stop nem o tamanho da posição. Uso: /placar 30 (30 dias). O 15m está no /15min e a saída real do robô no /saida</i>`;
-  await sendTelegram(chatId, cortar(msg));
+  await enviarEmPartes(chatId, msg); // V107: em partes
 }
 // ─────────────────────────────────────────────────────────────
 // V66: /15min — placar do horizonte de 15m, separado do /placar
@@ -6130,10 +6287,10 @@ async function run15min(chatId: number | string, dias: number) {
   const conf = rows.filter((r) => retornoLog(r, 15) !== null).length;
   let msg = `⏱️ <b>PLACAR 15m</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${rows.length} alerta(s), ${conf} com 15m conferido\n<i>retorno em 15 min desde o fechamento da vela do cruzamento, já com a taxa. Serve pra medir o ruído de curto prazo; trade que dura horas ou dias não cabe aqui, veja o /saida.</i>\n\n`;
   msg += `<b>Geral (todos os alertas)</b>\n${linhaStats(rows, [15])}\n`;
-  await sendTelegram(chatId, cortar(msg));
+  await enviarEmPartes(chatId, msg); // V107: em partes
   try {
     const t15 = placar15mTxt(rows);
-    await sendTelegram(chatId, cortar(t15 || "⏱️ Ainda sem alertas frescos (cruzou agora) com 15m conferido nesse período."));
+    await enviarEmPartes(chatId, t15 || "⏱️ Ainda sem alertas frescos (cruzou agora) com 15m conferido nesse período."); // V107: em partes
   } catch (e) { console.log("⚠️ /15min:", e); }
 }
 
@@ -6729,7 +6886,7 @@ async function runComparar(chatId: number | string, entradaA: string, entradaB: 
     const pior = a.conf > b.conf ? b : a;
     msg += `🏆 <b>${melhor.instId}</b> tem a confiança mais alta (${melhor.conf}/10 vs ${pior.conf}/10) pro lado ${nome(melhor.lado)} agora.`;
   }
-  await sendTelegram(chatId, cortar(msg), [...botaoAnalisar(a.instId), ...botaoAnalisar(b.instId)]);
+  await enviarEmPartes(chatId, msg, [...botaoAnalisar(a.instId), ...botaoAnalisar(b.instId)]);
 }
 async function runAnalise(chatId: number | string, entrada: string, capturar?: (p: string[]) => void) {
   const instId = await resolverPar(entrada);
@@ -7662,7 +7819,7 @@ async function runSeguidas(chatId: number | string) {
     return [{ text: `🔎 Analisar ${s.toUpperCase()}`, callback_data: `/analise ${s}` }, { text: `❌ Parar ${s.toUpperCase()}`, callback_data: `/parar ${s}` }];
   });
   botoesSeg.push([{ text: "🧹 Parar todas", callback_data: "/parar todas" }]);
-  await sendTelegram(chatId, cortar(msg + "<i>Toque em 🔎 para analisar ou em ❌ para deixar de seguir uma moeda.</i>"), botoesSeg);
+  await enviarEmPartes(chatId, msg + "<i>Toque em 🔎 para analisar ou em ❌ para deixar de seguir uma moeda.</i>", botoesSeg); // V107: em partes
 }
 async function pararTodas(chatId: number | string) {
   const SB = getSupabase();
@@ -7947,7 +8104,7 @@ async function runAgenda(chatId: number | string) {
   let msg = agBlocoDia(ev, 0, "hoje", true) + `\n` + agBlocoDia(ev, 1, "amanhã", false);
   if (velho) msg += `\n<i>⚠️ fonte fora do ar — dados do último cache, podem estar desatualizados</i>`;
   msg += `\n<i>Horários em UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}. Você recebe um aviso ${AGENDA_AVISOS_MIN.join(" e ")} min antes de cada dado.</i>`;
-  await sendTelegram(chatId, cortar(msg));
+  await enviarEmPartes(chatId, msg); // V107: em partes
 }
 async function checarAgenda(SB: any) {
   if (!AGENDA_ON || !AGENDA_AVISOS_MIN.length || !ALERT_CHAT_IDS.length) return;
@@ -8364,7 +8521,7 @@ async function runNoticia(chatId: number | string, arg: string) {
   if (lista.length) msg += `<i>🔴 = palavra de alto impacto (tarifa, Fed/juros, cripto, sanções, guerra...) · 🟡 = relevante.${lista.some((it) => it.pt) ? " Tradução automática: o link leva ao original." : ""}</i>\n`;
   msg += `<i>O filtro é por palavra-chave: pode deixar passar algo ou mostrar post sem importância. Posts podem ser apagados ou desmentidos, e a 1ª reação do preço costuma reverter. Não é recomendação.</i>`;
   if (falhas.length) msg += `\n<i>⚠️ fonte(s) fora do ar agora: ${agEsc(falhas.join(", "))}${velho ? " — mostrando o último cache" : ""}</i>`;
-  await sendTelegram(chatId, cortar(msg));
+  await enviarEmPartes(chatId, msg); // V107: em partes
 }
 // Bloco do painel: notícias de alto impacto das últimas NOTICIAS_PAINEL_H horas. Nunca lança erro.
 async function ntBlocoPainel(SB: any): Promise<string> {
@@ -9195,7 +9352,7 @@ async function runMeuPlacar(chatId: number | string, dias: number) {
   msg += `Seguidos: ${seguidos.length ? linhaStats(seguidos) : "—"}\nNão seguidos: ${ignorados.length ? linhaStats(ignorados) : "—"}\n\n`;
   msg += `<i>Aproximação: conta como "seguiu" uma abertura na mesma moeda e lado entre ${MEUPLACAR_ANTES_MIN} min antes e ${MEUPLACAR_DEPOIS_H}h depois do alerta. Sem taxas e funding. O resultado por moeda soma todos os trades naquela moeda no período.</i>`;
   if (cortado) msg += `\n<i>(limite de execuções lidas atingido; use menos dias)</i>`;
-  await sendTelegram(chatId, cortar(msg));
+  await enviarEmPartes(chatId, msg); // V107: em partes
 }
 
 let _pausas = new Map<string, number>();
@@ -9306,7 +9463,7 @@ async function runStatus(chatId: number | string) {
     `🔔 Este chat ${ALERT_CHAT_IDS.includes(String(chatId)) ? "recebe" : "NÃO recebe"} os alertas automáticos\n` +
     `🔑 Chave BloFin: ${cred ? "vinculada" : "não vinculada"}`;
   const falhou = testes.some((t) => t.startsWith("❌"));
-  await sendTelegram(chatId, cortar(msg), falhou ? [[{ text: "🔄 Tentar de novo", callback_data: "/status" }]] : undefined);
+  await enviarEmPartes(chatId, msg, falhou ? [[{ text: "🔄 Tentar de novo", callback_data: "/status" }]] : undefined);
 }
 async function runRobo(chatId: number | string) {
   if (ALLOWED_CHAT_IDS.length === 0) {
@@ -9382,7 +9539,7 @@ async function runRobo(chatId: number | string) {
   msg += `\n<i>Só leitura. O resultado usa o fillPnl informado pela BloFin e pode não incluir taxas e funding. As sugestões usam Indicador + ADX + RSI e não são ordem de compra ou venda.</i>`;
   const falhouRobo = posicoes === null || fills === null;
   const botoesRobo = instsPos.length ? botoesAnalisarLista(instsPos) : [];
-  await sendTelegram(chatId, cortar(msg), falhouRobo ? [...botoesRobo, [{ text: "🔄 Tentar de novo", callback_data: "/robo" }]] : (botoesRobo.length ? botoesRobo : undefined));
+  await enviarEmPartes(chatId, msg, falhouRobo ? [...botoesRobo, [{ text: "🔄 Tentar de novo", callback_data: "/robo" }]] : (botoesRobo.length ? botoesRobo : undefined));
 }
 const ADMIN_CHAT_ID = String(Deno.env.get("ADMIN_CHAT_ID") || DONO_CHAT || "");
 const ehAdmin = (chatId: number | string, remetente?: number | string | null) =>
@@ -9517,6 +9674,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
     ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
     ["💧 /volconf 7", "resultado por volume (USDT x unidades) + sombra abaixo do filtro", "mostra, pros radares (topo, fundo, repique) e pros alertas de oportunidade/reversão, quanto funcionou e quanto foi invalidado: (A) só o que passa no filtro de volume (FILTRO_VOL_MIN_USDT), (B) sem filtro, incluindo a 🌑 sombra gravada abaixo dele, (C) por faixa de volume em USDT, (D) por quartis de volume em unidades da moeda e (E) os dois filtros juntos. No fim diz quantos pontos o USDT e as unidades separam. ⚠️ = menos de 8 alertas. Só os últimos 9 dias (usa as velas). Os alertas de antes da V106 não têm volume."],
+    ["🧪 /radarsim 9", "operar só pelos radares, segurando 4/8/24h", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta), com stop de SAIDA_STOP_ATR × ATR ou sem stop, e sair no prazo. Mesma régua do /saida (1R = 1 ATR, com taxa), pra comparar com o robô no cruzamento. /radarsim 9 regra = só os alertas que passariam no ADX das regras atuais. Horas no Secret RADARSIM_HORAS."],
     ["🌑 /sombras 7", "resumo real x sombra (reversão, repique, volume)", "num só lugar, compara o que alertou com o que a regra barrou e ficou gravado em silêncio, pra reversão (ADX/DI), repique (ADX/DI) e volume (filtro de USDT): acerto em 4h com margem de erro e uma leitura (regra ajuda, atrapalha ou ainda dentro da margem). Sai sozinho 1x por semana (SOMBRA_RESUMO_DIA, padrão domingo, a partir de SOMBRA_RESUMO_H = 20h; SOMBRA_RESUMO=0 desliga)."],
     ["🔎 ... desde V107", "julgar uma regra só com dados depois dela", "acrescente \"desde V107\" (versão) ou \"desde 05/10\" (data) no fim de /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf, /compressao ou /sombras. Ex.: /radarconf 90 desde V104. Alertas gravados antes da V107 não têm versão: pra incluí-los, defina o Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). O ± depois das porcentagens é a margem de erro (95%): se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte."],
     ["⚙️ /config mudou", "só os ajustes diferentes do padrão (admin)", "lista os Secrets numéricos que você mudou (com o padrão ao lado), os valores inválidos que o bot está ignorando e os demais Secrets definidos (tokens e chaves ocultos). /config sozinho mostra tudo por seção."],
@@ -9775,6 +9933,13 @@ Deno.serve(async (req) => {
       await rodarEmBackground(runReversaoConf(chatId, diasRv));
       return new Response("ok");
     }
+    if (text === "/radarsim" || text.startsWith("/radarsim ") || text.startsWith("/radarsim@")) {
+      // V107: /radarsim [dias] [regra] — operar só pelos radares segurando X horas, na régua do /saida
+      const argsRs = text.split(/\s+/).slice(1);
+      const diasRs = Math.min(9, Math.max(1, Math.round(Number(argsRs.find((a) => /^\d+$/.test(a))) || 9)));
+      await comAguarde("🧪 Simulando a operação pelos radares, aguarde (busca as velas de cada moeda)...", () => runRadarSim(chatId, diasRs, argsRs.some((a) => /^regra/.test(a))));
+      return new Response("ok");
+    }
     if (text === "/sombras" || text.startsWith("/sombras ") || text.startsWith("/sombras@")) {
       // V107: /sombras [dias] — real x sombra (reversão, repique, volume) num só lugar; sai sozinho 1x por semana
       const diasSb = Math.min(30, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
@@ -9909,7 +10074,7 @@ Deno.serve(async (req) => {
       return new Response("ok");
     }
     if (text === "/logs" || text.startsWith("/logs ") || text.startsWith("/logs@")) {
-      await sendTelegram(chatId, logResumo());
+      for (const parte of dividirHtml(logResumo())) await sendTelegram(chatId, parte); // V107: em partes, por segurança
       return new Response("ok");
     }
     if (text === "/div" || text.startsWith("/div ") || text.startsWith("/div@")) {
@@ -9986,7 +10151,7 @@ Deno.serve(async (req) => {
     if (text.startsWith("/config")) {
       if (!ehAdmin(chatId, remetente)) { await sendTelegram(chatId, "🔒 Comando restrito ao administrador."); return new Response("ok"); }
       if (/^\/config(@\w+)?\s+(mudou|diff|alterad)/.test(text)) { for (const parte of dividirHtml(montarConfigMudou())) await sendTelegram(chatId, parte); return new Response("ok"); } // V107
-      await sendTelegram(chatId, montarConfig());
+      for (const parte of dividirHtml(montarConfig())) await sendTelegram(chatId, parte); // V107: em partes (antes saía "...(cortado)")
       return new Response("ok");
     }
     if (text.startsWith("/menu")) {
