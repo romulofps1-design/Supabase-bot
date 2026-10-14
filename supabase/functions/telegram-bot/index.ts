@@ -6342,8 +6342,8 @@ function bandaModo(closes: number[], modo: Exclude<ModoJ6, "custom">, peso: numb
 // inclui voltar pra dentro da faixa e romper de novo do MESMO lado). Posicionado: sinal do mesmo lado é ignorado, sinal oposto vira a mão no fechamento,
 // voltar pra dentro da faixa NÃO tira da posição; o stop (aqui SAIDA_STOP_ATR × ATR da entrada) fecha no meio da vela. Depois de um stop automático, um
 // sinal novo do MESMO lado numa vela posterior reabre (reentrada, V47 #18). Só conta operação com entrada desde desdeMs e já encerrada.
-type TrMotorJ = { filtro: boolean; r: number; reent: boolean };
-function simMotor(d: XVelas, b: { sup: number; j6: number }[], kIni: number, desdeMs: number, stopAtr: number, filtroEm: (k: number) => boolean): TrMotorJ[] {
+type TrMotorJ = { filtro: boolean; r: number; reent: boolean; mov: number; adxOk: boolean };
+function simMotor(d: XVelas, b: { sup: number; j6: number }[], kIni: number, desdeMs: number, stopAtr: number, filtroEm: (k: number) => boolean, movEm: (k: number) => number = () => 0, adxOkEm: (k: number) => boolean = () => true): TrMotorJ[] {
   const out: TrMotorJ[] = [];
   const topo = (k: number) => Math.max(b[k].sup, b[k].j6), fundo = (k: number) => Math.min(b[k].sup, b[k].j6);
   const sinal = (k: number): HipLado | null => {
@@ -6351,19 +6351,19 @@ function simMotor(d: XVelas, b: { sup: number; j6: number }[], kIni: number, des
     if (d.c[k] < fundo(k) && !(d.c[k - 1] < fundo(k - 1))) return "short";
     return null;
   };
-  type PosM = { lado: HipLado; k: number; px: number; atr: number; stop: number; filtro: boolean; reent: boolean };
+  type PosM = { lado: HipLado; k: number; px: number; atr: number; stop: number; filtro: boolean; reent: boolean; mov: number; adxOk: boolean };
   const st: { pos: PosM | null } = { pos: null }; // objeto (não let) pra o TS não estreitar pra null por causa das closures
   let ultSaidaStop: HipLado | null = null; // lado da última posição fechada no stop (pra marcar a reentrada)
   const fechar = (px: number) => {
     const p = st.pos!;
     const liq = (p.lado === "long" ? px - p.px : p.px - px) - (p.px * TAXA_IDA_VOLTA_PCT) / 100;
-    if (d.t[p.k] >= desdeMs) out.push({ filtro: p.filtro, r: liq / p.atr, reent: p.reent });
+    if (d.t[p.k] >= desdeMs) out.push({ filtro: p.filtro, r: liq / p.atr, reent: p.reent, mov: p.mov, adxOk: p.adxOk });
     st.pos = null;
   };
   const abrir = (k: number, lado: HipLado, reent: boolean) => {
     const atr = calcATR(d.h.slice(0, k + 1), d.l.slice(0, k + 1), d.c.slice(0, k + 1), 14);
     if (!(atr > 0)) return;
-    st.pos = { lado, k, px: d.c[k], atr, stop: lado === "long" ? d.c[k] - stopAtr * atr : d.c[k] + stopAtr * atr, filtro: filtroEm(k), reent };
+    st.pos = { lado, k, px: d.c[k], atr, stop: lado === "long" ? d.c[k] - stopAtr * atr : d.c[k] + stopAtr * atr, filtro: filtroEm(k), reent, mov: movEm(k), adxOk: adxOkEm(k) };
   };
   for (let k = Math.max(1, kIni); k < d.c.length; k++) {
     const p0 = st.pos;
@@ -6386,7 +6386,7 @@ function simMotor(d: XVelas, b: { sup: number; j6: number }[], kIni: number, des
   }
   return out; // a posição ainda aberta no fim fica fora da conta
 }
-async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = []) {
+async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false) {
   // V107: até 4 J6 personalizadas no mesmo teste (chaves c0..c3)
   const modosAtivos: string[] = ["classica", "rapida", "rapida144", ...customs.map((_, i) => `c${i}`)];
   const SB = getSupabase();
@@ -6400,7 +6400,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   const moedas = [...cont.entries()].sort((a, b) => b[1] - a[1]).slice(0, Math.max(5, JUNCAO_MAX_MOEDAS)).map(([i]) => i);
   if (!moedas.length) { await sendTelegram(chatId, "🔀 <b>JUNÇÃO CLÁSSICA x RÁPIDA</b>\n\nNenhuma moeda com alerta no período."); return; }
   const TFMS = TF_MIN * 60000, n24 = Math.round(1440 / TF_MIN);
-  type Ev = { filtro: boolean; ligado: number | null; robo: number | null; rot: Map<string, SimRes> };
+  type Ev = { filtro: boolean; ligado: number | null; robo: number | null; rot: Map<string, SimRes>; mov: number; adxOk: boolean };
   const modos: Record<string, Ev[]> = Object.fromEntries(modosAtivos.map((k) => [k, [] as Ev[]]));
   const minutosEntre: Record<string, number[]> = Object.fromEntries(modosAtivos.map((k) => [k, [] as number[]]));
   const motorTr: Record<string, TrMotorJ[]> = Object.fromEntries(modosAtivos.map((k) => [k, [] as TrMotorJ[]]));
@@ -6439,10 +6439,12 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
         const pr = simPerna(d, k + 1, lado, d.c[k], atr, d.c.length, { stopAtr: SAIDA_STOP_ATR, alvoR: 0 }, (kk) => ladoEm(kk) === oposto);
         const rot = new Map<string, SimRes>(); // chave "combinação|horas"
         cfgs.forEach((cf, ci) => { for (const h of horas) rot.set(`${ci}|${h}`, simSegurar(d, k + 1, lado, d.c[k], atr, Math.max(1, Math.round((h * 60) / TF_MIN)), cf, false)); });
-        modos[modo].push({ filtro, ligado, robo: pr ? pr.r : null, rot });
+        modos[modo].push({ filtro, ligado, robo: pr ? pr.r : null, rot, mov, adxOk: Number.isFinite(adxS[k]) && adxS[k] >= SAIDA_ADX_PADRAO });
       }
       const filtroEm = (k: number) => { const mv = k - n24 >= 0 ? Math.abs((d.c[k] / d.c[k - n24] - 1) * 100) : 0; return mv >= SAIDA_MOV_PADRAO && Number.isFinite(adxS[k]) && adxS[k] >= SAIDA_ADX_PADRAO; };
-      for (const t of simMotor(d, b, 300, desdeMs, SAIDA_STOP_ATR, filtroEm)) motorTr[modo].push(t);
+      const movEm = (k: number) => (k - n24 >= 0 ? Math.abs((d.c[k] / d.c[k - n24] - 1) * 100) : 0);
+      const adxOkEm = (k: number) => Number.isFinite(adxS[k]) && adxS[k] >= SAIDA_ADX_PADRAO;
+      for (const t of simMotor(d, b, 300, desdeMs, SAIDA_STOP_ATR, filtroEm, movEm, adxOkEm)) motorTr[modo].push(t);
     }
   });
   if (!moedasOk) { await sendTelegram(chatId, "🔀 <b>JUNÇÃO CLÁSSICA x RÁPIDA</b>\n\nNão consegui as velas das moedas. Tente de novo em alguns minutos."); return; }
@@ -6457,6 +6459,31 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   customs.forEach((c, i) => { nome[`c${i}`] = `🧪 PERSONALIZADA ${customs.length > 1 ? `${i + 1} ` : ""}(J6 = ${c.join("/")}; J3 = 21/50/60)`; });
   let m = `🔀 <b>JUNÇÃO: CLÁSSICA x RÁPIDA x RÁPIDA + 144${customs.length ? ` x ${customs.length} PERSONALIZADA(S)` : ""}</b> — ${dd} dia(s) · ${moedasOk} moeda(s) com alerta no período\n${DIVISOR}\n`;
   m += `<i>Faixa recalculada em todos os modos com as mesmas velas de 15m; entrada no fechamento da vela que cruzou. 1R = 1×ATR, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada. "De alerta" = |24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO} na vela do cruzamento. Hoje o bot usa a ${J6_R144 ? "rápida + 144" : J6_RAPIDA ? "rápida" : "clássica"} (J6_MODO).</i>\n\n`;
+  if (porMov) {
+    // V107: /juncao ... mov — a mesma conta, separada pelo quanto a moeda andou nas 24h (subindo OU caindo) na vela da entrada, com ADX ≥ SAIDA_ADX_PADRAO
+    const curto: Record<string, string> = { classica: "🐢 clássica", rapida: "⚡ rápida", rapida144: "⚡➕ rápida+144" };
+    customs.forEach((c, i) => { curto[`c${i}`] = `🧪 ${c.join("/")}`; });
+    const fmtC = (rs: number[]): string => {
+      if (rs.length < 5) return `n=${rs.length} <i>(pouco)</i>`;
+      const media = rs.reduce((t, x) => t + x, 0) / rs.length, sem3 = rs.length > 5 ? [...rs].sort((a, b) => b - a).slice(3) : rs;
+      const s3 = sem3.reduce((t, x) => t + x, 0) / sem3.length;
+      return `n=${rs.length} ${media >= 0 ? "+" : ""}${media.toFixed(2)}R (s/3 ${s3 >= 0 ? "+" : ""}${s3.toFixed(2)})`;
+    };
+    const cf0 = cfgs[0], h0 = horas[0];
+    m += `<b>📏 POR MOVIMENTO DA MOEDA NO DIA</b>\n<i>|24h| na vela da entrada (subindo ou caindo) e ADX ≥ ${SAIDA_ADX_PADRAO}. 🔂 = motor real (stop ${SAIDA_STOP_ATR} ATR + reentrada) · 🧭 = rotina ${simCfgTxt(cf0)} · até ${hTxt(h0)}. "s/3" = sem os 3 melhores.</i>\n\n`;
+    for (const [nomeF, a, bF] of MOV_FAIXAS) {
+      m += `${MINI_DIVISOR}\n<b>|24h| ${nomeF}</b>\n${MINI_DIVISOR}\n`;
+      for (const modo of modosAtivos) {
+        const mt = motorTr[modo].filter((t) => t.adxOk && t.mov >= a && t.mov < bF).map((t) => t.r);
+        const rt = modos[modo].filter((e) => e.adxOk && e.mov >= a && e.mov < bF).map((e) => e.rot.get(`0|${h0}`)).filter((x): x is NonNullable<SimRes> => !!x).map((x) => x.r);
+        m += `${curto[modo]}\n  🔂 ${fmtC(mt)} · 🧭 ${fmtC(rt)}\n`;
+      }
+      m += "\n";
+    }
+    m += `<i>Sem o "mov", o /juncao mostra o detalhe completo de cada modo. A faixa "abaixo de 8%" fica fora do filtro "de alerta". Cada faixa tem menos amostra: olhe a tendência entre as faixas, não um número isolado.</i>`;
+    await enviarEmPartes(chatId, m);
+    return;
+  }
   for (const modo of modosAtivos) {
     const evs = modos[modo], me = minutosEntre[modo];
     m += `${MINI_DIVISOR}\n<b>${nome[modo]}</b>\n${MINI_DIVISOR}\n`;
@@ -6473,7 +6500,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     }
     m += "\n";
   }
-  m += `<i>${customs.length ? "A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo. " : ""}Menos cruzamentos por dia e mais tempo entre eles = faixa menos "serrada". Compare os dois modos linha a linha; a diferença só vale onde as margens (±) não se cruzam. 🔂 motor real = como o bot-engine V47: sinal quando a vela fecha além da faixa e a anterior não fechava, posição mantida dentro da faixa, vira no sinal oposto, sai no stop e REENTRA se romper de novo do mesmo lado (operações seguidas, sem sobreposição; "de alerta" medido na vela de cada entrada). Uso: /juncao 7 · /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (listas: compara todas as combinações, até 8) · trail1,2 = stop móvel · arma2 = só arma depois de +2 ATR · be1 = zero a zero em +1 ATR · stop0 = sem stop · alvo0 = sem alvo · máx. de moedas no Secret JUNCAO_MAX_MOEDAS (${JUNCAO_MAX_MOEDAS}).</i>`;
+  m += `<i>${customs.length ? "A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo. " : ""}Menos cruzamentos por dia e mais tempo entre eles = faixa menos "serrada". Compare os dois modos linha a linha; a diferença só vale onde as margens (±) não se cruzam. 🔂 motor real = como o bot-engine V47: sinal quando a vela fecha além da faixa e a anterior não fechava, posição mantida dentro da faixa, vira no sinal oposto, sai no stop e REENTRA se romper de novo do mesmo lado (operações seguidas, sem sobreposição; "de alerta" medido na vela de cada entrada). Uso: /juncao 7 · /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (listas: compara todas as combinações, até 8) · trail1,2 = stop móvel · arma2 = só arma depois de +2 ATR · be1 = zero a zero em +1 ATR · stop0 = sem stop · alvo0 = sem alvo · mov = separa pelo movimento da moeda no dia · máx. de moedas no Secret JUNCAO_MAX_MOEDAS (${JUNCAO_MAX_MOEDAS}).</i>`;
   await enviarEmPartes(chatId, m);
 }
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
@@ -10080,7 +10107,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
     ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
     ["💧 /volconf 7", "resultado por volume (USDT x unidades) + sombra abaixo do filtro", "mostra, pros radares (topo, fundo, repique) e pros alertas de oportunidade/reversão, quanto funcionou e quanto foi invalidado: (A) só o que passa no filtro de volume (FILTRO_VOL_MIN_USDT), (B) sem filtro, incluindo a 🌑 sombra gravada abaixo dele, (C) por faixa de volume em USDT, (D) por quartis de volume em unidades da moeda e (E) os dois filtros juntos. No fim diz quantos pontos o USDT e as unidades separam. ⚠️ = menos de 8 alertas. Só os últimos 9 dias (usa as velas). Os alertas de antes da V106 não têm volume."],
-    ["🔀 /juncao 7", "junção clássica x rápida x rápida + 144 (J6_MODO)", "recalcula a faixa do robô nos três modos da junção (clássica: 20/21/50/60/100/200 · rápida: 9/20/21/50/60 · rápida + EMA 144: 9/20/21/50/60/144; no bot, J6_MODO=rapida144 liga essa última; medias 9,20,21,30 acrescenta uma J6 personalizada só pra teste; repita medias até 4x pra comparar várias de uma vez) com as mesmas velas de 15m, nas moedas que tiveram alerta, e compara: quantos cruzamentos por dia (serrote), o robô ligado direto (vira a cada cruzamento), a saída do robô com stop e a rotina com stop/alvo/prazo. Separa todos os cruzamentos e só os \"de alerta\" (movimento e ADX do filtro do /saida). Ex.: /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (com listas compara todas as combinações de stop, alvo e stop móvel, até 8; trailX = stop móvel a X ATR do melhor preço, armaY = só começa a seguir depois de +Y ATR, beX = zero a zero depois de +X ATR, stop0/alvo0 = sem). Até 7 dias."],
+    ["🔀 /juncao 7", "junção clássica x rápida x rápida + 144 (J6_MODO)", "recalcula a faixa do robô nos três modos da junção (clássica: 20/21/50/60/100/200 · rápida: 9/20/21/50/60 · rápida + EMA 144: 9/20/21/50/60/144; no bot, J6_MODO=rapida144 liga essa última; medias 9,20,21,30 acrescenta uma J6 personalizada só pra teste; repita medias até 4x pra comparar várias de uma vez) com as mesmas velas de 15m, nas moedas que tiveram alerta, e compara: quantos cruzamentos por dia (serrote), o robô ligado direto (vira a cada cruzamento), a saída do robô com stop e a rotina com stop/alvo/prazo. Separa todos os cruzamentos e só os \"de alerta\" (movimento e ADX do filtro do /saida). Ex.: /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (com listas compara todas as combinações de stop, alvo e stop móvel, até 8; trailX = stop móvel a X ATR do melhor preço, armaY = só começa a seguir depois de +Y ATR, beX = zero a zero depois de +X ATR, stop0/alvo0 = sem). Com "mov" no fim, mostra só o resumo separado pelo quanto a moeda andou no dia (abaixo de 8%, 8–15%, 15–25%, 25%+), com o motor real e a rotina lado a lado. Até 7 dias."],
     ["🧪 /radarsim 9 regra stop1 alvo2 horas 1,2,4", "operar só pelos radares (stop, alvo e prazo à escolha)", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta) e sair no stop (stopX = X ATR do 15m; stop0 = sem stop), no alvo (alvoX = X R; alvo0 = sem alvo) ou no prazo (horas 1,2,4), o que vier primeiro. Também aceita trailX (stop móvel a X ATR do melhor preço), armaY (só arma depois de +Y ATR) e beX (zero a zero depois de +X ATR). Mostra acerto, média em R, PF, sem os 3 melhores, o pior trade e quanto o preço andou contra antes de sair. Mesma régua do /saida, pra comparar com o robô no cruzamento. regra = só os alertas que passariam no ADX das regras atuais. btc = separa pelo humor do BTC na hora do alerta (subindo, caindo, de lado); mov = separa pelo movimento da moeda no dia (|24h|: abaixo de 8%, 8 a 15%, 15 a 25%, 25% ou mais); com romp, usa a entrada no rompimento. cruz = em vez dos radares, os alertas do cruzamento (oportunidade, reversão, compressão): entra no preço em que o robô entrou e sai pelo stop/alvo/prazo, uma operação por alerta, sem virar — mede \"ligo no alerta, o robô entra, desligo e sigo com stop manual\". Mostra também ↩️ contra o alerta: quando a moeda fecha cruzada do outro lado em até RADARSIM_CONTRA_VELAS velas (8), entra a favor desse novo cruzamento, uma vez só. Com viradas 0,1,3 (até 5) compara a cadeia com até N viradas: cada perna sai no stop, no alvo, no prazo ou no cruzamento contra, e só vira se saiu pelo cruzamento. Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h. Padrões: stop SAIDA_STOP_ATR, sem alvo, horas RADARSIM_HORAS."],
     ["🌑 /sombras 7", "resumo real x sombra (reversão, repique, volume)", "num só lugar, compara o que alertou com o que a regra barrou e ficou gravado em silêncio, pra reversão (ADX/DI), repique (ADX/DI) e volume (filtro de USDT): acerto em 4h com margem de erro e uma leitura (regra ajuda, atrapalha ou ainda dentro da margem). Sai sozinho 1x por semana (SOMBRA_RESUMO_DIA, padrão domingo, a partir de SOMBRA_RESUMO_H = 20h; SOMBRA_RESUMO=0 desliga)."],
     ["🔎 ... desde V107", "julgar uma regra só com dados depois dela", "acrescente \"desde V107\" (versão) ou \"desde 05/10\" (data) no fim de /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf, /compressao ou /sombras. Ex.: /radarconf 90 desde V104. Alertas gravados antes da V107 não têm versão: pra incluí-los, defina o Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). O ± depois das porcentagens é a margem de erro (95%): se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte."],
@@ -10369,7 +10396,7 @@ Deno.serve(async (req) => {
         }
       });
       if (argsJ.some((a) => /^m[eé]dias/.test(a)) && !customsJ.length) { await sendTelegram(chatId, "⚠️ Passe pelo menos 2 médias entre 2 e 200. Ex.: /juncao 7 medias 9,20,21,30"); return new Response("ok"); }
-      await comAguarde("🔀 Recalculando a faixa nos modos da junção, aguarde (pode levar 1 a 3 min)...", () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2], customsJ.slice(0, 4)));
+      await comAguarde("🔀 Recalculando a faixa nos modos da junção, aguarde (pode levar 1 a 3 min)...", () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2], customsJ.slice(0, 4), argsJ.includes("mov")));
       return new Response("ok");
     }
     if (text === "/radarsim" || text.startsWith("/radarsim ") || text.startsWith("/radarsim@")) {
