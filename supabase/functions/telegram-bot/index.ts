@@ -1,57 +1,13 @@
-// telegram-bot V105 (V104 + /radar e /radarhist com CORTE MÍNIMO de movimento cumulativo (≥10%, ≥15%, ≥20%, ≥25%; RADAR_CORTES): mede, pra cada tipo, quantos alertas sobrariam e como eles se saíram se TOPO_ALTA_MIN/FUNDO_QUEDA_MIN subissem, usando a alta/queda EFETIVA (a mesma do gatilho do radar) recalculada com as velas até o alerta, inclusive nos alertas antigos; sem coluna nova) · V104 (V103 + REPIQUE só com tendência: ADX >= REPIQUE_ADX_MIN (24) e DI puxando a favor do lado do repique (REPIQUE_DI_OBRIGA); REPIQUE_ADX_SUBINDO=1 (opcional) exige ADX subindo; o repique que a regra barra vai pro MODO SOMBRA (tipo repique_sombra no alertas_log, fora do /placar e das demais estatísticas; REPIQUE_SOMBRA=0 desliga) e o novo comando /repsombra [dias] compara reais x sombra) · V103 (V102 + COMPRESSÃO: teto de ADX (COMPRESS_ADX_MAX = 15, exclusivo): só ADX de 13 até < 15 e subindo; ADX já em 15/20 subindo não conta) · V102 (V101 + COMPRESSÃO: nota mínima 6 → 8 (COMPRESS_CONF_MIN; COMPRESS_CONF_MAX opcional) e ADX >= COMPRESS_ADX_MIN (13) e subindo (COMPRESS_ADX_SUBINDO)) · V101 (V100 + a lista /reversao segue a mesma regra do alerta (ADX <= REV_ADX_MAX e DI a favor) e conta quantas ficaram de fora) · V100 (V99 + REVERSÃO só com ADX <= REV_ADX_MAX (20) e DI puxando pro lado da reversão (REV_DI_OBRIGA); o que a regra barra vai pro MODO SOMBRA (REV_SOMBRA, tipo reversao_sombra no alertas_log, fora do /placar) e o /reversaoconf compara reais x sombra) · V99 (V98 + /reversaoconf [dias]: reversão por nota de confiança, lado, ADX e esticada em 24h, mesmo molde do /radarconf) · V98 (V97 + MODO FACA: o fundo com ADX alto (que o radar de fundo não avisa mais) vira candidato SHORT de continuação; FACA_MODO=sombra (padrão, grava em silêncio numa linha própria, fora do /placar) | alerta | off; comando /faca [dias]) · V97 (V96 + radares com corte por ADX: fundo não alerta com ADX ≥ FUNDO_ADX_MAX (padrão 30) e topo só alerta com ADX < TOPO_ADX_MAX (padrão 20); 0 desliga; repique fica de fora) · V96 (V95 + radar de topo e de fundo: "nota subiu" fura o cooldown (RADAR_UPGRADE_DELTA=2, RADAR_UPGRADE_GAP_MIN=30) — 2º alerta marcado ⬆️ quando a nota sobe 2+ pontos desde o último alerta da moeda) · V95 (V94 + filtro opcional COMPRESS_PCT24_MIN (movimento mínimo no dia pra mandar compressão; 0 = desligado)) · V94 (V93 + /radarconf retro fundo: o mesmo teste retroativo pro radar de fundo) · V93 (V92 + colunas de 15 min no /radarconf, no /compressao e no /radarconf retro) · V92 (V91 + /radarconf retro: refaz a nota do radar de topo com as velas e compara 2/10..5/10 sem esperar alerta novo) · V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
-// telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
-// robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
-// próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
-// já ligado entra em todo cruzamento). simularSaidaEncadeada é a função nova; A/B continuam medindo só a 1ª perna)
-// telegram-bot V75 (V74 + J6_MODO: Juncao 6 rapida opcional (secret J6_MODO=rapida) + BTC/ETH da Binance primeiro (BINANCE_BTC_ETH=0 volta ao antigo) + resumo/painel/status com leitura ao vivo do filtro lateral + linha "Velas:" nos avisos)
-// telegram-bot V74 (V73 + acompanhamento das hipóteses dos radares de topo/fundo/repique: aviso ao vivo "invalidado"/"funcionou" (HIP_*) e /radar com o que aconteceu depois de cada alerta (inclusive por faixa de confiança) + filtro de ADX das moedas: mínimo 14 (era 15); corte "ADX subindo" opcional e DESLIGADO por padrão (FILTRO_ADX_SUBINDO=1 liga, FILTRO_ADX_SUBINDO_ATE) + o cooldown de alerta novo e o "loop já avisou" do alerta final passam a usar o lado do ÚLTIMO ALERTA (marcador [L]/[S] no last_status), não o watch_side que a lista de acompanhamento troca a cada virada — a lista não atrasa mais um alerta bom + /trades: histórico REAL do motor (outro Supabase) por chave só de leitura (MOTOR_URL, MOTOR_LEITURA_SECRET) + /saida passa a ser enviado em partes (dividirHtml) em vez de cortar o fim com "...(cortado)" + DIV_MODO=tv: divergência do BTC com as MESMAS regras do indicador Pine (pivô do RSI 5/5, 5 a 60 velas, sem zona, vale 5 velas) + controle do volume de logs: Secret LOG_NIVEL (tudo | normal | erro | mudo), LOG_OCULTAR, LOG_MOSTRAR, LOG_REPETIDO_MIN e comando /logs + /saida simplificado: já vem com o filtro que você usa (|24h| ≥ 8% e ADX ≥ 14 subindo, medidos na hora do alerta, sem olhar o futuro) e o trailing 5/3.5; "tudo" mostra todas as entradas + /saida simula o trailing do MOTOR em % de preço (arma na trava, fecha no callback do pico; F = degrau de N em N%), com filtro por moeda: /saida 9 QNT 5/3.5/3 + /analise mostra no cabeçalho a divergência de RSI do BTC (antecipadas em aberto e confirmadas recentes, e quantas estão a favor/contra o lado do robô); só leitura, não mexe na confiança + NOVO: alerta de divergência de RSI do BTC (regular e oculta, altista e baixista) em 1h/4h/diário/semanal, antecipado (👀) e confirmado (✅), com "❌ não se confirmou" e comando /div (DIV_ON, DIV_TFS) + botão "🔔 Já liguei" só confirma se a gravação no Supabase deu certo + alertas novos gravam no status do log se saíram em lateral (🧱) ou com tendência (📶); /saida, /placar e o detalhe 15m comparam os dois (ajuda a decidir LATERAL_MODO) + radares de fundo/topo/compressão olham RADAR_CAND_JANELA=20 candidatas (antes 8/6) pra moeda em cooldown não travar as demais + restaurarCalibracao só marca "restaurada" depois de ler com sucesso (erro passageiro não sobrescreve a calibração salva) + auto-apagar tenta de novo (até AUTOAPAGAR_RETRY_MIN=30 min) quando o Telegram falha por 429/5xx/rede, em vez de largar a mensagem no chat + /saida: C/D não contam mais a mesma virada 2x (entrada dentro da cadeia de outra), seção "🔁 Viradas" (lista as maiores, 🔕 = sem alerta), aviso de limite de 12 pernas só quando realmente cortou e aviso de 600 entradas + novo aviso "↩️ voltou pra dentro da faixa" (WATCH_VOLTA_ATR=0.5, 0 desliga) pra alerta cruzado que recua sem chegar na linha oposta; chave _watchEnviado velha limpa quando não há cruzamento contra pendente + cancelamento "RECUOU antes do fechamento", veredito do fechamento e FIM DO RESUMO DO DIA agora saem como mensagem NOVA (edição não notifica; a mensagem anterior é apagada) + intervalo mínimo entre avisos de "cruzou CONTRA" da mesma moeda (ACOMP_INTERVALO_MIN, por chat; padrão 0 = desligado, ex.: 30 liga o intervalo de 30 min). Dentro do intervalo o aviso não sai e a linha NÃO é atualizada: se a moeda ainda estiver do lado contrário quando o intervalo passar, o aviso sai então; se desvirou, não sai nada) (V73 = V72 + o aviso de "cruzou CONTRA" (ACOMP_) some em ACOMP_AUTOAPAGAR_MIN=5 min, mais rápido que o
-// auto-apagar geral de 15 min — ele é informativo e, com WATCH_REPETIR ligado, pode chegar de novo a cada virada)
-// telegram-bot V72 (V71 + /saida avisa quando uma cadeia bate no limite de 12 pernas, pra não confundir R subestimado
-// com R real; o acompanhamento (watch) que avisa quando a moeda "cruzou CONTRA" deixa de fechar depois do 1º aviso —
-// agora continua seguindo a moeda no lado novo e avisa de novo se ela virar outra vez (WATCH_REPETIR=0 volta ao
-// antigo: avisa 1x e some). Antes disso, o 2º flip só reaparecia se um alerta cheio passasse de novo pelo
-// classificar()+confiança+ESTRATEGIA_PUMP, o que pro lado "contra o dia" podia nunca acontecer)
-// telegram-bot V70 (V69 + notícias SÓ em português do Brasil: tradução pelo Gemini guardada no cache (campo pt) e usada no /noticia, no bloco do painel e no aviso automático; sem tradução nunca mostra inglês (avisa que a tradução está indisponível e deixa o link do original) · filtro de mercado lateral reorganizado: o mínimo é um só (ADX ≥ 18 · ER ≥ 0.25 · caixa ≥ 3×ATR), LIBERADO com 2 de 3 requisitos no mínimo em BTC ou ETH (LATERAL_VOTOS_LIBERA=2), aviso automático 👀 "querendo sair da lateral" quando 1 requisito atinge o mínimo e 📈 "saindo da lateral" quando 2 atingem; bloco do /resumo mostra cada requisito com ✅/❌)
-// telegram-bot V69 (V68 + resumo/painel do dia reorganizado em seções (⚠️ Atenção: agenda e notícias · 📈 Mercado · 💼 Carteira · 🔥 Horários) e fechamento do ciclo com o 15m em destaque, resultado real, lista curta e comparativo; novo /noticia (falas do Trump via espelho RSS do Truth Social + manchetes de cripto/macro, filtradas por palavra-chave, com tradução opcional pelo Gemini), bloco de notícias no painel e aviso automático de post do Trump de alto impacto) (V68 = V67 + placar sem duplicata e sem entrada inválida: (1) alerta de RETESTE de cruzamento velho (idade > ALERT_RETESTE_MAX_CANDLES, padrão 16 velas = 4h) não sai mais, exceto aviso de proteção pra quem tem posição contra; (2) conferirPlacar marca ent_status='repetido' quando já existe outro alerta da mesma moeda+lado+ent_em (fica só o 1º no placar; /placar, /15min, /saida e resumos ignoram os repetidos); (3) ent_em fora da janela (mais de ENT_MAX_ATRASO_H=48h antes do alerta, ou depois do limite de espera) vira ent_status='invalido' em vez de gravar entrada com data absurda, ex.: XMR 2024)
-// telegram-bot V67 (V66 + fallbacks OKX/Binance spot só valem se o preço bater com BloFin/Bybit/Binance (divergência máx. 25%, FALLBACK_DIV_MAX) OKX desligada por padrão (FALLBACK_OKX=1 religa) e QNT-USDT nunca usa fallback (FALLBACK_BLOQ); corrige preço/preco_15m errados no placar quando as corretoras principais falhavam) (V66 = V65 + placar de 15m separado do /placar: novo comando /15min (o /placar, o /analise e o resumo da noite passam a mostrar só 1h/4h/24h; a coleta do preco_15m continua igual); novo comando /saida N: simula a saída real do robô (fecha no cruzamento contrário da faixa ou no stop de SAIDA_STOP_ATR×ATR, e uma variante com trailing por degraus de TRAIL_ATR_MULT×ATR) e mostra R médio, profit factor, "sem os 3 melhores" e duração; sem coluna nova no Supabase) (V65 = V64 + placar com horizonte de 15 min (coluna preco_15m em alertas_log: rode o ALTER TABLE antes de publicar), somado a 1h/4h/24h no /placar, no /analise (alertas anteriores) e no resumo da noite; alertas antigos ainda ao alcance das velas são preenchidos retroativamente) (V64 = V63 + comandos /pergunta MOEDA (IA Gemini) e /veredito MOEDA (IA Claude): pegam o texto completo do /analise e mandam pra IA escolhida, que responde em cima dele; secrets GEMINI_API_KEY e ANTHROPIC_API_KEY, cada comando usa só o seu provedor) (V63 = V62 + o radar de fundo/topo (a nota "Sinal de fundo/topo: X/10" do /analise, /fundo, /topo) agora também olha book e inclinação da faixa, igual a pontuação principal já fazia — antes só via funding/OI/BTC, então podia sair baixo mesmo com book e inclinação já sinalizando reversão junto; no /analise, no /fundo e no /topo a inclinação entra (já calculada ali); nas listas em massa (fundoLista/topoLista) só o book entra por enquanto, sem inclinação, pra não pesar a varredura de todas as moedas) (V62 = V61 + quando o ADX sobe mas o DI oculto (V60) mostra que quem puxa é o lado oposto ao do robô, a linha vira "ADX subindo, mas puxado pelo lado oposto (+0)" em vez de sumir — some da lista de motivos, sem nunca citar +DI/−DI) (V61 = V60 + ADX mínimo por moeda descido de 18 para 15 (FILTRO_ADX_MIN), pra pegar sinal mais cedo agora que o DI oculto (V60) já filtra falso cruzamento por trás; ADX do filtro de mercado lateral (BTC/ETH) continua em 18, sem mudança (LATERAL_ADX_BLOQ/LIBERA); X_ADX_FRACO (texto do BTC no painel) desamarrado de FILTRO_ADX_MIN, próprio env, também 18) (V60 = V59 + +DI/−DI calculado por trás do ADX, sem aparecer em nenhuma mensagem: em continuação, se a força do ADX vem do lado oposto ao do robô, o ADX forte vale +1 em vez de +2 e o ADX subindo não pontua; em reversão nada muda; DI_OCULTO=0 desliga, DI_GAP_MIN=5 é a folga mínima entre +DI e −DI) (V59 = V58 + aviso 📉 quando o mercado ENTRA em lateral (espelho do 📈 saindo; mesmo intervalo de 30 min; LATERAL_AVISO_ENTROU=0 desliga); linha ⚠️ no /analise quando a moeda já esticou ≥3× ATR a favor do robô e nenhum radar de reversão acendeu (entrada tardia); o "FIM DO RESUMO DO DIA" se apaga sozinho depois de 24h, PAINEL_FIM_APAGAR_H=0 desliga) (V58 = V57 + painel do dia atualiza mesmo com todo mundo em silêncio/pausa, chamado antes do corte por todosSil) (V57 = V56 + filtro de mercado lateral com duas faixas (histerese): BTC e ETH votam com 3 indicadores 15m — ADX, Efficiency Ratio (ER) e "caixa" (amplitude de 4h em ATRs) — e os alertas de ENTRADA ficam bloqueados quando os DOIS têm 2 de 3 sinais de lateral (ADX < 18 · ER < 0.25 · caixa < 3×ATR); só libera quando UM deles tem 1 de 3 sinais de tendência (ADX ≥ 20 · ER ≥ 0.35 · caixa ≥ 4×ATR), com espera de 30 min antes de poder bloquear de novo; enquanto bloqueia, o LIGUE AGORA/🚨 e a entrada ficam barrados, mas o PREPARE e os radares passam com um aviso 🧱; aviso 📈 quando um dos 3 sinais sai da lateral; alertas de posição aberta (proteção, cruzamento contra) seguem normais; contador de sinais barrados + tempo bloqueado por ciclo do painel; linha no /status, no log do cron e no PAINEL DO DIA (atualiza na hora quando o filtro liga/desliga); LATERAL_BLOQ=0 desliga)
-// telegram-bot V56 (V55 + revisão dos filtros: volume mínimo aplicado ANTES do corte top-N nos pools de alerta e das listas (moeda ilíquida não gasta mais vaga); /config descreve o RSI do modo pump como ele roda (LONG só barra acima de FILTRO_RSI_MAX_LONG, SHORT só abaixo de FILTRO_RSI_MIN) e o volume em M; serrote: textos dizem "trocas em 4h" (entrar/sair da faixa conta) e o limiar do aviso/penalidade segue SERROTE_MAX; X_ADX_FRACO segue FILTRO_ADX_MIN; log único dos campos de volume do ticker pra conferir a unidade)
-// telegram-bot V55 (V54 + painel do dia de 21h a 21h: 1 mensagem editada a cada hora, BTC subindo/caindo, comparação desde as 21h e desde as 8h, vira "FIM DO RESUMO DO DIA" na virada; agenda econômica: aviso 60 e 15 min antes de dado de alto impacto (CPI, payroll, FOMC...) pra evitar operar; bloco "agenda de hoje" no resumo da manhã e "amanhã" no da noite (sem mensagem extra, sem duplicar); /agenda; cache em memória + Supabase e aviso quando a fonte está fora)
-// telegram-bot V54 (V53 + /robo: emoji 🪙 no nome da moeda no lugar da bolinha 🟢/🔴 de PnL (colidia com o emoji de estado da linha de baixo); rótulo "LIGUE AGORA" único (os alertas diziam "LIGUE O ROBÔ AGORA" no corpo e "LIGUE AGORA" no título e no /help); linha de PnL própria com 😎 (ganhando) / 🤧 (perdendo) e liq em linha separada; nos outros lugares (/analise, /agora, alertas de posição e de proteção) o PnL da posição ganhou ➕/➖ na frente (não quebra mais no celular) e dica de stop alinhada ao trailing (não manda mais "stop na entrada" quando o trailing já manda travar ganho); coerência do repique, sem mudar o nome: limiares do marcador alinhados ao pool (FUNDO_TOQUE_PICO_MIN/
-// TOPO_TOQUE_VALE_MIN acompanham FUNDO_QUEDA_MIN/TOPO_ALTA_MIN); zona morta ±REPIQUE_PCT_ZONA única em tipoDoLado (só pra moeda que devolveu o movimento; o resto
-// fica como antes), usada pelo classificar(), pela lista e pelo /agora; +2 de "sinais de fundo" do LONG simétrico ao do SHORT em pontuar(); textos
-// dos alertas/motivos/ajuda dizem "retomada" (a favor do movimento anterior) em vez de "virada" pro repique; /help e as
-// mensagens de busca de /fundo e /topo descrevem o critério real (queda/alta desde a máxima/mínima recente, não só "no dia"); trava do cron ganhou dono: destravarCron só libera se a trava ainda for da própria rodada; /help do modo Novato passava de 4096 caracteres e não chegava — agora sai em 2 mensagens; /oportunidade e /reversao vazias dizem o motivo dos descartes) (V53 = V52 + seta de cor da confiança (🟢→🟡…) e /start e /help reorganizados por modo) (V52 = V51 + /agora passa bottom/top reais pra pontuar()) (V51 = /fundo e /topo avisam "recurso desligado") (V50 = /compressao avisa com COMPRESS_ON=0) (V49 = RSI de proteção alinhado ao ESTICADO_RSI) (V48 = classificar() do /analise recebe o atr) (V47 = avisarAdmin + atr no /agora e /analise) (V46 = FUNDO_PTS_MAX derivado do REPIQUE_BONUS; upsertLinha atômico) (V45 = V44 + trava do cron virou compare-and-swap de verdade num UPDATE só, sem a janela teórica de
-// corrida da versão anterior (ler→checar→escrever em 2 chamadas); autoconferência da escala de confiança —
-// avisa no log se o total de pontuar() escapar de CONFIANCA_TOTAL_MIN/MAX, pra pegar deriva se algum peso mudar
-// sem recalcular as constantes; ANTEC_CALIB_MIN e a janela de amostras do confiabilidadeMoeda (CONFIAB_JANELA_N)
-// agora são env var, como os outros limites de calibração; registrarAntecipacao deduplica por moeda+lado, não
-// só por moeda) (V44 = V43 + espelho do repique: LONG que já devolveu o dia positivo (fundo) e SHORT que já devolveu
-// o dia negativo (topo) agora classificam tipo "oportunidade" em vez de sempre "reversao", mesma regra do
-// tipoDoLado) (V43 = V42 + zona morta REPIQUE_PCT_ZONA (±2%, padrão) em torno de pct≈0 pra classificar o tipo do
-// repique — sem ela, ruído de rodada cruzava o zero e trocava oportunidade↔reversão à toa (mudava a confiança
-// mínima exigida e o bloqueio de BTC); reforma da escala de confiança — CONFIANCA_TOTAL_MIN/MAX (-31 a +24 na época; hoje -30 a +23 desde o V45, o
-// piso e o teto reais de `total` em pontuar() somando todos os add() possíveis) substituem a faixa antiga de -3
-// a +8, que era estreita demais e estourava/travava em 10 ou 0 com qualquer sinal decente; CONF_MIN_OPORT e
-// CONF_AMARELO subiram de 5 pra 6 pra exigir aproximadamente os mesmos pontos brutos de antes na escala nova)
-// (V42 = V41 + auto-calibração agora tem limites de segurança (ANTEC_ETA_MIN_LIM/MAX_LIM,
-// ANTEC_DIST_MIN_LIM/MAX_LIM, ANTEC_ATR_MIN_LIM/MAX_LIM) e passo máximo por ciclo — amostra pequena/enviesada
-// não consegue mais empurrar ANTEC_ETA_MAX_CANDLES/ANTEC_DIST_MAX_PCT/ANTEC_DIST_MAX_ATR pra um valor estranho
-// de uma vez; a calibração agora sobrevive a cold start — antes vivia só em memória (as 3 variáveis eram `let`
-// sem persistência) e se perdia silenciosamente a cada novo deploy/isolate reciclado, ficando presa no valor
-// padrão por até AUTO_CALIB_INTERVALO_H horas porque o Supabase ainda marcava "já calibrei hoje"; agora é
-// restaurada do Supabase 1x por isolate antes de qualquer uso; cron agora tem trava contra sobreposição
-// (CRON_LOCK_TIMEOUT_MS) — se uma rodada demorar mais que o intervalo do cron, a próxima chamada não começa
-// em cima da anterior escrevendo o mesmo estado ao mesmo tempo) (V41 = V40 + velocidade 🚀🚀/🐢🐢 agora pontua de verdade no pontuar() (antes só era texto); funding
-// pontua por TENDÊNCIA — esticando rápido rumo ao extremo pesa mais que já estar parado lá há horas; confiabilidade
-// por moeda — pontuação ajustada com o histórico de acerto de cada instId no antecipacoes_log (amostra mínima 6);
-// calibração automática — antes /calibracao só mostrava o erro, agora roda sozinha 1x/dia dentro do cron e ajusta
-// ANTEC_ETA_MAX_CANDLES/ANTEC_DIST_MAX_PCT/ANTEC_DIST_MAX_ATR, avisando o dono quando muda algo (o ATR precisa da
-// coluna atr_pct em antecipacoes_log — ver nota no /calibracao); ETH como segunda referência de
-// mercado além do BTC (ethVar1h/xRegimeCacheEth, peso menor); CVD/desequilíbrio do book via profundidade
-// (getBookImbalance) — único dado que antecipa antes do fechamento da vela; cluster/rotação — avisa quando várias
-// moedas do pool estão chegando na linha juntas na mesma rodada, sinal de que pode ser o mercado todo (BTC) se
-// movendo, não edge de uma moeda isolada) (V40 = V39 + OI (open interest) agora entra na pontuação de confiança — antes era buscado mas só aparecia como texto: OI subindo junto com o preço soma ponto, OI caindo (squeeze fechando) tira ponto; velocidade de aproximação (🚀/🐢) agora compara 2 rodadas seguidas em vez de 1, pra distinguir aceleração de verdade de um pico de ruído (🚀🚀/🐢🐢 quando confirma 2x); modo Experiente corrigido — o compactador só cortava os motivos ✅/⚠️ do bloco "🧭 Sinal de fundo/topo/compressão", não do bloco "🧭 Confiança" que é o que sai em todo alerta automático e no /analise; agora corta os dois e também tira linhas de regra fixa repetidas) (V39 = V38 + alerta dos minutos finais agora EDITA a mesma mensagem em vez de mandar uma nova a cada rodada do cron; detecta pavio de rejeição (tocou a linha e recuou 1x+ dentro da mesma vela) e avisa antes do LIGUE AGORA; botão "🔔 Já liguei" registra a hora real que a pessoa ligou o robô (tabela ligacoes_robo); sinal de velocidade 🚀 acelerando / 🐢 devagar comparando a aproximação da rodada atual com a anterior; comando /agora MOEDA com retrato compacto — fechamento, distância às duas linhas, confiança e toque/recuo) (V38 = modo Novato x Experiente, alertas e comandos compactados sem o texto explicando) (V37 = marca discreta 🔔 nos alertas proativos, autoapagamento, proteção do webhook e do cron) (V36 (V35 + inclinação da faixa na confiança: cruzamento contra a inclinação perde pontos, a favor ganha; radar de COMPRESSÃO em rodízio de todos os pares avisa "PREPARE: rompimento iminente" com a distância até as duas linhas; 1º cruzamento em faixa comprimida sem volume perde 1 ponto; /compressao no /placar; REPIQUE nos dois lados com prioridade: SHORT = despencou, repicou até a faixa e foi rejeitada (radar de topo); LONG = disparou, recuou até a faixa e está segurando (radar de fundo); /oportunidade e /reversao alinhados com os alertas: a lista sai pelo LADO da virada (reversão mostra LONG → SHORT e SHORT → LONG), não só pela variação do dia) (V35 = V34 + radar de TOPO e repique SHORT, espelho do fundo: alta medida desde a mínima recente, rejeição na faixa pontua, /topo) (V34 = V33 + radar de fundo que enxerga o REPIQUE NA FAIXA depois de pump: queda medida desde a máxima recente, não só 24h; toque na faixa pontua; PREPARE/LIGUE no texto) (V33 = V32 + /analise em blocos "de fora / já dentro" com "ligar o robô?", textos dos avisos alinhados ao robô que vira sozinho, /help por grupos e botão "⬆️ Ir ao topo" junto da mensagem) (historico das versoes: CHANGELOG.md)
+// telegram-bot V107 — alertas de cripto no Telegram (Supabase Edge Function).
+// Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
+// Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+const BOT_VERSAO = "V107"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+// V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
+// numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
+const _numEnvAvisado = new Set<string>();
+const _cfgNum = new Map<string, { padrao: string; bruto: string | undefined }>(); // V107: pro /config mudou
 
 // ===== V74: controle do volume de logs (Secret LOG_NIVEL) =====
 // tudo   = todos os logs, como antes.
@@ -198,6 +154,30 @@ const CONF_LISTA_TOP = numEnv("CONF_LISTA_TOP", "5"); // V54: quantas moedas de 
 const OPORT_POOL = 40;
 const PAIRS_CACHE_MS = 30 * 60 * 1000;
 let FILTRO_VOL_MIN_USDT = numEnv("FILTRO_VOL_MIN_USDT", "1000000");
+// V106: MODO SOMBRA DE VOLUME. Candidatos com volume entre FILTRO_VOL_SOMBRA_MIN e FILTRO_VOL_MIN_USDT passam pelas MESMAS regras dos
+// radares de topo/fundo/repique e do alerta de oportunidade/reversão, mas só são GRAVADOS (tipo vol_sombra, sombra_vol=true): não avisam,
+// não entram no /placar nem nas outras estatísticas; só o /volconf lê. 0 desliga. VOL_SOMBRA_POOL = quantas moedas da faixa avaliar por rodada.
+const FILTRO_VOL_SOMBRA_MIN = numEnv("FILTRO_VOL_SOMBRA_MIN", "100000");
+const VOL_SOMBRA_POOL = numEnv("VOL_SOMBRA_POOL", "12");
+const VOL_SOMBRA_COOLDOWN_MIN = numEnv("VOL_SOMBRA_COOLDOWN_MIN", "240");
+const VOL_SOMBRA_MAX_POR_RODADA = numEnv("VOL_SOMBRA_MAX_POR_RODADA", "4");
+// V106: só pro /volconf. Mínimo de volume em UNIDADES da moeda pra testar "os dois filtros juntos" (0 = usa a mediana da amostra). Não barra nada ao vivo.
+const FILTRO_VOL_MIN_MOEDA = numEnv("FILTRO_VOL_MIN_MOEDA", "0");
+const ALERTA_MOSTRA_VOL = (Deno.env.get("ALERTA_MOSTRA_VOL") ?? "1") !== "0"; // V106: linha 💧 volume 24h nos radares
+const VOL_SOMBRA_TIPO = "vol_sombra";
+// V106: volume 24h de cada moeda (USDT e unidades), atualizado a cada getVariacoes24h; o registro do log lê daqui.
+const _volMap = new Map<string, { u: number; m: number }>();
+const volDe = (inst: string) => _volMap.get(inst) ?? null;
+const fmtVol = (v: number | null | undefined): string => {
+  if (v == null || !isFinite(v)) return "?";
+  const a = Math.abs(v);
+  return a >= 1e9 ? `${(v / 1e9).toFixed(1)}B` : a >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : a >= 1e3 ? `${(v / 1e3).toFixed(0)}k` : v.toFixed(0);
+};
+const volLinha = (inst: string): string => {
+  if (!ALERTA_MOSTRA_VOL) return "";
+  const v = volDe(inst);
+  return v ? `\n💧 Volume 24h: ${fmtVol(v.u)} USDT (${fmtVol(v.m)} ${inst.split("-")[0]})` : "";
+};
 let FILTRO_ADX_MIN = numEnv("FILTRO_ADX_MIN", "14"); // V74: 15 → 14 (pega a tendência começando); se você tem o Secret FILTRO_ADX_MIN=15 salvo, ele vence: apague ou troque (histórico: V61 baixou de 18 pra 15 — com o DI oculto (V60) filtrando falso cruzamento por trás, dá pra descer o piso e pegar antecipação sem tanto ruído)
 // V74 (OPCIONAL, desligado): corte duro "ADX subindo" (ADX agora > ADX de ~1h atrás, as mesmas 4 velas do adxAntes). Hoje o "ADX subindo" já entra na PONTUAÇÃO de confiança (+1, ou +0 se o DI do lado oposto puxa).
 // FILTRO_ADX_SUBINDO_ATE: só exige "subindo" enquanto o ADX está abaixo desse valor (ex.: 25 = acima disso a tendência já está formada e não precisa estar subindo); 0 = sempre.
@@ -405,7 +385,7 @@ const FUNDO_ADX_MAX = numEnv("FUNDO_ADX_MAX", "30");
 //   FACA_MODO=sombra (padrão)  grava os candidatos em silêncio numa linha própria (_FACA_SOMBRA_), sem mandar aviso e SEM entrar no /placar,
 //                              /saida, /15min nem nos resumos (não usa a tabela do placar). Resultado com /faca [dias].
 //   FACA_MODO=alerta           além de gravar, manda o aviso 🔪 (experimental) nos chats ativos.   FACA_MODO=off  desliga tudo.
-// FACA_ADX_MIN (30) = ADX mínimo · FACA_CONF_MIN (5) = nota mínima do fundo (baixe pra 3 se quiser mais amostra) · FACA_COOLDOWN_MIN (240)
+// FACA_ADX_MIN (30) = ADX mínimo · FACA_CONF_MIN (5) = nota mínima pra AVISAR (modo alerta) · FACA_GRAVA_MIN (3) = nota mínima pra GRAVAR na sombra (amostra; nunca acima de FACA_CONF_MIN) · FACA_COOLDOWN_MIN (240)
 // por moeda · FACA_MAX_POR_RODADA (2) · FACA_DIAS_GUARDA (14). Só avalia até ~9 dias de velas, como o /radar.
 const FACA_MODO: "off" | "sombra" | "alerta" = (() => {
   const v = String(Deno.env.get("FACA_MODO") || "sombra").trim().toLowerCase();
@@ -414,7 +394,8 @@ const FACA_MODO: "off" | "sombra" | "alerta" = (() => {
   return "sombra";
 })();
 const FACA_ADX_MIN = numEnv("FACA_ADX_MIN", "30");
-const FACA_CONF_MIN = numEnv("FACA_CONF_MIN", "5");
+const FACA_CONF_MIN = numEnv("FACA_CONF_MIN", "5"); // nota mínima pra AVISAR (só vale com FACA_MODO=alerta)
+const FACA_GRAVA_MIN = Math.min(FACA_CONF_MIN, numEnv("FACA_GRAVA_MIN", "3")); // nota mínima pra GRAVAR (amostra pro /faca); nunca acima de FACA_CONF_MIN
 const FACA_COOLDOWN_MIN = numEnv("FACA_COOLDOWN_MIN", "240");
 const FACA_MAX_POR_RODADA = numEnv("FACA_MAX_POR_RODADA", "2");
 const FACA_DIAS_GUARDA = numEnv("FACA_DIAS_GUARDA", "14");
@@ -493,9 +474,9 @@ function igualSeguro(a: string, b: string): boolean {
 // de "8"), Number(...) vira NaN e essa NaN se propaga em silêncio por todo comparador (>=, <, etc sempre
 // dão false), desligando filtros e limiares sem nenhum aviso. numEnv() pega esse caso: loga 1x e cai no
 // padrão em vez de deixar a NaN vazar.
-const _numEnvAvisado = new Set<string>();
 function numEnv(nome: string, padrao: string): number {
   const bruto = Deno.env.get(nome);
+  _cfgNum.set(nome, { padrao, bruto });
   const def = Number(padrao);
   if (bruto === undefined || bruto === "") return def;
   const v = Number(bruto);
@@ -1272,8 +1253,10 @@ async function getVariacoes24h(): Promise<VarInfo[]> {
       const last = parseFloat(t.last || "0"), open = parseFloat(t.open24h || "0");
       if (open <= 0 || last <= 0) continue;
       const pct = ((last - open) / open) * 100, dd = ddDeTicker(t, last), up = upDeTicker(t, last);
+      const volM = parseFloat(t.volCurrency24h || "0") || 0;
+      _volMap.set(t.instId, { u: volM * last, m: volM }); // V106
       if (!passaAmplitude(pct, dd, up)) continue;
-      variacoes.push({ instId: t.instId, pct, last, volUsdt: (parseFloat(t.volCurrency24h || "0") || 0) * last, dd, up });
+      variacoes.push({ instId: t.instId, pct, last, volUsdt: volM * last, volMoeda: volM, dd, up });
     }
   } else {
     const resultados = await emLotes(pares, 25, getTickerOne);
@@ -1283,8 +1266,10 @@ async function getVariacoes24h(): Promise<VarInfo[]> {
       const last = parseFloat(t.last || "0"), open = parseFloat(t.open24h || "0");
       if (open <= 0 || last <= 0) return;
       const pct = ((last - open) / open) * 100, dd = ddDeTicker(t, last), up = upDeTicker(t, last);
+      const volM = parseFloat(t.volCurrency24h || "0") || 0;
+      _volMap.set(pares[i], { u: volM * last, m: volM }); // V106
       if (!passaAmplitude(pct, dd, up)) return;
-      variacoes.push({ instId: pares[i], pct, last, volUsdt: (parseFloat(t.volCurrency24h || "0") || 0) * last, dd, up });
+      variacoes.push({ instId: pares[i], pct, last, volUsdt: volM * last, volMoeda: volM, dd, up });
     });
   }
   return variacoes;
@@ -1583,7 +1568,7 @@ async function registrarAlertaFundo(SB: any, info: InfoFiltravel, pct: number, c
   } catch (e) { console.log("⚠️ registrarAlertaFundo erro", e); }
 }
 // ===== V98: MODO FACA — candidatos de "continuação da queda" (fundo com ADX alto), gravados à parte do placar =====
-type FacaReg = { i: string; t: number; p: number; a: number | null; c: number; q: number };
+type FacaReg = { i: string; t: number; p: number; a: number | null; c: number; q: number; u?: number | null; m?: number | null; v?: string }; // V106: u = volume 24h em USDT, m = em unidades da moeda
 const _facaAvaliado = new Map<string, number>();
 async function facaLer(SB: any): Promise<FacaReg[] | null> {
   try {
@@ -1634,12 +1619,13 @@ async function radarFaca(SB: any, pool: { instId: string; pct: number; volUsdt: 
     if (ult && agora - ult < FACA_COOLDOWN_MIN * 60000) continue;
     const fin = await fundoFinal(c.info.bottom!, inst);
     _facaAvaliado.set(inst, ckVela);
-    if (fin.conf < FACA_CONF_MIN) continue;
+    if (fin.conf < FACA_GRAVA_MIN) continue; // grava de FACA_GRAVA_MIN pra cima (amostra)
     const r1 = (v: number) => Math.round(v * 10) / 10;
-    lista.push({ i: inst, t: agora, p: Number(c.info.preco), a: r1(c.info.adx), c: fin.conf, q: r1(c.queda) });
+    const vf = volDe(inst);
+    lista.push({ i: inst, t: agora, p: Number(c.info.preco), a: r1(c.info.adx), c: fin.conf, q: r1(c.queda), u: vf ? Math.round(vf.u) : null, m: vf ? vf.m : null, v: BOT_VERSAO });
     gravou++;
     console.log(`🔪 faca (${FACA_MODO}): ${inst} nota ${fin.conf}/10 · ADX ${c.info.adx.toFixed(0)} · queda ${c.queda.toFixed(1)}%`);
-    if (FACA_MODO === "alerta" && ativos.length) {
+    if (FACA_MODO === "alerta" && ativos.length && fin.conf >= FACA_CONF_MIN) { // avisa só nota >= FACA_CONF_MIN
       const vivo = await precoAoVivo(inst).catch(() => null);
       const msg = msgFaca(c.info, c.queda, fin.conf, vivo);
       await Promise.all(ativos.map((ch) => enviarAlertaMoeda(SB, ch, `FACA_${inst}`, cortar(msg), botaoAnalisar(inst)).catch(() => null)));
@@ -1741,7 +1727,7 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     const minConf = fin.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : FUNDO_CONF_MIN;
     if (fin.conf < minConf) { _fundoAvaliado.set(inst, ckVela); console.log(`🟢 radar: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "faca caindo" : "sinais insuficientes"})`); continue; }
     const seta = setaTxt(row?.last_status, fin.conf);
-    const msg = (subidaDe !== null ? `⬆️ <b>NOTA SUBIU</b> ${subidaDe}/10 → ${fin.conf}/10 (2º alerta da mesma moeda)\n\n` : "") + msgFundo(c.info, c.pct, c.queda, fin, vivo, seta);
+    const msg = (subidaDe !== null ? `⬆️ <b>NOTA SUBIU</b> ${subidaDe}/10 → ${fin.conf}/10 (2º alerta da mesma moeda)\n\n` : "") + msgFundo(c.info, c.pct, c.queda, fin, vivo, seta) + volLinha(inst);
     const ids = await Promise.all(ativos.map(async (ch) => {
       const atrRadar = typeof (c.info as any).atr === "number" ? (c.info as any).atr : 0;
       let extra = "";
@@ -1975,7 +1961,7 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
     const minConf = fin.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : TOPO_CONF_MIN;
     if (fin.conf < minConf) { _fundoAvaliado.set("topo|" + inst, ckVela); console.log(`🔴 radar de topo: ${inst} ${fin.conf}/10 < ${minConf} (${fin.caindoFaca ? "foguete" : "sinais insuficientes"})`); continue; }
     const seta = setaTxt(row?.last_status, fin.conf);
-    const msg = (subidaDe !== null ? `⬆️ <b>NOTA SUBIU</b> ${subidaDe}/10 → ${fin.conf}/10 (2º alerta da mesma moeda)\n\n` : "") + msgTopo(c.info, c.pct, c.alta, fin, vivo, seta);
+    const msg = (subidaDe !== null ? `⬆️ <b>NOTA SUBIU</b> ${subidaDe}/10 → ${fin.conf}/10 (2º alerta da mesma moeda)\n\n` : "") + msgTopo(c.info, c.pct, c.alta, fin, vivo, seta) + volLinha(inst);
     const ids = await Promise.all(ativos.map(async (ch) => {
       const atrRadar = typeof (c.info as any).atr === "number" ? (c.info as any).atr : 0;
       let extra = "";
@@ -2185,7 +2171,7 @@ async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: st
     }
     const vivo = await precoAoVivo(inst);
     const seta = setaTxt(row?.last_status, c.res.conf);
-    const msg = msgCompressao(c.info, c.res, vivo, seta);
+    const msg = msgCompressao(c.info, c.res, vivo, seta) + volLinha(inst);
     const ids = await Promise.all(ativos.map(async (ch) => {
       let extra = "";
       for (const p of posDaMoeda(posMap.get(ch) ?? null, inst)) {
@@ -3064,33 +3050,42 @@ async function checarAlertaFinal(
 // (mesmo compare-and-swap da aquisição). Se a trava já é de outra rodada, a que terminou atrasada não mexe nela.
 const CRON_LOCK_ROW = "_CRON_LOCK_";
 const CRON_LOCK_TIMEOUT_MS = numEnv("CRON_LOCK_TIMEOUT_MS", "110000");
+// V106: prazo da rodada. Passou disso, o cron pula o que é só gravação em silêncio (sombra de volume, faca em modo sombra) pra não
+// estourar a trava (CRON_LOCK_TIMEOUT_MS) e a rodada seguinte começar por cima. Fica sempre abaixo da trava.
+const CRON_PRAZO_MS = Math.min(numEnv("CRON_PRAZO_MS", "85000"), CRON_LOCK_TIMEOUT_MS - 10000);
+// V106: tarefas que rodam em paralelo à rodada (ex.: gravação do /radarhist às 21h). A rodada espera por elas DEPOIS de liberar a trava,
+// pra plataforma não derrubar a função no meio da gravação sem segurar o cron.
+const _bgTarefas: Promise<unknown>[] = [];
 // devolve o token da trava; null = outra rodada está rodando (pular); "" = falha ao travar, segue sem trava (nada a liberar)
-async function travarCron(SB: any): Promise<string | null> {
+async function travarCron(SB: any): Promise<string | null> { return await travarLinha(SB, CRON_LOCK_ROW, CRON_LOCK_TIMEOUT_MS); }
+async function destravarCron(SB: any, token: string) { await destravarLinha(SB, CRON_LOCK_ROW, token); }
+// V106: a mesma trava (compare-and-swap com dono) pra qualquer linha
+async function travarLinha(SB: any, linha: string, timeoutMs: number): Promise<string | null> {
   try {
     const agora = Date.now();
-    const cutoff = String(agora - CRON_LOCK_TIMEOUT_MS);
+    const cutoff = String(agora - timeoutMs);
     const { data: upd, error: eUpd } = await SB.from(TAB)
       .update({ last_status: String(agora) })
-      .eq("instid", CRON_LOCK_ROW)
+      .eq("instid", linha)
       .lt("last_status", cutoff)
       .select("instid");
     if (eUpd) throw eUpd;
     if (upd && upd.length) return String(agora);
     // ninguém travado agora: ou a linha não existe ainda (1ª rodada), ou já está travada dentro do prazo
     // (update não bateu no WHERE). Tenta criar a linha; se já existir (corrida no insert), perdeu a trava.
-    const { error: eIns } = await SB.from(TAB).insert({ instid: CRON_LOCK_ROW, last_status: String(agora) });
+    const { error: eIns } = await SB.from(TAB).insert({ instid: linha, last_status: String(agora) });
     if (!eIns) return String(agora);
     if (/duplicate|already exists|23505/i.test(String(eIns.message || eIns.code || ""))) return null;
     throw eIns;
-  } catch (e) { console.log("⚠️ erro travando cron (seguindo sem trava)", e); return ""; }
+  } catch (e) { console.log(`⚠️ erro travando ${linha} (seguindo sem trava)`, e); return ""; }
 }
-async function destravarCron(SB: any, token: string) {
-  if (!token) return; // rodada que seguiu sem trava não tem o que liberar
+async function destravarLinha(SB: any, linha: string, token: string) {
+  if (!token) return; // quem seguiu sem trava não tem o que liberar
   try {
-    const { data, error } = await SB.from(TAB).update({ last_status: "0" }).eq("instid", CRON_LOCK_ROW).eq("last_status", token).select("instid");
+    const { data, error } = await SB.from(TAB).update({ last_status: "0" }).eq("instid", linha).eq("last_status", token).select("instid");
     if (error) throw error;
-    if (!data || !data.length) console.log("ℹ️ trava do cron já era de outra rodada (a minha expirou); não liberei a dela");
-  } catch (e) { console.log("⚠️ erro destravando cron", e); }
+    if (!data || !data.length) console.log(`ℹ️ trava ${linha} já era de outra execução (a minha expirou); não liberei a dela`);
+  } catch (e) { console.log(`⚠️ erro destravando ${linha}`, e); }
 }
 async function runAlertaProativo() {
   if (!ALERT_CHAT_IDS.length) { console.log("⚠️ nenhum chat recebe alerta (ALLOWED_CHAT_IDS vazio ou todos em ALERT_EXCLUIR_IDS)"); return; }
@@ -3099,6 +3094,10 @@ async function runAlertaProativo() {
   await restaurarCalibracao(SB);
   const tokenCron = await travarCron(SB);
   if (tokenCron === null) { console.log("⏭️ rodada anterior do cron ainda em andamento, pulando esta"); return; }
+  const inicioRodada = Date.now(); // V106: tempo REAL da rodada (o "inicio" abaixo começa depois do estado/painel e o 🏁 sai antes dos radares)
+  const pulados: string[] = [];
+  const noPrazo = (nome: string) => { if (Date.now() - inicioRodada < CRON_PRAZO_MS) return true; pulados.push(nome); return false; };
+  let ultimoHb = "";
   try {
   await carregarEstado(SB);
   for (const k of Object.keys(_fonte)) delete _fonte[k];
@@ -3123,7 +3122,8 @@ async function runAlertaProativo() {
   if (todosSil && (!SILENCIO_PROTECAO || nPos === 0)) {
     console.log(`🌙 todos em silêncio/pausa (${silencio ? `horário ${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h` : "pausa manual"}): nada a proteger, só conferindo o placar`);
     try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); }
-    await heartbeat(SB, `silêncio | ${((Date.now() - inicio) / 1000).toFixed(1)}s`);
+    ultimoHb = `silêncio | ${((Date.now() - inicio) / 1000).toFixed(1)}s`;
+    await heartbeat(SB, ultimoHb);
     return;
   }
   if (todosSil) console.log(`🌙 todos em silêncio/pausa: só alertas de proteção (${nPos} posição(ões) aberta(s))`);
@@ -3308,14 +3308,16 @@ async function runAlertaProativo() {
   await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta, lat).catch((e) => console.log("❌ erro alerta final", e));
   if (lat.sujo) await lateralSalvar(SB, lat).catch((e) => console.log("⚠️ erro salvando contador lateral", e));
   console.log(`🏁 alerta proativo em ${((Date.now() - inicio) / 1000).toFixed(1)}s - ${setups.length} setups, ${enviados} alertas enviados, ${confBarrados} barrados por confiança${lat.bloq ? `, ${barradosLat} barrados por mercado lateral` : ""}`);
-  await heartbeat(SB, `${((Date.now() - inicio) / 1000).toFixed(1)}s | setups ${setups.length} | enviados ${enviados}`);
+  ultimoHb = `setups ${setups.length} | enviados ${enviados}`;
+  await heartbeat(SB, `${((Date.now() - inicio) / 1000).toFixed(1)}s | ${ultimoHb}`);
   await avisarFonteDados(SB).catch((e) => console.log("⚠️ erro avisarFonteDados", e));
   await avisarBtcSemDados(SB).catch((e) => console.log("⚠️ erro avisarBtcSemDados", e));
   // V57: os radares são avisos antecipados (nunca LIGUE AGORA), então seguem rodando com o filtro lateral ligado — a mensagem sai com o aviso 🧱
   if (TOPO_ON) await radarTopo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de topo", e));
   if (FUNDO_ON) await radarFundo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de fundo", e));
-  if (FACA_MODO !== "off") await radarFaca(SB, pool, indicadores).catch((e) => console.log("❌ erro modo faca", e)); // V98
+  if (FACA_MODO !== "off" && (FACA_MODO === "alerta" || noPrazo("faca (sombra)"))) await radarFaca(SB, pool, indicadores).catch((e) => console.log("❌ erro modo faca", e)); // V98 (V106: em modo sombra, só dentro do prazo)
   if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
+  if (noPrazo("sombra de volume")) await volSombraRodar(SB, variacoes, perfilAlerta).catch((e) => console.log("❌ erro sombra de volume", e)); // V106
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   // V74: sem .catch, um erro aqui pulava checarAntecipacoes, salvarEstado e processarAutoApagar da rodada
@@ -3326,7 +3328,17 @@ async function runAlertaProativo() {
   await processarAutoApagar(SB).catch((e) => console.log("❌ erro autoapagar", e));
   if (todosSil) { try { await conferirPlacar(SB); } catch (e) { console.log("❌ erro placar", e); } return; }
   await extrasV13(SB, posMap).catch((e) => console.log("❌ erro extrasV13", e));
-  } finally { await destravarCron(SB, tokenCron); }
+  if (noPrazo("resumo das sombras")) await checarResumoSombras(SB).catch((e) => console.log("❌ erro resumo das sombras", e)); // V107
+  } finally {
+    const totalMs = Date.now() - inicioRodada;
+    const alerta = totalMs > CRON_LOCK_TIMEOUT_MS ? " ⚠️ PASSOU da trava: a rodada seguinte pode ter começado por cima"
+      : totalMs > CRON_PRAZO_MS ? ` ⚠️ passou do prazo (${(CRON_PRAZO_MS / 1000).toFixed(0)}s)` : "";
+    console.log(`⏱ rodada completa em ${(totalMs / 1000).toFixed(1)}s${pulados.length ? ` · pulou por tempo: ${pulados.join(", ")}` : ""}${alerta}`);
+    await heartbeat(SB, `${(totalMs / 1000).toFixed(1)}s total${ultimoHb ? ` | ${ultimoHb}` : ""}${pulados.length ? ` | pulou ${pulados.length}` : ""}`);
+    await destravarCron(SB, tokenCron);
+    // V106: espera as tarefas em paralelo (ex.: /radarhist das 21h) já sem segurar a trava do cron (no finally, pra valer também na saída do silêncio)
+    if (_bgTarefas.length) { const t = _bgTarefas.splice(0); await Promise.allSettled(t); }
+  }
 }
 const X_TZ_OFFSET_H = numEnv("TZ_OFFSET_H", "-3");
 const X_JANELA_FORTE = 1.15;
@@ -4099,7 +4111,7 @@ function hipLinhasCortes(g: HipCorteItem[], rotMov: string): string {
   const linha = (rot: string, x: typeof com): string => {
     if (!x.length) return "";
     const inv = x.filter((i) => i.res === "invalida").length, fun = x.filter((i) => i.res === "funcionou").length;
-    return `    ${rot} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}% · a favor ${sgn1(med(x.map((i) => i.f)))}% · contra ${sgn1(-med(x.map((i) => i.a)))}%${x.length < 8 ? " ⚠️" : ""}\n`;
+    return `    ${rot} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}%${pmTxt(fun, x.length)} · a favor ${sgn1(med(x.map((i) => i.f)))}% · contra ${sgn1(-med(x.map((i) => i.a)))}%${x.length < 8 ? " ⚠️" : ""}\n`;
   };
   let t = `  <i>corte mínimo de ${rotMov} (cumulativo: "≥ X" = quem passaria com esse corte):</i>\n`;
   const abaixo = com.filter((x) => x.v < RADAR_CORTES[0]);
@@ -4119,7 +4131,7 @@ function hipLinhasBanda(g: { res: HipRes; conf: number | null }[]): string {
     if (!x.length) continue;
     const inv = x.filter((i) => i.res === "invalida").length, fun = x.filter((i) => i.res === "funcionou").length;
     pcts[b] = { n: x.length, func: fun / x.length };
-    linhas.push(`  ${HIP_BANDA_TXT[b]} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}%${x.length < 8 ? " ⚠️" : ""}`);
+    linhas.push(`  ${HIP_BANDA_TXT[b]} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}%${pmTxt(fun, x.length)}${x.length < 8 ? " ⚠️" : ""}`);
   }
   if (linhas.length < 2 || (linhas.length === 1 && pcts.sem)) return linhas.length ? linhas.join("\n") + "\n" : "";
   const alta = pcts.alta, resto = [pcts.media, pcts.baixa].filter((x): x is { n: number; func: number } => !!x && x.n > 0);
@@ -4140,7 +4152,7 @@ const hipPctFun = (x: { res: HipRes }[]): number | null => {
 function hipLinhaFatia(rotulo: string, x: { res: HipRes }[]): string {
   if (!x.length) return "";
   const inv = x.filter((i) => i.res === "invalida").length, fun = x.filter((i) => i.res === "funcionou").length;
-  return `  ${rotulo} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}%${x.length < 8 ? " ⚠️" : ""}\n`;
+  return `  ${rotulo} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}%${pmTxt(fun, x.length)}${x.length < 8 ? " ⚠️" : ""}\n`;
 }
 function hipLeituraFatia(nome: string, a: { res: HipRes }[], b: { res: HipRes }[]): string {
   const pa = hipPctFun(a), pb = hipPctFun(b);
@@ -4319,15 +4331,16 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
     const lista = await facaLer(SB);
     if (!lista) { await sendTelegram(chatId, "⚠️ Não consegui ler o modo faca no Supabase."); return; }
     const corteMs = Date.now() - dd * 86400000;
-    rows = lista.filter((r) => r.t > corteMs && Number(r.p) > 0).map((r) => ({ instid: r.i, lado: "short", tipo: "faca", status: "🔪 FACA", preco: r.p, criado_em: new Date(r.t).toISOString(), conf: r.c, efe: r.q }));
+    rows = lista.filter((r) => r.t > corteMs && Number(r.p) > 0 && desdeOk(desdeDoChat(chatId), r.t, r.v)).map((r) => ({ instid: r.i, lado: "short", tipo: "faca", status: "🔪 FACA", preco: r.p, criado_em: new Date(r.t).toISOString(), conf: r.c, efe: r.q }));
   } else {
     const busca = (cols: string) => SB.from(PLACAR_TABELA).select(cols).gt("criado_em", desde).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).limit(500);
-    let { data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf");
+    let { data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf, versao"); // V107: versao pro filtro "desde"
+    if (error && /versao/i.test(String(error.message || ""))) ({ data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf"));
     if (error && /conf/i.test(String(error.message || ""))) ({ data, error } = await busca("instid, lado, tipo, status, preco, criado_em")); // coluna conf ausente: segue sem a quebra por nota
     if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas de radar: ${String(error.message || error).slice(0, 120)}`); return; }
-    rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em);
+    rows = aplicarDesde(chatId, ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em)); // V107
   }
-  if (!rows.length) { await sendTelegram(chatId, opt?.fonte === "faca" ? `🔪 <b>MODO FACA</b> (${FACA_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Modo atual: ${FACA_MODO} · ADX ≥ ${FACA_ADX_MIN} · nota ≥ ${FACA_CONF_MIN}/10. Ele grava sozinho a cada rodada do cron.` : `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
+  if (!rows.length) { await sendTelegram(chatId, opt?.fonte === "faca" ? `🔪 <b>MODO FACA</b> (${FACA_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Modo atual: ${FACA_MODO} · ADX ≥ ${FACA_ADX_MIN} · grava nota ≥ ${FACA_GRAVA_MIN}/10 · avisa nota ≥ ${FACA_CONF_MIN}/10. Ele grava sozinho a cada rodada do cron.` : `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
@@ -4367,7 +4380,7 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
     const c = (r: HipRes) => g.filter((x) => x.res === r).length, pc = (n: number) => `${Math.round((n / g.length) * 100)}%`;
     const inval = g.filter((x) => x.res === "invalida");
     m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : tipo === "faca" ? "🔪" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
-    m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
+    m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}${pmTxt(c("funcionou"), g.length)}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
     m += `a favor mediano ${sg(_med(g.map((x) => x.mfe)))}% · contra mediano ${sg(-_med(g.map((x) => x.mae)))}%${inval.length ? ` · invalida em ~${(_med(inval.map((x) => x.barras)) * TF_MIN / 60).toFixed(1)}h` : ""}\n`;
     m += hipLinhasFatias(g); // V76: por nota exata, esticada em 24h e ADX
     m += hipLinhasCortes(g.map((x) => ({ res: x.res, f: x.mfe, a: x.mae, v: x.efe })), tipo === "topo" ? "alta efetiva" : tipo === "fundo" || tipo === "faca" ? "queda efetiva" : "movimento efetivo (alta p/ SHORT, queda p/ LONG)"); // V105
@@ -4441,7 +4454,15 @@ async function radarHistLer(SB: any): Promise<RadarReg[] | null> {
   } catch (e) { console.log("⚠️ radarhist: leitura falhou", e); return null; }
 }
 // reavalia os alertas dos últimos 9 dias e junta com o que já estava gravado. Devolve quantos registros ficaram (ou null se falhou).
-async function radarHistGravar(SB: any): Promise<{ total: number; novos: number } | null> {
+const RADARH_LOCK_ROW = "_RADAR_HIST_LOCK_";
+const RADARH_LOCK_MS = numEnv("RADARH_LOCK_MS", "300000");
+// V106: com trava própria — a gravação das 21h e o /radarhist gravar não podem ler/escrever a lista ao mesmo tempo (um apagaria o do outro)
+async function radarHistGravar(SB: any): Promise<{ total: number; novos: number; ocupado?: boolean } | null> {
+  const tk = await travarLinha(SB, RADARH_LOCK_ROW, RADARH_LOCK_MS);
+  if (tk === null) { console.log("⏳ radarhist: outra gravação em andamento, pulei"); return { total: 0, novos: 0, ocupado: true }; }
+  try { return await radarHistGravarSemTrava(SB); } finally { await destravarLinha(SB, RADARH_LOCK_ROW, tk); }
+}
+async function radarHistGravarSemTrava(SB: any): Promise<{ total: number; novos: number } | null> {
   const velhos = await radarHistLer(SB);
   if (velhos === null) return null; // sem ler o histórico, não grava (não pode sobrescrever o que já existe)
   const novos = await radarColetarReg(SB, 9);
@@ -4468,7 +4489,8 @@ async function runRadarHist(chatId: number | string, dias: number, gravar: boole
   let aviso = "";
   if (gravar) {
     const g = await radarHistGravar(SB);
-    aviso = g ? `💾 Gravado agora: ${g.novos} alerta(s) novo(s), ${g.total} no histórico.\n\n` : "⚠️ Não consegui gravar agora (veja os logs).\n\n";
+    aviso = g?.ocupado ? "⏳ Outra gravação do histórico está em andamento (a automática das 21h ou outro /radarhist gravar). Mostrando o que já está gravado; tente gravar de novo em alguns minutos.\n\n"
+      : g ? `💾 Gravado agora: ${g.novos} alerta(s) novo(s), ${g.total} no histórico.\n\n` : "⚠️ Não consegui gravar agora (veja os logs).\n\n";
   }
   const todos = await radarHistLer(SB);
   if (todos === null) { await sendTelegram(chatId, aviso + "⚠️ Não consegui ler o histórico do radar."); return; }
@@ -4486,7 +4508,7 @@ async function runRadarHist(chatId: number | string, dias: number, gravar: boole
     if (!g.length) continue;
     const c = (r: HipRes) => g.filter((x) => x.r === r).length, pc = (n: number) => `${Math.round((n / g.length) * 100)}%`;
     m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
-    m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
+    m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}${pmTxt(c("funcionou"), g.length)}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
     m += `a favor mediano ${sg(med(g.map((x) => x.f)))}% · contra mediano ${sg(-med(g.map((x) => x.a)))}%\n`;
     const ext = g.filter((x) => x.e !== null);
     if (ext.length >= 8) {
@@ -4810,17 +4832,38 @@ let _placarTem15m = true;
 const PLACAR_MAX_CONFERE = 60;
 const ANALISE_TARDE_CANDLES = 8;
 const ANALISE_MUITO_TARDE_CANDLES = 16;
-type VarInfo = { instId: string; pct: number; last: number; volUsdt: number; dd: number; up: number };
+type VarInfo = { instId: string; pct: number; last: number; volUsdt: number; volMoeda?: number; dd: number; up: number };
 let _logTemConf = true;
 let _logTemFeat = true; // V87: coluna opcional comp_feat (texto) com as características da compressão no momento do alerta
+let _logTemVol = true; // V106: colunas opcionais vol_usdt, vol_moeda (numeric) e sombra_vol (boolean)
+let _logTemVersao = true; // V107: coluna opcional versao (texto)
 async function inserirLogAlerta(SB: any, linha: Record<string, unknown>, conf: number | null, feat: string | null = null) {
-  for (let tent = 0; tent < 3; tent++) {
+  for (let tent = 0; tent < 5; tent++) {
     const payload: Record<string, unknown> = { ...linha };
+    const sombraVol = payload.sombra_vol === true;
+    delete payload.sombra_vol;
     if (_logTemConf && conf !== null) payload.conf = conf;
     if (_logTemFeat && feat) payload.comp_feat = feat;
+    if (_logTemVol) {
+      const v = volDe(String(linha.instid || ""));
+      payload.vol_usdt = v ? Math.round(v.u) : null;
+      payload.vol_moeda = v ? v.m : null;
+      payload.sombra_vol = sombraVol;
+    }
+    if (_logTemVersao) payload.versao = BOT_VERSAO;
     const { error } = await SB.from(PLACAR_TABELA).insert(payload);
     if (!error) return;
     const msg = String(error.message || "");
+    if (payload.versao !== undefined && /versao/i.test(msg)) {
+      _logTemVersao = false;
+      console.log("⚠️ alertas_log sem a coluna versao: rode  ALTER TABLE alertas_log ADD COLUMN IF NOT EXISTS versao text;  pro filtro \"desde V107\" funcionar");
+      continue;
+    }
+    if (payload.vol_usdt !== undefined && /vol_usdt|vol_moeda|sombra_vol/i.test(msg)) {
+      _logTemVol = false;
+      console.log("⚠️ alertas_log sem as colunas de volume: rode  ALTER TABLE alertas_log ADD COLUMN IF NOT EXISTS vol_usdt numeric, ADD COLUMN IF NOT EXISTS vol_moeda numeric, ADD COLUMN IF NOT EXISTS sombra_vol boolean DEFAULT false;  pro /volconf funcionar (o alerta segue gravado sem o volume)");
+      continue;
+    }
     if (payload.comp_feat !== undefined && /comp_feat/i.test(msg)) {
       _logTemFeat = false;
       console.log("⚠️ alertas_log sem a coluna comp_feat: rode  ALTER TABLE alertas_log ADD COLUMN IF NOT EXISTS comp_feat text;  pra guardar os componentes da compressão");
@@ -4886,7 +4929,8 @@ const ehFinalLog = (r: any) => String(r?.status || "").includes("VAI FECHAR");
 const ehInvalidoLog = (r: any) => r?.ent_status === "repetido" || r?.ent_status === "invalido";
 const ehSombraRep = (r: any) => r?.tipo === REP_SOMBRA_TIPO; // V104: linhas do modo sombra do repique — só o /repsombra as lê
 const ehSombraRev = (r: any) => r?.tipo === REV_SOMBRA_TIPO; // V100: linhas do modo sombra da reversão — só o /reversaoconf as lê
-const ehDescartadoLog = (r: any) => ehInvalidoLog(r) || ehSombraRev(r) || ehSombraRep(r); // V68: fora de todas as estatísticas (V100: inclui a sombra)
+const ehSombraVol = (r: any) => r?.tipo === VOL_SOMBRA_TIPO || r?.sombra_vol === true; // V106: modo sombra de volume — só o /volconf lê
+const ehDescartadoLog = (r: any) => ehInvalidoLog(r) || ehSombraRev(r) || ehSombraRep(r) || ehSombraVol(r); // V68: fora de todas as estatísticas (V100: inclui a sombra; V106: e a de volume)
 const ENTRADA_MAX_CANDLES = numEnv("ENTRADA_MAX_CANDLES", "8");
 let _placarTemEntrada = true;
 type EntradaRes = { st: "pendente" } | { st: "nao_entrou" | "contra" } | { st: "entrou"; preco: number; emMs: number };
@@ -4986,7 +5030,7 @@ async function conferirPlacar(SB: any) {
         if (!ehFinalLog(r)) {
           let qJa = SB.from(PLACAR_TABELA).select("id").eq("instid", r.instid).eq("lado", e.lado ?? r.lado)
             .eq("ent_em", new Date(e.emMs).toISOString()).eq("ent_status", "entrou").neq("id", r.id);
-          qJa = ehSombraRev(r) ? qJa.eq("tipo", REV_SOMBRA_TIPO) : ehSombraRep(r) ? qJa.eq("tipo", REP_SOMBRA_TIPO) : qJa.neq("tipo", REV_SOMBRA_TIPO).neq("tipo", REP_SOMBRA_TIPO); // V100: a sombra não pode tornar um alerta real "repetido"
+          qJa = ehSombraRev(r) ? qJa.eq("tipo", REV_SOMBRA_TIPO) : ehSombraRep(r) ? qJa.eq("tipo", REP_SOMBRA_TIPO) : ehSombraVol(r) ? qJa.eq("tipo", VOL_SOMBRA_TIPO) : qJa.neq("tipo", REV_SOMBRA_TIPO).neq("tipo", REP_SOMBRA_TIPO).neq("tipo", VOL_SOMBRA_TIPO); // V100: a sombra não pode tornar um alerta real "repetido"
           const { data: ja } = await qJa.limit(1);
           if (ja && ja.length) {
             const { error: e5 } = await SB.from(PLACAR_TABELA).update({ ent_status: "repetido" }).eq("id", r.id);
@@ -5088,7 +5132,7 @@ function linhaStats(rows: any[], hs: number[] = PLACAR_HORIZ_EXIBE): string {
     const rs = rows.map((r) => retornoLog(r, h)).filter((x): x is number => x !== null);
     if (!rs.length) return `${rotH(h)}: —`;
     const ac = rs.filter((x) => x > 0).length;
-    return `${rotH(h)}: ${Math.round((ac / rs.length) * 100)}% (${ac}/${rs.length}) ${_sg(_med(rs))}`;
+    return `${rotH(h)}: ${Math.round((ac / rs.length) * 100)}%${pmTxt(ac, rs.length)} (${ac}/${rs.length}) ${_sg(_med(rs))}`;
   });
   return partes.join(" · ");
 }
@@ -5102,7 +5146,7 @@ function placar15mTxt(rows: any[]): string {
   const lin = (nome: string, its: { r: any; x: number }[]) => {
     if (!its.length) return "";
     const xs = its.map((o) => o.x), ac = xs.filter((x) => x > 0).length, pf = _profitFactor(xs);
-    return `<b>${nome}</b> (n=${xs.length})\nacerto ${Math.round((ac / xs.length) * 100)}% · mediana ${_sg(_med(xs))} · aparada ${_sg(_mediaAparada(xs))} · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"}\n\n`;
+    return `<b>${nome}</b> (n=${xs.length})\nacerto ${Math.round((ac / xs.length) * 100)}%${pmTxt(ac, xs.length)} · mediana ${_sg(_med(xs))} · aparada ${_sg(_mediaAparada(xs))} · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"}\n\n`;
   };
   // V69: mesma reorganização em categorias do /placar — antes eram 10 blocos seguidos sem separação.
   let m = `⏱️ <b>DETALHE 15m — só alertas frescos</b>\n${DIVISOR}\n<i>retorno em 15 min desde o fechamento da vela do cruzamento, já com a taxa. PF = ganhos ÷ perdas (acima de 1 é lucro). Aparada = média sem os 10% mais extremos de cada ponta.</i>\n\n`;
@@ -5150,7 +5194,7 @@ async function runCompressao(chatId: number | string, dias: number) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
-  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const comp = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && r.tipo === "compressao");
   const ent = comp.filter((r) => r.ent_status === "entrou");
@@ -5386,7 +5430,7 @@ async function runRadarConf(chatId: number | string, dias: number) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
-  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const todas = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && !String(r.status || "").includes("REPIQUE"));
   const rets = (g: any[], h: number) => g.map((r) => retornoLog(r, h)).filter((x): x is number => x !== null);
@@ -5436,7 +5480,7 @@ async function runReversaoConf(chatId: number | string, dias: number) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
-  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const rev = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && r.tipo === "reversao" && !String(r.status || "").includes("REPIQUE"));
   // V100: modo sombra — o que a regra nova (ADX baixo + DI a favor) ou a nota barrou, gravado em silêncio
@@ -5526,12 +5570,360 @@ async function runReversaoConf(chatId: number | string, dias: number) {
   m += `\n<i>Cuidado: com corte de nota ${CONF_MIN_REVERSAO} (SHORT) e ${CONF_MIN_FUNDO_LONG} (LONG) cada fatia tem poucos alertas; só confie onde n ≥ 15 e espere crescer antes de mudar CONF_MIN_REVERSAO. Uso: /reversaoconf 30</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
+// ===== V106: MODO SOMBRA DE VOLUME =====
+// Pega as moedas com volume entre FILTRO_VOL_SOMBRA_MIN e FILTRO_VOL_MIN_USDT que mais andaram e passa pelas mesmas regras dos radares
+// (topo, fundo, repique) e do alerta de oportunidade/reversão. Quem passaria vira uma linha tipo vol_sombra (sombra_vol=true) no alertas_log.
+// Não manda aviso, não registra hipótese, não entra no /placar. O volume (USDT e unidades) vai junto pelo inserirLogAlerta.
+async function volSombraRodar(SB: any, variacoes: VarInfo[], perfil: XPerfil | null) {
+  if (!(FILTRO_VOL_SOMBRA_MIN > 0) || FILTRO_VOL_SOMBRA_MIN >= FILTRO_VOL_MIN_USDT || !(VOL_SOMBRA_POOL > 0)) return;
+  const faixa = variacoes.filter((v) => v.volUsdt >= FILTRO_VOL_SOMBRA_MIN && v.volUsdt < FILTRO_VOL_MIN_USDT);
+  if (!faixa.length) return;
+  const mov = (v: VarInfo) => Math.max(Math.abs(v.pct), v.dd || 0, v.up || 0);
+  const pool = [...faixa].sort((a, b) => mov(b) - mov(a)).slice(0, VOL_SOMBRA_POOL);
+  const infos = await emLotes(pool.map((p) => p.instId), 10, calcIndicadorFiltro);
+  type Cand = { inst: string; lado: "long" | "short"; cat: string; status: string; conf: number | null; info: InfoFiltravel; pct: number; idade: number | null; fresco: boolean };
+  const cands: Cand[] = [];
+  for (let i = 0; i < pool.length; i++) {
+    const info = infos[i] as InfoFiltravel | null, p = pool[i];
+    if (!info) continue;
+    const inst = p.instId;
+    // radar de FUNDO / repique LONG (mesmas regras do radarFundo, sem o volume)
+    if (FUNDO_ON && info.bottom && ladoAtual(info) !== "long") {
+      const queda = quedaEfetiva(p.pct, Math.max(p.dd ?? 0, info.ddPico ?? 0));
+      const rep = !!info.bottom.repique;
+      const preOk = info.bottom.pts >= (rep ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN);
+      const regraOk = rep ? repMotivos("long", info.adx, info.adxAntes, info.diDom ?? null).length === 0
+        : !(FUNDO_ADX_MAX > 0 && typeof info.adx === "number" && isFinite(info.adx) && info.adx >= FUNDO_ADX_MAX);
+      if (queda >= FUNDO_QUEDA_MIN && preOk && regraOk) {
+        const fin = await fundoFinal(info.bottom, inst).catch(() => null);
+        const minConf = fin?.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : FUNDO_CONF_MIN;
+        if (fin && fin.conf >= minConf) cands.push({ inst, lado: "long", cat: fin.repique ? "repique" : "fundo", status: fin.repique ? "🟢 REPIQUE LONG" : "🟢 FUNDO", conf: fin.conf, info, pct: p.pct, idade: info.idadeCandles, fresco: false });
+      }
+    }
+    // radar de TOPO / repique SHORT
+    if (TOPO_ON && info.top && ladoAtual(info) !== "short") {
+      const alta = altaEfetiva(p.pct, Math.max(p.up ?? 0, info.altaVale ?? 0));
+      const rep = !!info.top.repique;
+      const preOk = info.top.pts >= (rep ? Math.max(1, TOPO_PRE_MIN - 1) : TOPO_PRE_MIN);
+      const regraOk = rep ? repMotivos("short", info.adx, info.adxAntes, info.diDom ?? null).length === 0
+        : !(TOPO_ADX_MAX > 0 && typeof info.adx === "number" && isFinite(info.adx) && info.adx >= TOPO_ADX_MAX);
+      if (alta >= TOPO_ALTA_MIN && preOk && regraOk) {
+        const fin = await topoFinal(info.top, inst).catch(() => null);
+        const minConf = fin?.repique && !fin.caindoFaca ? REPIQUE_CONF_MIN : TOPO_CONF_MIN;
+        if (fin && fin.conf >= minConf) cands.push({ inst, lado: "short", cat: fin.repique ? "repique" : "topo", status: fin.repique ? "🔴 REPIQUE SHORT" : "🔴 TOPO", conf: fin.conf, info, pct: p.pct, idade: info.idadeCandles, fresco: false });
+      }
+    }
+    // alerta de OPORTUNIDADE / REVERSÃO (classificar + filtros, com o volume dado como aprovado)
+    const s = classificar(info, p.pct);
+    if (s && !motivoDescarte(info, FILTRO_VOL_MIN_USDT, false, s.lado)) {
+      if (ALERT_RETESTE_MAX_CANDLES > 0 && s.info.idadeCandles !== null && s.info.idadeCandles > ALERT_RETESTE_MAX_CANDLES) continue;
+      const confRes = await calcConfiancaAlerta(s, p.volUsdt, perfil).catch(() => null);
+      const conf = confRes?.conf ?? null;
+      const minConf = s.tipo === "reversao" ? (s.lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
+      const barra = s.tipo === "reversao" ? revMotivos(s.lado, info.adx, info.diDom ?? null, conf, minConf).length > 0 : minConf > 0 && conf !== null && conf < minConf;
+      if (!barra) cands.push({ inst, lado: s.lado, cat: s.tipo, status: s.status, conf, info, pct: p.pct, idade: s.info.idadeCandles, fresco: s.fresco });
+    }
+  }
+  if (!cands.length) { console.log(`🌑 sombra de volume: ${pool.length} moeda(s) entre ${fmtVol(FILTRO_VOL_SOMBRA_MIN)} e ${fmtVol(FILTRO_VOL_MIN_USDT)} avaliadas, nenhuma passaria`); return; }
+  cands.sort((a, b) => (b.conf ?? 0) - (a.conf ?? 0));
+  let n = 0;
+  for (const c of cands) {
+    if (n >= VOL_SOMBRA_MAX_POR_RODADA) break;
+    const chave = `_VOLSOMBRA_${c.inst}_${c.cat}`;
+    try {
+      const { data } = await SB.from(TAB).select("last_alert_at").eq("instid", chave).maybeSingle();
+      const ult = data?.last_alert_at ? new Date(data.last_alert_at).getTime() : 0;
+      if (ult && Date.now() - ult < VOL_SOMBRA_COOLDOWN_MIN * 60000) continue;
+      await inserirLogAlerta(SB, {
+        instid: c.inst, lado: c.lado, tipo: VOL_SOMBRA_TIPO, status: `🌑VOL[${c.cat}] ${c.status}`, fresco: c.fresco,
+        idade_candles: c.idade, pct24: c.pct, preco: c.info.preco, adx: c.info.adx ?? null, rsi: c.info.rsi ?? null, sombra_vol: true,
+      }, c.conf);
+      await upsertLinha(SB, chave, { last_alert_at: new Date().toISOString(), last_status: c.cat });
+      n++;
+      console.log(`🌑 sombra de volume: ${c.inst} ${c.cat} ${c.lado} nota ${c.conf ?? "?"}/10 · volume ${fmtVol(volDe(c.inst)?.u)} USDT`);
+    } catch (e) { console.log("⚠️ sombra de volume falhou", e); }
+  }
+}
+// ===== V106: /volconf [dias] — resultado por volume (USDT x unidades) =====
+// Mesma régua do /radar (hipAvaliar): funcionou = andou a favor ≥ max(HIP_ALVO_ATR × ATR, HIP_ALVO_PCT%) antes de andar contra
+// ≥ max(HIP_INV_ATR × ATR, HIP_INV_PCT%); prazo HIP_HORAS. Usa as velas, então no máximo ~9 dias.
+async function runVolConf(chatId: number | string, dias: number) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const dd = Math.min(9, Math.max(1, Math.round(dias || 7)));
+  const desdeMs = Date.now() - dd * 86400000;
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(desdeMs).toISOString()).order("criado_em", { ascending: false }).range(a, b));
+  if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
+  type Linha = { inst: string; lado: HipLado; cat: string; sombra: boolean; u: number; m: number | null; preco: number; emMs: number };
+  const catDe = (r: any): string | null => {
+    if (r.tipo === VOL_SOMBRA_TIPO) { const x = /VOL\[([^\]]+)\]/.exec(String(r.status || "")); return x ? x[1] : null; }
+    if (r.tipo === "fundo" || r.tipo === "topo") return String(r.status || "").includes("REPIQUE") ? "repique" : r.tipo;
+    if (r.tipo === "oportunidade" || r.tipo === "reversao") return r.tipo;
+    return null; // compressão (lado indefinido), sombras de ADX/DI etc.
+  };
+  const todas = (data || []) as any[];
+  const semColuna = todas.length > 0 && todas.every((r) => !("vol_usdt" in r));
+  const linhas: Linha[] = [];
+  for (const r of todas) {
+    if (ehFinalLog(r) || ehInvalidoLog(r) || ehSombraRev(r) || ehSombraRep(r)) continue;
+    const cat = catDe(r), u = r.vol_usdt == null ? NaN : Number(r.vol_usdt);
+    if (!cat || !isFinite(u) || !(Number(r.preco) > 0)) continue;
+    linhas.push({ inst: r.instid, lado: r.lado === "long" ? "long" : "short", cat, sombra: ehSombraVol(r), u, m: r.vol_moeda == null ? null : Number(r.vol_moeda), preco: Number(r.preco), emMs: new Date(r.criado_em).getTime() });
+  }
+  const faca = await facaLer(SB).catch(() => null); // o modo faca guarda numa linha própria
+  for (const f of faca || []) if (f.t > desdeMs && f.u != null && Number(f.p) > 0 && desdeOk(desdeDoChat(chatId), f.t, f.v)) linhas.push({ inst: f.i, lado: "short", cat: "faca", sombra: false, u: Number(f.u), m: f.m == null ? null : Number(f.m), preco: Number(f.p), emMs: f.t });
+  if (!linhas.length) {
+    await sendTelegram(chatId, `💧 <b>RESULTADO POR VOLUME</b>\n\nNenhum alerta com volume gravado nos últimos ${dd} dia(s).${semColuna ? "\n\n⚠️ A tabela alertas_log ainda não tem as colunas de volume. Rode no Supabase:\n<code>ALTER TABLE alertas_log ADD COLUMN IF NOT EXISTS vol_usdt numeric, ADD COLUMN IF NOT EXISTS vol_moeda numeric, ADD COLUMN IF NOT EXISTS sombra_vol boolean DEFAULT false;</code>" : "\nOs alertas de antes da V106 não têm volume. Deixe acumular alguns dias."}`);
+    return;
+  }
+  // desfecho de cada alerta com as velas
+  const porMoeda = new Map<string, Linha[]>();
+  for (const l of linhas) { const a = porMoeda.get(l.inst) || []; a.push(l); porMoeda.set(l.inst, a); }
+  const TFMS = TF_MIN * 60000;
+  type Item = Linha & { res: HipRes };
+  const itens: Item[] = [];
+  await emLotes([...porMoeda.keys()], 5, async (id) => {
+    const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
+    if (!d) return;
+    for (const l of porMoeda.get(id)!) {
+      let k0 = -1;
+      for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= l.emMs && l.emMs < d.t[i] + TFMS) { k0 = i; break; } }
+      if (k0 < 20) continue;
+      const atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
+      itens.push({ ...l, res: hipAvaliar(d, k0, l.lado, l.preco, isFinite(atr) ? atr : 0, TF_MIN).res });
+    }
+  });
+  if (!itens.length) { await sendTelegram(chatId, "💧 <b>RESULTADO POR VOLUME</b>\n\nNão consegui as velas dos alertas com volume. Tente de novo em alguns minutos."); return; }
+  const F = FILTRO_VOL_MIN_USDT;
+  const reais = itens.filter((x) => !x.sombra), somb = itens.filter((x) => x.sombra);
+  const CAT_NOME: Record<string, string> = { topo: "🔴 topo", fundo: "🟢 fundo", repique: "⭐ repique", oportunidade: "📈 oportunidade", reversao: "🔄 reversão", faca: "🔪 faca" };
+  const sec = (t: string) => `${MINI_DIVISOR}\n<b>${t}</b>\n${MINI_DIVISOR}\n`;
+  const porCat = (g: Item[]) => {
+    let t = "";
+    for (const c of Object.keys(CAT_NOME)) { const x = g.filter((i) => i.cat === c); if (x.length) t += hipLinhaFatia(`  ${CAT_NOME[c]}`, x); }
+    return t;
+  };
+  const pp = (x: number | null) => (x === null ? "—" : `${Math.round(x * 100)}%`);
+  let m = `💧 <b>RESULTADO POR VOLUME</b> — últimos ${dd} dia(s)\n${DIVISOR}\n<i>${itens.length} alertas com volume (${reais.length} reais · 🌑 ${somb.length} na sombra abaixo de ${fmtVol(F)} USDT). Funcionou = andou a favor ${HIP_ALVO_ATR} ATR (mín. ${HIP_ALVO_PCT}%) antes de andar contra ${HIP_INV_ATR} ATR (mín. ${HIP_INV_PCT}%), em até ${HIP_HORAS}h. ⚠️ = menos de 8.</i>\n\n`;
+  // A. alinhado ao filtro
+  const A = reais.filter((x) => x.u >= F);
+  m += sec(`A. Alinhado ao filtro (volume ≥ ${fmtVol(F)} USDT)`);
+  m += A.length ? hipLinhaFatia("Todos", A) + porCat(A) : "<i>nenhum</i>\n";
+  // B. sem filtro
+  m += "\n" + sec("B. Sem filtro (inclui a 🌑 sombra)");
+  m += hipLinhaFatia("Todos", itens) + porCat(itens);
+  if (somb.length) m += hipLinhaFatia("só a 🌑 sombra", somb);
+  else m += `<i>Sombra ainda vazia${FILTRO_VOL_SOMBRA_MIN > 0 ? ` (grava de ${fmtVol(FILTRO_VOL_SOMBRA_MIN)} até ${fmtVol(F)})` : " (FILTRO_VOL_SOMBRA_MIN=0, desligada)"}.</i>\n`;
+  // C. faixas de USDT
+  const faixasU: [string, number, number][] = [["abaixo de 500k", 0, 5e5], ["500k a 1M", 5e5, 1e6], ["1M a 3M", 1e6, 3e6], ["3M a 10M", 3e6, 1e7], ["mais de 10M", 1e7, Infinity]];
+  m += "\n" + sec("C. Por faixa de volume em USDT");
+  for (const [nome, a, b] of faixasU) { const x = itens.filter((i) => i.u >= a && i.u < b); if (x.length) m += hipLinhaFatia(nome, x); }
+  m += `<i>Corte mínimo (cumulativo: quem passaria com esse filtro):</i>\n`;
+  for (const c of [5e5, 1e6, 3e6]) { const x = itens.filter((i) => i.u >= c); if (x.length) m += hipLinhaFatia(`≥ ${fmtVol(c)}`, x); }
+  // D. quartis de unidades
+  const comM = itens.filter((i) => i.m !== null && isFinite(i.m as number)) as (Item & { m: number })[];
+  const qs = (v: number[], p: number) => { const s = [...v].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0; };
+  m += "\n" + sec("D. Por quartis de volume em unidades da moeda");
+  let medM = 0;
+  if (comM.length >= 4) {
+    const vm = comM.map((i) => i.m), q1 = qs(vm, 0.25), q2 = qs(vm, 0.5), q3 = qs(vm, 0.75);
+    medM = q2;
+    m += hipLinhaFatia(`Q1 (até ${fmtVol(q1)})`, comM.filter((i) => i.m < q1));
+    m += hipLinhaFatia(`Q2 (${fmtVol(q1)} a ${fmtVol(q2)})`, comM.filter((i) => i.m >= q1 && i.m < q2));
+    m += hipLinhaFatia(`Q3 (${fmtVol(q2)} a ${fmtVol(q3)})`, comM.filter((i) => i.m >= q2 && i.m < q3));
+    m += hipLinhaFatia(`Q4 (${fmtVol(q3)} ou mais)`, comM.filter((i) => i.m >= q3));
+    m += `<i>Unidades dependem do preço da moeda (1 BTC ≠ 1 PEPE): moeda barata cai nos quartis altos mesmo com pouco dinheiro girando.</i>\n`;
+  } else m += "<i>amostra pequena (menos de 4 alertas com unidades)</i>\n";
+  // E. os dois filtros juntos
+  const corteM = FILTRO_VOL_MIN_MOEDA > 0 ? FILTRO_VOL_MIN_MOEDA : medM;
+  m += "\n" + sec(`E. Os dois filtros juntos (USDT ≥ ${fmtVol(F)} e unidades ≥ ${fmtVol(corteM)}${FILTRO_VOL_MIN_MOEDA > 0 ? "" : ", a mediana"})`);
+  if (comM.length >= 4 && corteM > 0) {
+    const uOk = (i: Item) => i.u >= F, mOk = (i: Item & { m: number }) => i.m >= corteM;
+    m += hipLinhaFatia("✅ USDT ok + ✅ unidades ok", comM.filter((i) => uOk(i) && mOk(i)));
+    m += hipLinhaFatia("✅ USDT ok + ❌ unidades baixas", comM.filter((i) => uOk(i) && !mOk(i)));
+    m += hipLinhaFatia("❌ USDT baixo + ✅ unidades ok", comM.filter((i) => !uOk(i) && mOk(i)));
+    m += hipLinhaFatia("❌ USDT baixo + ❌ unidades baixas", comM.filter((i) => !uOk(i) && !mOk(i)));
+    const soU = comM.filter(uOk), ambos = comM.filter((i) => uOk(i) && mOk(i));
+    const pU = hipPctFun(soU), pA = hipPctFun(ambos);
+    if (soU.length >= 8 && ambos.length >= 8 && pU !== null && pA !== null) {
+      const dif = Math.round((pA - pU) * 100);
+      m += `  → somar o filtro de unidades ao de USDT: ${Math.abs(dif) < 10 ? "quase não muda" : dif > 0 ? `melhora ${dif} pontos` : `piora ${-dif} pontos`} (${pp(pU)} → ${pp(pA)}) e deixa ${ambos.length} de ${soU.length} alertas\n`;
+    } else m += "  → amostra pequena pra concluir\n";
+  } else m += "<i>amostra pequena</i>\n";
+  // leitura final: quanto cada medida separa (metade de cima x metade de baixo, só os que decidiram)
+  const separa = (g: Item[], val: (i: Item) => number | null): { pts: number | null; n: number } => {
+    const x = g.filter((i) => val(i) !== null && isFinite(val(i) as number));
+    if (x.length < 16) return { pts: null, n: x.length };
+    const med = qs(x.map((i) => val(i) as number), 0.5);
+    const a = hipPctFun(x.filter((i) => (val(i) as number) >= med)), b = hipPctFun(x.filter((i) => (val(i) as number) < med));
+    return { pts: a === null || b === null ? null : Math.round((a - b) * 100), n: x.length };
+  };
+  const sU = separa(itens, (i) => i.u), sM = separa(itens, (i) => i.m);
+  const txtS = (s: { pts: number | null }) => (s.pts === null ? "?" : `${s.pts >= 0 ? "+" : ""}${s.pts}`);
+  m += `\n📌 <b>Leitura:</b> USDT separa ${txtS(sU)} pontos, unidades separam ${txtS(sM)} <i>(metade de cima − metade de baixo, % funcionou entre os que decidiram)</i>`;
+  if (sU.pts === null || sM.pts === null) m += `\n<i>Amostra pequena (precisa de 16+ alertas; tem ${Math.min(sU.n, sM.n)}). Deixe acumular.</i>`;
+  m += `\n\n<i>Uso: /volconf 7 (máx. 9 dias, usa as velas). Os alertas de antes da V106 não têm volume.</i>`;
+  for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
+}
+// ===== V107: filtro "desde" nos comandos de estatística =====
+// "/radarconf 90 desde V104" = só alertas gravados pela V104 em diante (coluna versao). Alerta antigo sem versão entra se for posterior à data
+// da versão no Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). "/placar 30 desde 05/10" = só alertas desde essa data (hora local).
+type Desde = { ms: number | null; v: number | null; rot: string };
+const _desdePorChat = new Map<string, Desde>();
+const versaoNum = (x: unknown): number | null => { const m = /v?(\d+)/i.exec(String(x ?? "")); return m ? Number(m[1]) : null; };
+const dataLocalMs = (y: number, mo: number, d: number): number => Date.UTC(y, mo - 1, d) - X_TZ_OFFSET_H * 3600000;
+let _versaoDatas: Map<number, number> | null = null;
+function versaoData(v: number): number | null {
+  if (!_versaoDatas) {
+    _versaoDatas = new Map();
+    for (const par of String(Deno.env.get("VERSAO_DATAS") || "").split(",")) {
+      const m = /^\s*v?(\d+)\s*=\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$/i.exec(par);
+      if (m) _versaoDatas.set(Number(m[1]), dataLocalMs(Number(m[2]), Number(m[3]), Number(m[4])));
+    }
+  }
+  return _versaoDatas.get(v) ?? null;
+}
+function parseDesde(t: string): { resto: string; d: Desde | null } {
+  const m = /\s+desde\s+(v\d+|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)(?=\s|$)/i.exec(t);
+  if (!m) return { resto: t, d: null };
+  const resto = (t.slice(0, m.index) + t.slice(m.index + m[0].length)).trim();
+  const arg = m[1].toLowerCase();
+  if (arg.startsWith("v")) {
+    const v = Number(arg.slice(1)), dt = versaoData(v);
+    return { resto, d: { v, ms: dt, rot: `da V${v} em diante${dt === null ? " (alertas sem versão gravada ficam de fora: defina VERSAO_DATAS pra incluir os antigos)" : ""}` } };
+  }
+  const [dd, mm, aa] = arg.split("/").map(Number);
+  const agoraLocal = new Date(Date.now() + X_TZ_OFFSET_H * 3600000);
+  let ano = aa ? (aa < 100 ? 2000 + aa : aa) : agoraLocal.getUTCFullYear();
+  let ms = dataLocalMs(ano, mm, dd);
+  if (!aa && ms > Date.now()) ms = dataLocalMs(--ano, mm, dd); // "desde 20/12" em janeiro = dezembro passado
+  if (!(mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31)) return { resto, d: null };
+  return { resto, d: { v: null, ms, rot: `desde ${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${ano}` } };
+}
+function desdeOk(d: Desde | null | undefined, criadoMs: number, versao: unknown): boolean {
+  if (!d) return true;
+  if (d.v !== null) {
+    const vr = versaoNum(versao);
+    if (vr !== null) return vr >= d.v;
+    return d.ms !== null && criadoMs >= d.ms;
+  }
+  return d.ms === null || criadoMs >= d.ms;
+}
+const desdeDoChat = (chatId: number | string) => _desdePorChat.get(String(chatId)) ?? null;
+function aplicarDesde<T extends { criado_em?: any; versao?: any }>(chatId: number | string, rows: T[]): T[] {
+  const d = desdeDoChat(chatId);
+  return d ? rows.filter((r) => desdeOk(d, new Date(r.criado_em).getTime(), r.versao)) : rows;
+}
+async function lerPaginadoDesde(chatId: number | string, montar: (de: number, ate: number) => any, max = 2000): Promise<{ data: any[] | null; error: any }> {
+  const r = await lerPaginado(montar, max);
+  return r.data ? { data: aplicarDesde(chatId, r.data), error: r.error } : r;
+}
+// ===== V107: margem de erro (intervalo de Wilson, 95%) =====
+// "62% ±13" = com essa amostra, o valor verdadeiro provavelmente está entre ~49% e ~75%. Duas fatias cujas faixas se cruzam ainda podem ser a mesma coisa.
+function wilson(k: number, n: number): { lo: number; hi: number } | null {
+  if (!(n > 0)) return null;
+  const z = 1.96, p = k / n, z2 = z * z;
+  const centro = (p + z2 / (2 * n)) / (1 + z2 / n), meia = (z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n))) / (1 + z2 / n);
+  return { lo: Math.max(0, centro - meia), hi: Math.min(1, centro + meia) };
+}
+function pmTxt(k: number, n: number): string {
+  if (n < 5) return "";
+  const w = wilson(k, n);
+  if (!w) return "";
+  const p = k / n;
+  return ` ±${Math.round(Math.max(p - w.lo, w.hi - p) * 100)}`;
+}
+// ===== V107: /config mudou — só o que está diferente do padrão =====
+function montarConfigMudou(): string {
+  const esc = (x: string) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const num: string[] = [], invalidos: string[] = [];
+  for (const [nome, c] of [..._cfgNum.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (c.bruto === undefined || c.bruto === "") continue;
+    const v = Number(c.bruto);
+    if (!isFinite(v)) invalidos.push(`• ${esc(nome)} = "${esc(c.bruto.slice(0, 40))}" → usando o padrão ${esc(c.padrao)}`);
+    else if (v !== Number(c.padrao)) num.push(`• ${esc(nome)} = <b>${esc(c.bruto)}</b> <i>(padrão ${esc(c.padrao)})</i>`);
+  }
+  const outros: string[] = [];
+  try {
+    const sensivel = /TOKEN|KEY|SECRET|PASS|SENHA|AUTH|URL|JWT|CHAT_IDS|_IDS$/i;
+    const sistema = /^(SUPABASE_|SB_|DENO_|PATH$|HOME$|HOSTNAME$|PWD$|TZ$|LANG|EDGE_|VERCEL|NODE_)/i;
+    for (const [nome, val] of Object.entries(Deno.env.toObject()).sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (_cfgNum.has(nome) || sistema.test(nome)) continue;
+      outros.push(sensivel.test(nome) ? `• ${esc(nome)} <i>(definido, valor oculto)</i>` : `• ${esc(nome)} = <b>${esc(String(val).slice(0, 60))}</b>`);
+    }
+  } catch { outros.push("<i>(não consegui listar as demais variáveis neste ambiente)</i>"); }
+  let m = `⚙️ <b>CONFIG — só o que mudou</b> · ${BOT_VERSAO}\n${DIVISOR}\n`;
+  m += `<b>Números diferentes do padrão</b> (${num.length} de ${_cfgNum.size} parâmetros)\n${num.length ? num.join("\n") : "<i>nenhum: tudo no padrão</i>"}\n`;
+  if (invalidos.length) m += `\n⚠️ <b>Valores inválidos (ignorados)</b>\n${invalidos.join("\n")}\n`;
+  if (outros.length) m += `\n<b>Outros Secrets definidos</b> (liga/desliga, modos, listas)\n${outros.join("\n")}\n`;
+  m += `\n<i>/config mostra tudo por seção. Tokens, chaves e listas de chat ficam ocultos.</i>`;
+  return m;
+}
+// ===== V107: RESUMO DAS SOMBRAS (real x sombra), semanal automático e /sombras [dias] =====
+// Só lê o placar (retorno em 4h já com taxa), sem buscar velas. Pra detalhe: /reversaoconf, /repsombra e /volconf.
+const SOMBRA_RESUMO_ON = (Deno.env.get("SOMBRA_RESUMO") ?? "1") !== "0";
+const SOMBRA_RESUMO_DIA = numEnv("SOMBRA_RESUMO_DIA", "0"); // 0 = domingo … 6 = sábado (hora local)
+const SOMBRA_RESUMO_H = numEnv("SOMBRA_RESUMO_H", "20");
+const SOMBRA_RESUMO_ROW = "_SOMBRA_SEMANAL_";
+async function montarResumoSombras(SB: any, dias: number, rowsIn?: any[]): Promise<string> {
+  let todas = rowsIn;
+  if (!todas) {
+    const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(Date.now() - dias * 86400000).toISOString()).order("criado_em", { ascending: false }).range(a, b), 4000);
+    if (error) return `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`;
+    todas = (data || []) as any[];
+  }
+  const base = todas.filter((r) => !ehFinalLog(r) && !ehInvalidoLog(r));
+  const ehRepiqueReal = (r: any) => (r.tipo === "fundo" || r.tipo === "topo") && String(r.status || "").includes("REPIQUE");
+  const real = (r: any) => !ehSombraRev(r) && !ehSombraRep(r) && !ehSombraVol(r);
+  const familias: { nome: string; regra: string; cmd: string; real: any[]; somb: any[] }[] = [
+    { nome: "🔄 Reversão", regra: `ADX ≤ ${REV_ADX_MAX}${REV_DI_OBRIGA ? " e DI a favor" : ""}`, cmd: "/reversaoconf",
+      real: base.filter((r) => real(r) && r.tipo === "reversao" && !String(r.status || "").includes("REPIQUE")), somb: base.filter(ehSombraRev) },
+    { nome: "⭐ Repique", regra: repRegraTxt(), cmd: "/repsombra", real: base.filter((r) => real(r) && ehRepiqueReal(r)), somb: base.filter(ehSombraRep) },
+    { nome: "💧 Volume", regra: `volume ≥ ${fmtVol(FILTRO_VOL_MIN_USDT)} USDT`, cmd: "/volconf",
+      real: base.filter((r) => real(r) && ["topo", "fundo", "oportunidade", "reversao"].includes(r.tipo) && r.vol_usdt != null && Number(r.vol_usdt) >= FILTRO_VOL_MIN_USDT), somb: base.filter(ehSombraVol) },
+  ];
+  const est = (g: any[]) => {
+    const rs = g.map((r) => retornoLog(r, 240)).filter((x): x is number => x !== null);
+    const ac = rs.filter((x) => x > 0).length;
+    return { n: rs.length, total: g.length, ac, p: rs.length ? ac / rs.length : NaN, med: _med(rs), w: wilson(ac, rs.length) };
+  };
+  const lin = (rot: string, e: ReturnType<typeof est>) => e.n ? `  ${rot} (n=${e.n}): acerto 4h ${Math.round(e.p * 100)}%${pmTxt(e.ac, e.n)} · mediana ${_sg(e.med)}\n` : `  ${rot}: ${e.total ? `${e.total} gravado(s), ainda sem 4h conferido` : "nenhum"}\n`;
+  let m = `🌑 <b>RESUMO DAS SOMBRAS</b> — últimos ${dias} dia(s)\n${DIVISOR}\n<i>Real = alertou · Sombra = a regra barrou e ficou gravado em silêncio. Acerto em 4h com taxa; ± = margem de erro (95%).</i>\n\n`;
+  for (const f of familias) {
+    const a = est(f.real), b = est(f.somb);
+    m += `<b>${f.nome}</b> · regra: ${f.regra}\n` + lin("real", a) + lin("🌑 sombra", b);
+    if (a.n >= 15 && b.n >= 15 && a.w && b.w) {
+      const cruza = a.w.lo <= b.w.hi && b.w.lo <= a.w.hi;
+      m += cruza ? `  → ainda dentro da margem de erro: não dá pra dizer se a regra ajuda\n`
+        : b.p > a.p ? `  → ⚠️ a sombra acerta MAIS: a regra pode estar cortando sinal bom (confira no ${f.cmd})\n`
+        : `  → ✅ a regra está filtrando certo (a sombra acerta menos)\n`;
+    } else m += `  → amostra pequena (precisa de 15+ com 4h em cada lado)\n`;
+    m += "\n";
+  }
+  m += `<i>Detalhe: /reversaoconf · /repsombra · /volconf. Pra julgar só depois de uma mudança: acrescente "desde V107" ou "desde dd/mm".</i>`;
+  return m;
+}
+async function checarResumoSombras(SB: any) {
+  if (!SOMBRA_RESUMO_ON) return;
+  const local = new Date(Date.now() + X_TZ_OFFSET_H * 3600000);
+  if (local.getUTCDay() !== SOMBRA_RESUMO_DIA || local.getUTCHours() < SOMBRA_RESUMO_H) return;
+  const { data } = await SB.from(TAB).select("last_alert_at").eq("instid", SOMBRA_RESUMO_ROW).maybeSingle();
+  const ult = data?.last_alert_at ? new Date(data.last_alert_at).getTime() : 0;
+  if (ult && Date.now() - ult < 6 * 86400000) return; // já mandou esta semana
+  const destinos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
+  if (!destinos.length) return; // todo mundo em silêncio/pausa: tenta de novo na próxima rodada (ainda hoje)
+  const msg = await montarResumoSombras(SB, 7);
+  let ok = false;
+  for (const ch of destinos) for (const parte of dividirHtml(msg)) { if (await sendTelegram(ch, parte).catch(() => null)) ok = true; }
+  if (ok) await upsertLinha(SB, SOMBRA_RESUMO_ROW, { last_alert_at: new Date().toISOString(), last_status: "enviado" });
+  console.log(`🌑 resumo semanal das sombras ${ok ? "enviado" : "falhou (tento na próxima rodada)"}`);
+}
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
 async function runRepiqueSombra(chatId: number | string, dias: number) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
-  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const todos = (data || []) as any[];
   const reais = todos.filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && (r.tipo === "fundo" || r.tipo === "topo") && String(r.status || "").includes("REPIQUE"));
@@ -5592,7 +5984,7 @@ async function runTopoRetro(chatId: number | string, tipo: "topo" | "fundo" = "t
   const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("instid, tipo").gt("criado_em", desde).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const cont = new Map<string, number>();
-  for (const r of (data || []) as any[]) if (r.instid) cont.set(r.instid, (cont.get(r.instid) || 0) + (r.tipo === tipo ? 3 : 1));
+  for (const r of (data || []) as any[]) if (r.instid && r.tipo !== VOL_SOMBRA_TIPO) cont.set(r.instid, (cont.get(r.instid) || 0) + (r.tipo === tipo ? 3 : 1));
   const insts = [...cont.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map((x) => x[0]);
   if (insts.length < 5) { await sendTelegram(chatId, `${EMO} <b>${NOME} RETROATIVO</b>\n\nPoucas moedas no placar pra montar o teste.`); return; }
   const H4 = Math.round(240 / TF_MIN), H24 = Math.round(1440 / TF_MIN), JAN = 200;
@@ -5656,7 +6048,7 @@ async function runPlacar(chatId: number | string, dias: number) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
-  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar (a tabela ${PLACAR_TABELA} existe?): ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const todas = (data || []) as any[];
   const rows = todas.filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r));
@@ -5730,7 +6122,7 @@ async function run15min(chatId: number | string, dias: number) {
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
-  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar (a tabela ${PLACAR_TABELA} existe?): ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const rows = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r));
   if (!rows.length) { await sendTelegram(chatId, `⏱️ <b>PLACAR 15m</b>\n\nNenhum alerta registrado nos últimos ${dias} dia(s).`); return; }
@@ -5891,7 +6283,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const truncou600 = (data || []).length >= 600; // V74: o .limit(600) cortava em silêncio
   const baseDe = (id: string) => String(id).split("-")[0];
-  const rowsBase = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehSombraRev(r) && !ehSombraRep(r) && r.ent_em && Number(r.preco) > 0)
+  const rowsBase = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehSombraRev(r) && !ehSombraRep(r) && !ehSombraVol(r) && r.ent_em && Number(r.preco) > 0 && desdeOk(desdeDoChat(chatId), new Date(r.criado_em).getTime(), r.versao))
     .filter((r) => !opc?.moeda || baseDe(r.instid) === opc.moeda || baseDe(r.instid) === `1000${opc.moeda}`);
   const filtro = opc?.filtro ?? null;
   const rows = rowsBase.filter((r) => !filtro || !(filtro.mov > 0) || (r.pct24 != null && Math.abs(Number(r.pct24)) >= filtro.mov)); // |24h| da hora do alerta
@@ -6479,7 +6871,7 @@ async function runAnalise(chatId: number | string, entrada: string, capturar?: (
   try {
     const SB = getSupabase();
     if (SB) {
-      const { data } = await SB.from(PLACAR_TABELA).select("*").eq("instid", instId).neq("tipo", REV_SOMBRA_TIPO).neq("tipo", REP_SOMBRA_TIPO).order("criado_em", { ascending: false }).limit(3);
+      const { data } = await SB.from(PLACAR_TABELA).select("*").eq("instid", instId).neq("tipo", REV_SOMBRA_TIPO).neq("tipo", REP_SOMBRA_TIPO).neq("tipo", VOL_SOMBRA_TIPO).order("criado_em", { ascending: false }).limit(3);
       const hist = (data || []) as any[];
       if (hist.length) {
         rodape += `📜 <b>Alertas anteriores</b>\n`;
@@ -8193,7 +8585,7 @@ async function checarPainel(SB: any) {
     if (PAINEL_FIM_APAGAR_H > 0) for (const ch of ALERT_CHAT_IDS) { const id = est.ids[ch]; if (id) await agendarAutoApagar(SB, ch, id, PAINEL_FIM_APAGAR_H * 3600000); }
     console.log(`🏁 painel ${est.key} encerrado${PAINEL_FIM_APAGAR_H > 0 ? ` (some em ${PAINEL_FIM_APAGAR_H}h)` : ""}`);
     // V78: na virada do ciclo, grava o histórico dos radares no Supabase (best-effort; falha não atrapalha o painel)
-    radarHistGravar(SB).then((g) => console.log(g ? `📚 radarhist: ${g.novos} novo(s), ${g.total} gravado(s)` : "⚠️ radarhist: não gravou")).catch((e) => console.log("⚠️ radarhist falhou", e));
+    _bgTarefas.push(radarHistGravar(SB).then((g) => console.log(g?.ocupado ? "⏳ radarhist: outra gravação em andamento, pulei" : g ? `📚 radarhist: ${g.novos} novo(s), ${g.total} gravado(s)` : "⚠️ radarhist: não gravou")).catch((e) => console.log("⚠️ radarhist falhou", e))); // V106: a rodada espera por ela depois de liberar a trava
   }
   // 2) sem painel neste ciclo: cria
   if (!est || est.key !== fase.key) {
@@ -8769,7 +9161,7 @@ async function runMeuPlacar(chatId: number | string, dias: number) {
   let fills: any[] = [], cortado = false;
   try { ({ fills, cortado } = await buscarFills(cred, desdeMs)); }
   catch (e) { await sendTelegram(chatId, `⚠️ Não consegui ler seus trades: ${String((e as Error).message || e).replace(/[<>&]/g, "").slice(0, 160)}`); return; }
-  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(desdeMs).toISOString()).order("criado_em", { ascending: true }).range(a, b));
+  const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(desdeMs).toISOString()).order("criado_em", { ascending: true }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas: ${String(error.message || error).replace(/[<>&]/g, "").slice(0, 160)}`); return; }
   const alertas = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r));
   // fills-history da BloFin não traz reduceOnly/orderCategory (só existe em order-history);
@@ -9124,6 +9516,10 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   sec("📊 Resultados", [
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
     ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
+    ["💧 /volconf 7", "resultado por volume (USDT x unidades) + sombra abaixo do filtro", "mostra, pros radares (topo, fundo, repique) e pros alertas de oportunidade/reversão, quanto funcionou e quanto foi invalidado: (A) só o que passa no filtro de volume (FILTRO_VOL_MIN_USDT), (B) sem filtro, incluindo a 🌑 sombra gravada abaixo dele, (C) por faixa de volume em USDT, (D) por quartis de volume em unidades da moeda e (E) os dois filtros juntos. No fim diz quantos pontos o USDT e as unidades separam. ⚠️ = menos de 8 alertas. Só os últimos 9 dias (usa as velas). Os alertas de antes da V106 não têm volume."],
+    ["🌑 /sombras 7", "resumo real x sombra (reversão, repique, volume)", "num só lugar, compara o que alertou com o que a regra barrou e ficou gravado em silêncio, pra reversão (ADX/DI), repique (ADX/DI) e volume (filtro de USDT): acerto em 4h com margem de erro e uma leitura (regra ajuda, atrapalha ou ainda dentro da margem). Sai sozinho 1x por semana (SOMBRA_RESUMO_DIA, padrão domingo, a partir de SOMBRA_RESUMO_H = 20h; SOMBRA_RESUMO=0 desliga)."],
+    ["🔎 ... desde V107", "julgar uma regra só com dados depois dela", "acrescente \"desde V107\" (versão) ou \"desde 05/10\" (data) no fim de /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf, /compressao ou /sombras. Ex.: /radarconf 90 desde V104. Alertas gravados antes da V107 não têm versão: pra incluí-los, defina o Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). O ± depois das porcentagens é a margem de erro (95%): se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte."],
+    ["⚙️ /config mudou", "só os ajustes diferentes do padrão (admin)", "lista os Secrets numéricos que você mudou (com o padrão ao lado), os valores inválidos que o bot está ignorando e os demais Secrets definidos (tokens e chaves ocultos). /config sozinho mostra tudo por seção."],
     ["⭐ /repsombra 30", "repique real x sombra (ADX e DI)", "mostra os repiques que alertaram e, em separado, os que a regra de ADX/DI barrou e ficaram gravados em silêncio (🌑 sombra): acerto (15m, 1h, 4h, 24h) e retorno mediano. O repique só alerta com ADX ≥ 24 e DI a favor; use pra decidir se a regra está cortando sinal bom. O número é a quantidade de dias"],
     ["🗜️ /compressao 30", "compressão por faixa de confiança, ADX e lado", "mostra, só pra compressão, qual faixa de confiança (6, 7, 8, 9–10), de ADX e de lado rende melhor (acerto e retorno mediano em 1h, 4h e 24h) — pra decidir se vale subir o COMPRESS_CONF_MIN. O número é a quantidade de dias"],
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
@@ -9259,7 +9655,9 @@ Deno.serve(async (req) => {
     const cq = update?.callback_query;
     const message = update?.message ?? cq?.message;
     const chatId = message?.chat?.id;
-    const textoBruto = String(cq?.data ?? message?.text ?? "").trim().toLowerCase();
+    const textoBruto0 = String(cq?.data ?? message?.text ?? "").trim().toLowerCase();
+    const pd = cq ? { resto: textoBruto0, d: null as Desde | null } : parseDesde(textoBruto0); // V107: "... desde V104" / "... desde 05/10"
+    const textoBruto = pd.resto;
     const text = TECLADO_CMD[textoBruto] ?? textoBruto;
     if (!chatId) return new Response("ok");
     const remetente = cq?.from?.id ?? update?.message?.from?.id ?? chatId;
@@ -9273,6 +9671,11 @@ Deno.serve(async (req) => {
       }
       return new Response("ok");
     }
+    // V107: filtro "desde" vale pro comando desta mensagem (as leituras dos comandos de estatística olham este mapa)
+    if (pd.d) {
+      _desdePorChat.set(String(chatId), pd.d);
+      await sendTelegram(chatId, `🔎 Filtro: só alertas ${pd.d.rot}. Vale em /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf e /compressao.`);
+    } else _desdePorChat.delete(String(chatId));
     // V39: botão "🔔 Já liguei" nos alertas dos minutos finais — registra a hora real que a pessoa ligou o
     // robô (nem todo PREPARE/LIGUE AGORA vira ação da pessoa), pra depois cruzar com o resultado real da vela.
     const ligueiMatch = cq && /^liguei:/.test(textoBruto) ? textoBruto.match(/^liguei:(.+):(long|short):(\d+)$/) : null;
@@ -9370,6 +9773,24 @@ Deno.serve(async (req) => {
       // V99 (fica ANTES do /reversao, que casa por startsWith e engolia este comando): /reversaoconf [dias] — reversão por nota, lado, ADX e esticada
       const diasRv = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 30)));
       await rodarEmBackground(runReversaoConf(chatId, diasRv));
+      return new Response("ok");
+    }
+    if (text === "/sombras" || text.startsWith("/sombras ") || text.startsWith("/sombras@")) {
+      // V107: /sombras [dias] — real x sombra (reversão, repique, volume) num só lugar; sai sozinho 1x por semana
+      const diasSb = Math.min(30, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
+      const SBs = getSupabase();
+      if (!SBs) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return new Response("ok"); }
+      await rodarEmBackground((async () => {
+        const { data, error } = await lerPaginadoDesde(chatId, (a, b) => SBs.from(PLACAR_TABELA).select("*").gt("criado_em", new Date(Date.now() - diasSb * 86400000).toISOString()).order("criado_em", { ascending: false }).range(a, b), 4000);
+        const msg = error ? `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}` : await montarResumoSombras(SBs, diasSb, (data || []) as any[]);
+        for (const parte of dividirHtml(msg)) await sendTelegram(chatId, parte);
+      })());
+      return new Response("ok");
+    }
+    if (text === "/volconf" || text.startsWith("/volconf ") || text.startsWith("/volconf@")) {
+      // V106: /volconf [dias] — resultado por volume (USDT x unidades), com a sombra abaixo do filtro
+      const diasVc = Math.min(9, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
+      await comAguarde("💧 Medindo o resultado por volume, aguarde (busca as velas de cada moeda)...", () => runVolConf(chatId, diasVc));
       return new Response("ok");
     }
     if (text === "/repsombra" || text.startsWith("/repsombra ") || text.startsWith("/repsombra@")) {
@@ -9564,6 +9985,7 @@ Deno.serve(async (req) => {
     }
     if (text.startsWith("/config")) {
       if (!ehAdmin(chatId, remetente)) { await sendTelegram(chatId, "🔒 Comando restrito ao administrador."); return new Response("ok"); }
+      if (/^\/config(@\w+)?\s+(mudou|diff|alterad)/.test(text)) { for (const parte of dividirHtml(montarConfigMudou())) await sendTelegram(chatId, parte); return new Response("ok"); } // V107
       await sendTelegram(chatId, montarConfig());
       return new Response("ok");
     }
