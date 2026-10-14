@@ -1,4 +1,4 @@
-// telegram-bot V99 (V98 + /reversaoconf [dias]: reversão por nota de confiança, lado, ADX e esticada em 24h, mesmo molde do /radarconf) · V98 (V97 + MODO FACA: o fundo com ADX alto (que o radar de fundo não avisa mais) vira candidato SHORT de continuação; FACA_MODO=sombra (padrão, grava em silêncio numa linha própria, fora do /placar) | alerta | off; comando /faca [dias]) · V97 (V96 + radares com corte por ADX: fundo não alerta com ADX ≥ FUNDO_ADX_MAX (padrão 30) e topo só alerta com ADX < TOPO_ADX_MAX (padrão 20); 0 desliga; repique fica de fora) · V96 (V95 + radar de topo e de fundo: "nota subiu" fura o cooldown (RADAR_UPGRADE_DELTA=2, RADAR_UPGRADE_GAP_MIN=30) — 2º alerta marcado ⬆️ quando a nota sobe 2+ pontos desde o último alerta da moeda) · V95 (V94 + filtro opcional COMPRESS_PCT24_MIN (movimento mínimo no dia pra mandar compressão; 0 = desligado)) · V94 (V93 + /radarconf retro fundo: o mesmo teste retroativo pro radar de fundo) · V93 (V92 + colunas de 15 min no /radarconf, no /compressao e no /radarconf retro) · V92 (V91 + /radarconf retro: refaz a nota do radar de topo com as velas e compara 2/10..5/10 sem esperar alerta novo) · V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V103 (V102 + COMPRESSÃO: teto de ADX (COMPRESS_ADX_MAX = 15, exclusivo): só ADX de 13 até < 15 e subindo; ADX já em 15/20 subindo não conta) · V102 (V101 + COMPRESSÃO: nota mínima 6 → 8 (COMPRESS_CONF_MIN; COMPRESS_CONF_MAX opcional) e ADX >= COMPRESS_ADX_MIN (13) e subindo (COMPRESS_ADX_SUBINDO)) · V101 (V100 + a lista /reversao segue a mesma regra do alerta (ADX <= REV_ADX_MAX e DI a favor) e conta quantas ficaram de fora) · V100 (V99 + REVERSÃO só com ADX <= REV_ADX_MAX (20) e DI puxando pro lado da reversão (REV_DI_OBRIGA); o que a regra barra vai pro MODO SOMBRA (REV_SOMBRA, tipo reversao_sombra no alertas_log, fora do /placar) e o /reversaoconf compara reais x sombra) · V99 (V98 + /reversaoconf [dias]: reversão por nota de confiança, lado, ADX e esticada em 24h, mesmo molde do /radarconf) · V98 (V97 + MODO FACA: o fundo com ADX alto (que o radar de fundo não avisa mais) vira candidato SHORT de continuação; FACA_MODO=sombra (padrão, grava em silêncio numa linha própria, fora do /placar) | alerta | off; comando /faca [dias]) · V97 (V96 + radares com corte por ADX: fundo não alerta com ADX ≥ FUNDO_ADX_MAX (padrão 30) e topo só alerta com ADX < TOPO_ADX_MAX (padrão 20); 0 desliga; repique fica de fora) · V96 (V95 + radar de topo e de fundo: "nota subiu" fura o cooldown (RADAR_UPGRADE_DELTA=2, RADAR_UPGRADE_GAP_MIN=30) — 2º alerta marcado ⬆️ quando a nota sobe 2+ pontos desde o último alerta da moeda) · V95 (V94 + filtro opcional COMPRESS_PCT24_MIN (movimento mínimo no dia pra mandar compressão; 0 = desligado)) · V94 (V93 + /radarconf retro fundo: o mesmo teste retroativo pro radar de fundo) · V93 (V92 + colunas de 15 min no /radarconf, no /compressao e no /radarconf retro) · V92 (V91 + /radarconf retro: refaz a nota do radar de topo com as velas e compara 2/10..5/10 sem esperar alerta novo) · V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -266,6 +266,18 @@ const SERROTE_AVISO = SERROTE_MAX > 0 ? SERROTE_MAX : 4;
 const LIMITE_LADO = numEnv("LIMITE_LADO", "3");
 const CONF_MIN_OPORT = numEnv("CONF_MIN_OPORT", "6");
 const CONF_MIN_REVERSAO = numEnv("CONF_MIN_REVERSAO", "7");
+// V100: regra extra SÓ pro alerta de REVERSÃO (cruzamento da faixa contra o dia) — a tendência velha precisa estar fraca e o DI já virando pro lado da reversão.
+//   REV_ADX_MAX (20)  = ADX tem que ser <= esse valor (0 desliga). O piso continua sendo FILTRO_ADX_MIN (14), então a janela é 14–20.
+//   REV_DI_OBRIGA (1) = o lado que domina o +DI/−DI (xDiDominante) tem que ser o MESMO lado da reversão (LONG: +DI > −DI · SHORT: −DI > +DI). DI neutro (diferença < DI_GAP_MIN) também barra. 0 desliga.
+//   REV_SOMBRA (1)    = o que a regra (ou a nota, até REV_SOMBRA_FOLGA_CONF pontos abaixo do corte) barrar é GRAVADO em silêncio no alertas_log com tipo "reversao_sombra"
+//                       (fora do /placar, /15min, /saida etc.; o /reversaoconf compara reais x sombra). Cooldown por moeda+lado REV_SOMBRA_COOLDOWN_MIN (180) e no máx. REV_SOMBRA_MAX_POR_RODADA (5).
+const REV_ADX_MAX = numEnv("REV_ADX_MAX", "20");
+const REV_DI_OBRIGA = (Deno.env.get("REV_DI_OBRIGA") ?? "1") !== "0";
+const REV_SOMBRA_ON = (Deno.env.get("REV_SOMBRA") ?? "1") !== "0";
+const REV_SOMBRA_FOLGA_CONF = numEnv("REV_SOMBRA_FOLGA_CONF", "2");
+const REV_SOMBRA_COOLDOWN_MIN = numEnv("REV_SOMBRA_COOLDOWN_MIN", "180");
+const REV_SOMBRA_MAX_POR_RODADA = numEnv("REV_SOMBRA_MAX_POR_RODADA", "5");
+const REV_SOMBRA_TIPO = "reversao_sombra";
 const _confBarrada = new Map<string, number>();
 // Fix: o laço principal também barra por confiança setups que AINDA NÃO CRUZARAM a linha (idadeCandles === null). Antes usava o mesmo
 // _confBarrada do alerta dos minutos finais, então uma nota baixa no início da vela bloqueava o 🚨 e o aviso final pela vela inteira.
@@ -314,7 +326,16 @@ const COMPRESS_ON = (Deno.env.get("COMPRESS_RADAR") || "1") !== "0";
 const COMPRESS_REL = numEnv("COMPRESS_REL", "0.5");
 const COMPRESS_VOL_MIN = numEnv("COMPRESS_VOL_MIN", "1.1");
 const COMPRESS_DIST_MAX_PCT = numEnv("COMPRESS_DIST_MAX_PCT", "1.5");
-const COMPRESS_CONF_MIN = numEnv("COMPRESS_CONF_MIN", "6");
+const COMPRESS_CONF_MIN = numEnv("COMPRESS_CONF_MIN", "8"); // V102: 6 → 8 (só a compressão de nota 8/10 ou mais manda alerta)
+// V102: COMPRESS_CONF_MAX = teto da nota (0 = sem teto; 8 = só a nota 8 exata). COMPRESS_ADX_MIN (13) = ADX mínimo da moeda (0 desliga; use 12 a 14).
+// COMPRESS_ADX_SUBINDO (1) = o ADX precisa estar subindo (hoje − 5 velas atrás > COMPRESS_ADX_SUBINDO_MIN = 0.5, o mesmo corte do "ADX ↗" do /compressao). Sem o dado do ADX de antes, não barra.
+const COMPRESS_CONF_MAX = numEnv("COMPRESS_CONF_MAX", "0");
+const COMPRESS_ADX_MIN = numEnv("COMPRESS_ADX_MIN", "13");
+// V103: teto do ADX (exclusivo; 0 desliga). Padrão 15: só vale o ADX "acordando" (13 até < 15) e subindo; com o ADX já em 15, 20 etc. subindo, NÃO conta.
+const COMPRESS_ADX_MAX = numEnv("COMPRESS_ADX_MAX", "15");
+const compAdxTxt = () => `${COMPRESS_ADX_MIN > 0 || COMPRESS_ADX_MAX > 0 ? `ADX ${COMPRESS_ADX_MIN > 0 ? `≥ ${COMPRESS_ADX_MIN}` : ""}${COMPRESS_ADX_MIN > 0 && COMPRESS_ADX_MAX > 0 ? " e " : ""}${COMPRESS_ADX_MAX > 0 ? `< ${COMPRESS_ADX_MAX}` : ""}` : ""}${COMPRESS_ADX_SUBINDO ? `${COMPRESS_ADX_MIN > 0 || COMPRESS_ADX_MAX > 0 ? " " : "ADX "}subindo` : ""}`;
+const COMPRESS_ADX_SUBINDO = (Deno.env.get("COMPRESS_ADX_SUBINDO") ?? "1") !== "0";
+const COMPRESS_ADX_SUBINDO_MIN = numEnv("COMPRESS_ADX_SUBINDO_MIN", "0.5");
 const COMPRESS_COOLDOWN_MIN = numEnv("COMPRESS_COOLDOWN_MIN", "180");
 // V85: no /compressao, "rompeu de verdade" = o preço andou pelo menos COMPRESS_ROMPE_PCT% (padrão 5) pra algum lado, a partir da entrada, dentro da janela do mfe/mae do placar (≈24h);
 // "limpo" = andou isso a favor de um lado e menos que COMPRESS_LIMPO_PCT% (padrão 2,5) pro outro.
@@ -2037,15 +2058,22 @@ async function radarCompressao(SB: any, variacoes: VarInfo[], pool: { instId: st
   const extraInfos = extras.length ? await emLotes(extras, 20, calcIndicadorFiltro) : [];
   const varMap = new Map(variacoes.map((v) => [v.instId, v] as [string, VarInfo]));
   const cands: { info: InfoFiltravel; res: CompRes; pct: number }[] = [];
+  let semAdx = 0, semSubida = 0;
   const avalia = (info: InfoFiltravel | null, vol: number, pct: number) => {
     if (!info || vol < FILTRO_VOL_MIN_USDT) return;
     const res = calcCompressao(info, vol);
-    if (res && res.volOk && res.conf >= COMPRESS_CONF_MIN) cands.push({ info, res, pct });
+    if (!res || !res.volOk || res.conf < COMPRESS_CONF_MIN) return;
+    if (COMPRESS_CONF_MAX > 0 && res.conf > COMPRESS_CONF_MAX) return;
+    // V102: ADX mínimo e subindo (só conta quem já passou na nota, pro log mostrar o que a regra de ADX cortou)
+    if (COMPRESS_ADX_MIN > 0 && !(typeof info.adx === "number" && isFinite(info.adx) && info.adx >= COMPRESS_ADX_MIN)) { semAdx++; return; }
+    if (COMPRESS_ADX_MAX > 0 && typeof info.adx === "number" && isFinite(info.adx) && info.adx >= COMPRESS_ADX_MAX) { semAdx++; return; } // V103: ADX já forte (15+) não conta, mesmo subindo
+    if (COMPRESS_ADX_SUBINDO && typeof info.adxAntes === "number" && isFinite(info.adxAntes) && !(info.adx - info.adxAntes > COMPRESS_ADX_SUBINDO_MIN)) { semSubida++; return; }
+    cands.push({ info, res, pct });
   };
   indicadores.forEach((info, i) => avalia(info, pool[i]?.volUsdt ?? 0, pool[i]?.pct ?? 0));
   extraInfos.forEach((info, i) => avalia(info, varMap.get(extras[i])?.volUsdt ?? 0, varMap.get(extras[i])?.pct ?? 0));
   cands.sort((a, b) => b.res.conf - a.res.conf || b.res.pts - a.res.pts);
-  console.log(`🗜️ radar de compressão: ${cands.length} candidata(s) com confiança ≥ ${COMPRESS_CONF_MIN} (${pool.length} do pool + ${extras.length} do rodízio, cursor ${_compCursor}/${universo.length})`);
+  console.log(`🗜️ radar de compressão: ${cands.length} candidata(s) com confiança ${COMPRESS_CONF_MAX > 0 ? `${COMPRESS_CONF_MIN}–${COMPRESS_CONF_MAX}` : `≥ ${COMPRESS_CONF_MIN}`}${compAdxTxt() ? ` e ${compAdxTxt()}` : ""} (ADX cortou ${semAdx} por nível + ${semSubida} por não subir; ${pool.length} do pool + ${extras.length} do rodízio, cursor ${_compCursor}/${universo.length})`);
   if (!cands.length) return;
   const top = cands.slice(0, RADAR_CAND_JANELA); // V74: janela maior que 8/6 — as de cima em cooldown ocupavam todas as vagas e as de baixo nunca saíam
   const rowsMap = new Map<string, any>();
@@ -2199,7 +2227,11 @@ async function itensPorLado(calc: (id: string) => Promise<InfoFiltravel | null> 
 async function runCruzado(chatId: number | string, tipoAlvo: "oportunidade" | "reversao", capturar?: (msg: string) => void) {
   const inicio = Date.now();
   const todos = await itensPorLado();
-  const top = todos.filter((x) => x.tipo === tipoAlvo)
+  // V101: a lista de reversão segue a mesma regra do alerta (ADX <= REV_ADX_MAX e DI puxando pro lado da reversão); o que fica de fora é contado na mensagem
+  const doTipo = todos.filter((x) => x.tipo === tipoAlvo);
+  const passouRegra = tipoAlvo === "reversao" ? doTipo.filter((x) => revMotivos(x.lado, x.info.adx, x.info.diDom ?? null, null, 0).length === 0) : doTipo;
+  const foraRegra = doTipo.length - passouRegra.length;
+  const top = passouRegra
     .map((x) => ({ x, nota: x.info.distAbs * (ADX_REF / Math.max(x.info.adx, 1)) }))
     .sort((a, b) => Number(b.x.repique) - Number(a.x.repique) || a.nota - b.nota)
     .slice(0, TOP_N_CRUZADO).map((e) => e.x);
@@ -2214,8 +2246,9 @@ async function runCruzado(chatId: number | string, tipoAlvo: "oportunidade" | "r
   const pool = `top ${LISTA_POOL_LADO} que mais subiram + top ${LISTA_POOL_LADO} que mais caíram (24h)`;
   let msg = tipoAlvo === "oportunidade"
     ? `🚀 <b>OPORTUNIDADE — a favor do dia + perto do Indicador</b> — ${dur}s\n<i>LONG em moeda que subiu · SHORT em moeda que caiu · pool: ${pool}</i>\n${DIVISOR}\n\n`
-    : `🔄 <b>REVERSÃO — vira contra o dia + perto do Indicador</b> — ${dur}s\n<i>SHORT em moeda que subiu (LONG → SHORT) · LONG em moeda que caiu (SHORT → LONG)${ESTRAT_PUMP ? ", só com sinais de fundo" : ""} · pool: ${pool}</i>\n${DIVISOR}\n\n`;
-  if (top.length === 0) msg += textoListaVazia(_ladosDescarte, todos.length);
+    : `🔄 <b>REVERSÃO — vira contra o dia + perto do Indicador</b> — ${dur}s\n<i>SHORT em moeda que subiu (LONG → SHORT) · LONG em moeda que caiu (SHORT → LONG)${ESTRAT_PUMP ? ", só com sinais de fundo" : ""} · pool: ${pool}${REV_ADX_MAX > 0 || REV_DI_OBRIGA ? ` · regra: ${REV_ADX_MAX > 0 ? `ADX ≤ ${REV_ADX_MAX}` : ""}${REV_ADX_MAX > 0 && REV_DI_OBRIGA ? " e " : ""}${REV_DI_OBRIGA ? "DI a favor" : ""}` : ""}</i>\n${DIVISOR}\n\n`;
+  if (top.length === 0) msg += textoListaVazia(_ladosDescarte, todos.length - foraRegra);
+  if (tipoAlvo === "reversao" && foraRegra > 0) msg += `<i>🚫 ${foraRegra} reversão(ões) perto do Indicador ficaram de fora pela regra nova (ADX acima de ${REV_ADX_MAX} ou DI sem puxar a favor).</i>\n${top.length ? "\n" : ""}`;
   top.forEach((x, i) => {
     const j = x.info;
     const dia = `${x.pct >= 0 ? "📈 +" : "📉 "}${x.pct.toFixed(2)}% em 24h`;
@@ -2803,7 +2836,7 @@ async function checarAlertaFinal(
     const s = classificar(hip, c.pct);
     if (!s || s.lado !== c.lado) return null;
     if (ALERT_FILTROS_ON && motivoDescarte(hip, c.vol, false, s.lado)) return null;
-    return { s, hip, vivo, vol: c.vol, dist: distLinha(c.lado, vivo, hip.topo, hip.fundo) };
+    return { s, hip, vivo, vol: c.vol, dist: distLinha(c.lado, vivo, hip.topo, hip.fundo), di: c.base.diDom ?? null }; // V100: o hip não carrega o DI, vem da moeda
   })).filter((x): x is NonNullable<typeof x> => x !== null);
   console.log(`⏱ final (${modo}): faltam ${(rest / 60000).toFixed(1)} min | ${cands.length} perto da linha, ${sims.length} passaram na simulação`);
   if (!sims.length) return;
@@ -2846,6 +2879,16 @@ async function checarAlertaFinal(
     const minBase = s.tipo === "reversao" ? (lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
     // moeda que ainda não cruzou pontua ~1–2 pts a menos que a que cruzou: o PREPARE tem essa folga, o 🚨 não
     const minConf = modo === "aviso" ? minBase : Math.max(0, minBase - FINAL_PREPARE_FOLGA_CONF);
+    if (s.tipo === "reversao") {
+      // V100: mesma regra nova da reversão (ADX baixo + DI a favor); a sombra só grava no 🚨 (cruzou), igual ao que o placar registra
+      const rvF = revMotivos(lado, hip.adx, x.di, confRes?.conf ?? null, minConf);
+      if (rvF.length) {
+        if (modo === "aviso") _confBarrada.set(inst + lado, ck);
+        console.log(`🧭 final ${inst} ${lado} (reversão, ${modo}) barrada [${rvF.join("+")}]: ADX ${Number.isFinite(hip.adx) ? hip.adx.toFixed(1) : "?"} (máx ${REV_ADX_MAX}) · DI ${x.di ?? "neutro"} · nota ${confRes?.conf ?? "?"}/10 (mín ${minConf})`);
+        if (modo === "aviso") await revSombraGravar(SB, s, confRes?.conf ?? null, rvF, minConf);
+        continue;
+      }
+    }
     if (minConf > 0 && confRes && confRes.conf < minConf) {
       // só o 🚨 trava a moeda pra vela toda; o PREPARE barrado não pode impedir o 🚨 de sair depois
       if (modo === "aviso") _confBarrada.set(inst + lado, ck);
@@ -3047,6 +3090,7 @@ async function runAlertaProativo() {
     (ALERT_FILTROS_ON ? ` | 🧹 filtros seguraram ${descartadosFiltro}: volume ${descartes.volume}, ADX ${descartes.adx}, RSI extremo ${descartes.rsi}, serrote ${descartes.serrote}` : " | filtros DESLIGADOS"));
   const agora = Date.now();
   let enviados = 0;
+  _revSombraN = 0;
   let confBarrados = 0;
   let barradosLat = 0;
   const vivoMemo = new Map<string, Promise<number | null>>();
@@ -3102,6 +3146,18 @@ async function runAlertaProativo() {
     }
     const confRes = await calcConfiancaAlerta(c, poolMap.get(inst)?.volUsdt ?? null, perfilAlerta);
     const minConf = c.tipo === "reversao" ? (c.lado === "long" ? CONF_MIN_FUNDO_LONG : CONF_MIN_REVERSAO) : CONF_MIN_OPORT;
+    if (c.tipo === "reversao") {
+      // V100: regra nova da reversão (ADX baixo + DI a favor) junto com a nota; o que barrar vai pro modo sombra
+      const fi = c.info as Partial<InfoFiltravel>;
+      const rv = revMotivos(c.lado, fi.adx, fi.diDom ?? null, confRes?.conf ?? null, minConf);
+      if (rv.length) {
+        barrarLoop();
+        if (rv.includes("NOTA")) confBarrados++;
+        console.log(`🧭 ${inst} ${c.lado} (reversão) barrada [${rv.join("+")}]: ADX ${fi.adx != null ? fi.adx.toFixed(1) : "?"} (máx ${REV_ADX_MAX}) · DI ${fi.diDom ?? "neutro"} · nota ${confRes?.conf ?? "?"}/10 (mín ${minConf})`);
+        await revSombraGravar(SB, c, confRes?.conf ?? null, rv, minConf);
+        continue;
+      }
+    }
     if (minConf > 0 && confRes && confRes.conf < minConf) {
       barrarLoop();
       confBarrados++;
@@ -4659,6 +4715,34 @@ async function registrarAlerta(SB: any, c: Setup, conf: number | null = null) {
     }, conf);
   } catch (e) { console.log("⚠️ registrarAlerta erro", e); }
 }
+// V100: motivos pelos quais uma REVERSÃO é barrada pela regra nova: "ADX" (acima de REV_ADX_MAX), "DI-" (DI puxa pro lado contrário), "DI0" (DI neutro), "NOTA" (abaixo do corte de confiança)
+function revMotivos(lado: "long" | "short", adx: number | null | undefined, di: "long" | "short" | null | undefined, conf: number | null, minConf: number): string[] {
+  const m: string[] = [];
+  if (REV_ADX_MAX > 0 && !(typeof adx === "number" && isFinite(adx) && adx <= REV_ADX_MAX)) m.push("ADX");
+  if (REV_DI_OBRIGA && di !== lado) m.push(di == null ? "DI0" : "DI-");
+  if (minConf > 0 && conf !== null && conf < minConf) m.push("NOTA");
+  return m;
+}
+let _revSombraN = 0;
+async function revSombraGravar(SB: any, s: Setup, conf: number | null, motivos: string[], minConf: number) {
+  if (!REV_SOMBRA_ON || !motivos.length) return;
+  if (conf !== null && minConf > 0 && conf < minConf - REV_SOMBRA_FOLGA_CONF) return; // nota muito abaixo do corte: ruído, não vale gravar
+  if (_revSombraN >= REV_SOMBRA_MAX_POR_RODADA) return;
+  const chave = `_REVSOMBRA_${s.info.instId}_${s.lado}`;
+  try {
+    const { data } = await SB.from(TAB).select("last_alert_at").eq("instid", chave).maybeSingle();
+    const ult = data?.last_alert_at ? new Date(data.last_alert_at).getTime() : 0;
+    if (ult && Date.now() - ult < REV_SOMBRA_COOLDOWN_MIN * 60000) return;
+    const f = s.info as Partial<InfoFiltravel>;
+    await inserirLogAlerta(SB, {
+      instid: s.info.instId, lado: s.lado, tipo: REV_SOMBRA_TIPO, status: `${s.status} 🌑SOMBRA[${motivos.join("+")}]`, fresco: s.fresco,
+      idade_candles: s.info.idadeCandles, pct24: s.pct, preco: s.info.preco, adx: f.adx ?? null, rsi: f.rsi ?? null,
+    }, conf);
+    await upsertLinha(SB, chave, { last_alert_at: new Date().toISOString(), last_status: motivos.join("+") });
+    _revSombraN++;
+    console.log(`🌑 sombra reversão: ${s.info.instId} ${s.lado} [${motivos.join("+")}] nota ${conf ?? "?"}/10 · ADX ${f.adx != null ? Math.round(f.adx) : "?"} · DI ${f.diDom ?? "neutro"}`);
+  } catch (e) { console.log("⚠️ sombra reversão falhou", e); }
+}
 const TAXA_TAKER_PCT = numEnv("TAXA_TAKER_PCT", "0.06");
 const TAXA_IDA_VOLTA_PCT = numEnv("TAXA_IDA_VOLTA_PCT", String(TAXA_TAKER_PCT * 2));
 function retornoLog(r: any, h: number): number | null {
@@ -4669,7 +4753,9 @@ function retornoLog(r: any, h: number): number | null {
 }
 const PLACAR_ENTRADA_ON = (Deno.env.get("PLACAR_ENTRADA") || "1") !== "0";
 const ehFinalLog = (r: any) => String(r?.status || "").includes("VAI FECHAR");
-const ehDescartadoLog = (r: any) => r?.ent_status === "repetido" || r?.ent_status === "invalido"; // V68: fora de todas as estatísticas
+const ehInvalidoLog = (r: any) => r?.ent_status === "repetido" || r?.ent_status === "invalido";
+const ehSombraRev = (r: any) => r?.tipo === REV_SOMBRA_TIPO; // V100: linhas do modo sombra da reversão — só o /reversaoconf as lê
+const ehDescartadoLog = (r: any) => ehInvalidoLog(r) || ehSombraRev(r); // V68: fora de todas as estatísticas (V100: inclui a sombra)
 const ENTRADA_MAX_CANDLES = numEnv("ENTRADA_MAX_CANDLES", "8");
 let _placarTemEntrada = true;
 type EntradaRes = { st: "pendente" } | { st: "nao_entrou" | "contra" } | { st: "entrou"; preco: number; emMs: number };
@@ -4767,8 +4853,10 @@ async function conferirPlacar(SB: any) {
         }
         // V68: o mesmo cruzamento já contado por outro alerta (aviso repetido / reteste) fica de fora do placar
         if (!ehFinalLog(r)) {
-          const { data: ja } = await SB.from(PLACAR_TABELA).select("id").eq("instid", r.instid).eq("lado", e.lado ?? r.lado)
-            .eq("ent_em", new Date(e.emMs).toISOString()).eq("ent_status", "entrou").neq("id", r.id).limit(1);
+          let qJa = SB.from(PLACAR_TABELA).select("id").eq("instid", r.instid).eq("lado", e.lado ?? r.lado)
+            .eq("ent_em", new Date(e.emMs).toISOString()).eq("ent_status", "entrou").neq("id", r.id);
+          qJa = ehSombraRev(r) ? qJa.eq("tipo", REV_SOMBRA_TIPO) : qJa.neq("tipo", REV_SOMBRA_TIPO); // V100: a sombra não pode tornar um alerta real "repetido"
+          const { data: ja } = await qJa.limit(1);
           if (ja && ja.length) {
             const { error: e5 } = await SB.from(PLACAR_TABELA).update({ ent_status: "repetido" }).eq("id", r.id);
             if (e5) console.log("⚠️ update entrada repetida:", e5.message); else atualizados++;
@@ -4964,7 +5052,7 @@ async function runCompressao(chatId: number | string, dias: number) {
     ["Confiança 8", (r) => Number(r.conf) === 8],
     ["Confiança 9–10", (r) => r.conf != null && Number(r.conf) >= 9],
   ];
-  let m = `🗜️ <b>COMPRESSÃO POR FAIXA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${comp.length} alerta(s), ${ent.length} com rompimento (entrada)\n<i>acerto = preço a favor do lado do 1º fechamento fora da faixa; % = retorno mediano já com taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta). Colunas: 15m · 1h · 4h · 24h</i>\n\n`;
+  let m = `🗜️ <b>COMPRESSÃO POR FAIXA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n<i>Regra atual do alerta (V102): nota ${COMPRESS_CONF_MAX > 0 ? `${COMPRESS_CONF_MIN} a ${COMPRESS_CONF_MAX}` : `≥ ${COMPRESS_CONF_MIN}`}${compAdxTxt() ? ` · ${compAdxTxt()}` : ""}. Alertas anteriores a ela entram nas faixas abaixo.</i>\n${comp.length} alerta(s), ${ent.length} com rompimento (entrada)\n<i>acerto = preço a favor do lado do 1º fechamento fora da faixa; % = retorno mediano já com taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta). Colunas: 15m · 1h · 4h · 24h</i>\n\n`;
   m += `<b>Geral (compressão com rompimento)</b>\n${linhaStats(ent, [15, ...PLACAR_HORIZ_EXIBE])}${tempoTxt(ent)}${movTxt(ent)}\n\n`;
   m += `${MINI_DIVISOR}\n<b>Por confiança</b>\n${MINI_DIVISOR}\n\n`;
   const ranque: { nome: string; n: number; med: number }[] = [];
@@ -5220,7 +5308,10 @@ async function runReversaoConf(chatId: number | string, dias: number) {
   const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const rev = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && r.tipo === "reversao" && !String(r.status || "").includes("REPIQUE"));
-  if (!rev.length) { await sendTelegram(chatId, `🔄 <b>REVERSÃO POR CONFIANÇA</b>\n\nNenhum alerta de reversão nos últimos ${dias} dia(s).`); return; }
+  // V100: modo sombra — o que a regra nova (ADX baixo + DI a favor) ou a nota barrou, gravado em silêncio
+  const somb = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehInvalidoLog(r) && ehSombraRev(r));
+  const motivosDe = (r: any): string[] => { const m = /SOMBRA\[([^\]]*)\]/.exec(String(r.status || "")); return m ? m[1].split("+").filter(Boolean) : []; };
+  if (!rev.length && !somb.length) { await sendTelegram(chatId, `🔄 <b>REVERSÃO POR CONFIANÇA</b>\n\nNenhum alerta de reversão nos últimos ${dias} dia(s).`); return; }
   const rets = (g: any[], h: number) => g.map((r) => retornoLog(r, h)).filter((x): x is number => x !== null);
   const bloco = (nome: string, g: any[]) => {
     const r4 = rets(g, 240), pf = _profitFactor(r4);
@@ -5239,9 +5330,25 @@ async function runReversaoConf(chatId: number | string, dias: number) {
     return `🏆 <b>${titulo} (${rot}, 15+ conferidos):</b> melhor ${mel.nome} (${_sg(mel.med)}, n=${mel.n}) · pior ${pior.nome} (${_sg(pior.med)}, n=${pior.n})\n`;
   };
   const ent = rev.filter((r) => r.ent_status === "entrou");
-  let m = `🔄 <b>REVERSÃO POR CONFIANÇA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${rev.length} alerta(s) de reversão, ${ent.length} em que o robô entrou\n<i>Colunas: 15m · 1h · 4h · 24h. Acerto = preço a favor do lado do alerta (LONG = fundo, SHORT = topo) desde o alerta; % = retorno mediano já com taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta). Cada fatia é separada das outras (não cruzada).</i>\n\n`;
+  let m = `🔄 <b>REVERSÃO POR CONFIANÇA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${rev.length} alerta(s) de reversão, ${ent.length} em que o robô entrou · 🌑 ${somb.length} na sombra\n<i>Colunas: 15m · 1h · 4h · 24h. Acerto = preço a favor do lado do alerta (LONG = fundo, SHORT = topo) desde o alerta; % = retorno mediano já com taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta). Cada fatia é separada das outras (não cruzada).</i>\n\n`;
   m += bloco("Todas as reversões", rev);
-  if (ent.length && ent.length < rev.length) m += bloco("Só as que o robô entrou", ent);
+  // V100: sombra por motivo (cada linha é separada; "só X" = barrada apenas por esse motivo, pra ver qual filtro pesa)
+  m += sec(`🌑 Sombra — barradas pela regra nova (ADX ≤ ${REV_ADX_MAX}${REV_DI_OBRIGA ? " e DI a favor" : ""})`);
+  if (!somb.length) m += `<i>Ainda sem alertas na sombra${REV_SOMBRA_ON ? " (começa a gravar a partir do deploy da V100)" : " (REV_SOMBRA=0, desligada)"}.</i>\n\n`;
+  else {
+    m += bloco("Todas as barradas", somb);
+    const so = (f: (x: string[]) => boolean) => somb.filter((r) => { const x = motivosDe(r); return x.length > 0 && f(x); });
+    const gS: [string, any[]][] = [
+      ["Só ADX alto (DI estava a favor)", so((x) => x.length === 1 && x[0] === "ADX")],
+      ["Só DI (contra ou neutro; ADX ok)", so((x) => x.every((k) => k.startsWith("DI")))],
+      ["  ↳ DI contra", so((x) => x.includes("DI-"))],
+      ["  ↳ DI neutro", so((x) => x.includes("DI0"))],
+      ["ADX alto + DI errado", so((x) => x.includes("ADX") && x.some((k) => k.startsWith("DI")))],
+      ["Só nota baixa (passaria no ADX e no DI)", so((x) => x.length === 1 && x[0] === "NOTA")],
+    ];
+    for (const [nome, g] of gS) if (g.length) m += bloco(nome, g);
+    m += `<i>Compare com o bloco "Todas as reversões": se a sombra render igual ou melhor, a regra está cortando sinal bom; se render pior, está filtrando certo. Os alertas reais acima incluem os de antes da V100 (sem a regra).</i>\n\n`;
+  }
   // 1) por nota exata + faixas
   const comConf = rev.filter((r) => r.conf != null);
   m += sec("Por confiança");
@@ -5254,8 +5361,11 @@ async function runReversaoConf(chatId: number | string, dias: number) {
       { nome: "⬆️ 8", g: comConf.filter((r) => Number(r.conf) === 8) },
       { nome: "🔝 9–10", g: comConf.filter((r) => Number(r.conf) >= 9) },
     ];
-    m += `<b>Resumo por faixa</b>\n`;
-    for (const f of faixas) if (f.g.length) m += bloco(f.nome, f.g);
+    // V100: com um corte só na prática (6–7) a faixa repetia tudo; só mostra o resumo quando há 2+ faixas com alerta
+    if (faixas.filter((f) => f.g.length).length >= 2) {
+      m += `<b>Resumo por faixa</b>\n`;
+      for (const f of faixas) if (f.g.length) m += bloco(f.nome, f.g);
+    }
     m += ranque("Melhor faixa", faixas, 1440, "24h") + ranque("Melhor faixa", faixas, 240, "4h") + ranque("Melhor faixa", faixas, 15, "15 min");
     m += `\n`;
   }
@@ -5265,9 +5375,9 @@ async function runReversaoConf(chatId: number | string, dias: number) {
   for (const l of lados) if (l.g.length) m += bloco(l.nome, l.g);
   // 3) por ADX
   const adxF = [
-    { nome: "😴 ADX < 20", g: rev.filter((r) => r.adx != null && Number(r.adx) < 20) },
-    { nome: "😐 ADX 20–30", g: rev.filter((r) => r.adx != null && Number(r.adx) >= 20 && Number(r.adx) < 30) },
-    { nome: "💪 ADX ≥ 30", g: rev.filter((r) => r.adx != null && Number(r.adx) >= 30) },
+    { nome: "😴 ADX ≤ 20 (regra nova)", g: rev.filter((r) => r.adx != null && Number(r.adx) <= 20) },
+    { nome: "😐 ADX 20–30", g: rev.filter((r) => r.adx != null && Number(r.adx) > 20 && Number(r.adx) <= 30) },
+    { nome: "💪 ADX > 30", g: rev.filter((r) => r.adx != null && Number(r.adx) > 30) },
   ];
   m += sec("Por força da tendência (ADX)");
   for (const f of adxF) if (f.g.length) m += bloco(f.nome, f.g);
@@ -5595,7 +5705,7 @@ async function runSaida(chatId: number | string, dias: number, opc?: { moeda?: s
   if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
   const truncou600 = (data || []).length >= 600; // V74: o .limit(600) cortava em silêncio
   const baseDe = (id: string) => String(id).split("-")[0];
-  const rowsBase = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && r.ent_em && Number(r.preco) > 0)
+  const rowsBase = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehSombraRev(r) && r.ent_em && Number(r.preco) > 0)
     .filter((r) => !opc?.moeda || baseDe(r.instid) === opc.moeda || baseDe(r.instid) === `1000${opc.moeda}`);
   const filtro = opc?.filtro ?? null;
   const rows = rowsBase.filter((r) => !filtro || !(filtro.mov > 0) || (r.pct24 != null && Math.abs(Number(r.pct24)) >= filtro.mov)); // |24h| da hora do alerta
@@ -6183,7 +6293,7 @@ async function runAnalise(chatId: number | string, entrada: string, capturar?: (
   try {
     const SB = getSupabase();
     if (SB) {
-      const { data } = await SB.from(PLACAR_TABELA).select("*").eq("instid", instId).order("criado_em", { ascending: false }).limit(3);
+      const { data } = await SB.from(PLACAR_TABELA).select("*").eq("instid", instId).neq("tipo", REV_SOMBRA_TIPO).order("criado_em", { ascending: false }).limit(3);
       const hist = (data || []) as any[];
       if (hist.length) {
         rodape += `📜 <b>Alertas anteriores</b>\n`;
@@ -8827,7 +8937,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
 
   sec("📊 Resultados", [
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
-    ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por quanto a moeda já esticou em 24h — pra decidir se vale mexer no CONF_MIN_REVERSAO. O número é a quantidade de dias"],
+    ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
     ["🗜️ /compressao 30", "compressão por faixa de confiança, ADX e lado", "mostra, só pra compressão, qual faixa de confiança (6, 7, 8, 9–10), de ADX e de lado rende melhor (acerto e retorno mediano em 1h, 4h e 24h) — pra decidir se vale subir o COMPRESS_CONF_MIN. O número é a quantidade de dias"],
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
