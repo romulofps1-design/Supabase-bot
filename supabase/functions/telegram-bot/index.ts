@@ -1,6 +1,6 @@
 // telegram-bot V107 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX e filtro por tipo (comp, oport, rev, fundo, topo); /juncao (junção clássica x rápida x rápida + EMA 144 recalculada nas mesmas velas; J6_MODO=rapida144 no bot, com listas de stop/alvo/stop móvel); simulações com stop móvel (trailX, armaY) e zero a zero (beX); /radarsim cruz (ligo no alerta, o robô entra, desligo e sigo com stop: uma operação por alerta, sem virar; e ↩️ contra o alerta: se a moeda cruza do outro lado em até RADARSIM_CONTRA_VELAS velas, entra a favor do novo cruzamento, uma vez só; viradas 0,1,3 compara a cadeia com até N viradas, cada perna saindo no stop/alvo/prazo ou no cruzamento contra); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
+// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX e filtro por tipo (comp, oport, rev, fundo, topo); /juncao (junção clássica x rápida x rápida + EMA 144 recalculada nas mesmas velas; J6_MODO=rapida144 no bot, medias X,Y,Z pra testar uma J6 personalizada, com listas de stop/alvo/stop móvel); simulações com stop móvel (trailX, armaY) e zero a zero (beX); /radarsim cruz (ligo no alerta, o robô entra, desligo e sigo com stop: uma operação por alerta, sem virar; e ↩️ contra o alerta: se a moeda cruza do outro lado em até RADARSIM_CONTRA_VELAS velas, entra a favor do novo cruzamento, uma vez só; viradas 0,1,3 compara a cadeia com até N viradas, cada perna saindo no stop/alvo/prazo ou no cruzamento contra); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const BOT_VERSAO = "V107"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
@@ -6320,8 +6320,17 @@ async function runRadarSim(chatId: number | string, dias: number, soRegra: boole
 // (sai no cruzamento contrário ou no stop de SAIDA_STOP_ATR × ATR); (3) a rotina "liga no alerta e segue com stop/alvo/prazo" (ignora o cruzamento contra).
 // Duas fatias: todos os cruzamentos e só os "de alerta" (|24h| ≥ SAIDA_MOV_PADRAO e ADX ≥ SAIDA_ADX_PADRAO na vela do cruzamento).
 const JUNCAO_MAX_MOEDAS = numEnv("JUNCAO_MAX_MOEDAS", "40");
-type ModoJ6 = "classica" | "rapida" | "rapida144";
-function bandaModo(closes: number[], modo: ModoJ6, peso: number = PESO_SUPREMA): { sup: number; j6: number }[] {
+type ModoJ6 = "classica" | "rapida" | "rapida144" | "custom";
+// V107: J6 personalizada (/juncao ... medias 9,20,21,30): só a J6 muda; a J3 continua 21/50/60, como no indicador
+function bandaCustom(closes: number[], periodos: number[], peso: number = PESO_SUPREMA): { sup: number; j6: number }[] {
+  const es = periodos.map((p) => ma(closes, p)), e21 = ma(closes, 21), e50 = ma(closes, 50), e60 = ma(closes, 60);
+  return closes.map((_, i) => {
+    const j3 = (e21[i] + e50[i] + e60[i]) / 3;
+    const j6 = es.reduce((t, e) => t + e[i], 0) / es.length;
+    return { sup: ((j3 + j6) / 2) * peso + j6 * (1 - peso), j6 };
+  });
+}
+function bandaModo(closes: number[], modo: Exclude<ModoJ6, "custom">, peso: number = PESO_SUPREMA): { sup: number; j6: number }[] {
   const e9 = ma(closes, 9), e20 = ma(closes, 20), e21 = ma(closes, 21), e50 = ma(closes, 50), e60 = ma(closes, 60), e100 = ma(closes, 100), e200 = ma(closes, 200), e144 = ma(closes, 144);
   return closes.map((_, i) => {
     const j3 = (e21[i] + e50[i] + e60[i]) / 3;
@@ -6329,7 +6338,8 @@ function bandaModo(closes: number[], modo: ModoJ6, peso: number = PESO_SUPREMA):
     return { sup: ((j3 + j6) / 2) * peso + j6 * (1 - peso), j6 };
   });
 }
-async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[]) {
+async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], custom: number[] = []) {
+  const modosAtivos: ModoJ6[] = ["classica", "rapida", "rapida144", ...(custom.length ? ["custom" as const] : [])];
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const dd = Math.min(7, Math.max(1, Math.round(dias || 7))); // as médias são exponenciais: as 300 primeiras das 1000 velas ficam de aquecimento (≈ 7 dias úteis)
@@ -6342,16 +6352,16 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   if (!moedas.length) { await sendTelegram(chatId, "🔀 <b>JUNÇÃO CLÁSSICA x RÁPIDA</b>\n\nNenhuma moeda com alerta no período."); return; }
   const TFMS = TF_MIN * 60000, n24 = Math.round(1440 / TF_MIN);
   type Ev = { filtro: boolean; ligado: number | null; robo: number | null; rot: Map<string, SimRes> };
-  const modos: Record<ModoJ6, Ev[]> = { classica: [], rapida: [], rapida144: [] };
-  const minutosEntre: Record<ModoJ6, number[]> = { classica: [], rapida: [], rapida144: [] };
+  const modos: Record<ModoJ6, Ev[]> = { classica: [], rapida: [], rapida144: [], custom: [] };
+  const minutosEntre: Record<ModoJ6, number[]> = { classica: [], rapida: [], rapida144: [], custom: [] };
   let moedasOk = 0;
   await emLotes(moedas, 5, async (id) => {
     const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
     if (!d || d.c.length < 300) return;
     moedasOk++;
     const adxS = xAdxSerie(d.h, d.l, d.c, 14);
-    for (const modo of ["classica", "rapida", "rapida144"] as const) {
-      const b = bandaModo(d.c, modo);
+    for (const modo of modosAtivos) {
+      const b = modo === "custom" ? bandaCustom(d.c, custom) : bandaModo(d.c, modo);
       const ladoEm = (k: number): HipLado | null => d.c[k] > Math.max(b[k].sup, b[k].j6) ? "long" : d.c[k] < Math.min(b[k].sup, b[k].j6) ? "short" : null;
       // cruzamentos: a vela fecha do lado oposto ao último lado definido
       const evs: { k: number; lado: HipLado }[] = [];
@@ -6391,10 +6401,10 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     return `n=${rs.length} · acerto ${Math.round((ac / rs.length) * 100)}%${pmTxt(ac, rs.length)} · média ${media >= 0 ? "+" : ""}${media.toFixed(2)}R · PF ${isFinite(pf) ? pf.toFixed(2) : pf === Infinity ? "∞" : "—"}${sem3 ? ` · sem os 3 melhores ${(sem3.reduce((t, x) => t + x, 0) / sem3.length).toFixed(2)}R` : ""}`;
   };
   const hTxt = (h: number) => (h < 1 ? `${Math.round(h * 60)}min` : `${h}h`);
-  const nome: Record<ModoJ6, string> = { classica: "🐢 CLÁSSICA (20/21/50/60/100/200)", rapida: "⚡ RÁPIDA (9/20/21/50/60)", rapida144: "⚡➕ RÁPIDA + EMA 144 (9/20/21/50/60/144)" };
+  const nome: Record<ModoJ6, string> = { classica: "🐢 CLÁSSICA (20/21/50/60/100/200)", rapida: "⚡ RÁPIDA (9/20/21/50/60)", rapida144: "⚡➕ RÁPIDA + EMA 144 (9/20/21/50/60/144)", custom: `🧪 PERSONALIZADA (J6 = ${custom.join("/")}; J3 = 21/50/60)` };
   let m = `🔀 <b>JUNÇÃO: CLÁSSICA x RÁPIDA x RÁPIDA + 144</b> — ${dd} dia(s) · ${moedasOk} moeda(s) com alerta no período\n${DIVISOR}\n`;
   m += `<i>Faixa recalculada nos três modos com as mesmas velas de 15m; entrada no fechamento da vela que cruzou. 1R = 1×ATR, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada. "De alerta" = |24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO} na vela do cruzamento. Hoje o bot usa a ${J6_R144 ? "rápida + 144" : J6_RAPIDA ? "rápida" : "clássica"} (J6_MODO).</i>\n\n`;
-  for (const modo of ["classica", "rapida", "rapida144"] as const) {
+  for (const modo of modosAtivos) {
     const evs = modos[modo], me = minutosEntre[modo];
     m += `${MINI_DIVISOR}\n<b>${nome[modo]}</b>\n${MINI_DIVISOR}\n`;
     m += `${evs.length} cruzamentos (${(evs.length / Math.max(1, moedasOk) / dd).toFixed(1)} por moeda por dia) · tempo mediano entre cruzamentos ${me.length ? `${Math.round(_med(me))} min` : "—"}\n`;
@@ -6407,7 +6417,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     }
     m += "\n";
   }
-  m += `<i>Menos cruzamentos por dia e mais tempo entre eles = faixa menos "serrada". Compare os dois modos linha a linha; a diferença só vale onde as margens (±) não se cruzam. Uso: /juncao 7 · /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (listas: compara todas as combinações, até 8) · trail1,2 = stop móvel · arma2 = só arma depois de +2 ATR · be1 = zero a zero em +1 ATR · stop0 = sem stop · alvo0 = sem alvo · máx. de moedas no Secret JUNCAO_MAX_MOEDAS (${JUNCAO_MAX_MOEDAS}).</i>`;
+  m += `<i>${custom.length ? "A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo. " : ""}Menos cruzamentos por dia e mais tempo entre eles = faixa menos "serrada". Compare os dois modos linha a linha; a diferença só vale onde as margens (±) não se cruzam. Uso: /juncao 7 · /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (listas: compara todas as combinações, até 8) · trail1,2 = stop móvel · arma2 = só arma depois de +2 ATR · be1 = zero a zero em +1 ATR · stop0 = sem stop · alvo0 = sem alvo · máx. de moedas no Secret JUNCAO_MAX_MOEDAS (${JUNCAO_MAX_MOEDAS}).</i>`;
   await enviarEmPartes(chatId, m);
 }
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
@@ -10014,7 +10024,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
     ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
     ["💧 /volconf 7", "resultado por volume (USDT x unidades) + sombra abaixo do filtro", "mostra, pros radares (topo, fundo, repique) e pros alertas de oportunidade/reversão, quanto funcionou e quanto foi invalidado: (A) só o que passa no filtro de volume (FILTRO_VOL_MIN_USDT), (B) sem filtro, incluindo a 🌑 sombra gravada abaixo dele, (C) por faixa de volume em USDT, (D) por quartis de volume em unidades da moeda e (E) os dois filtros juntos. No fim diz quantos pontos o USDT e as unidades separam. ⚠️ = menos de 8 alertas. Só os últimos 9 dias (usa as velas). Os alertas de antes da V106 não têm volume."],
-    ["🔀 /juncao 7", "junção clássica x rápida x rápida + 144 (J6_MODO)", "recalcula a faixa do robô nos três modos da junção (clássica: 20/21/50/60/100/200 · rápida: 9/20/21/50/60 · rápida + EMA 144: 9/20/21/50/60/144; no bot, J6_MODO=rapida144 liga essa última) com as mesmas velas de 15m, nas moedas que tiveram alerta, e compara: quantos cruzamentos por dia (serrote), o robô ligado direto (vira a cada cruzamento), a saída do robô com stop e a rotina com stop/alvo/prazo. Separa todos os cruzamentos e só os \"de alerta\" (movimento e ADX do filtro do /saida). Ex.: /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (com listas compara todas as combinações de stop, alvo e stop móvel, até 8; trailX = stop móvel a X ATR do melhor preço, armaY = só começa a seguir depois de +Y ATR, beX = zero a zero depois de +X ATR, stop0/alvo0 = sem). Até 7 dias."],
+    ["🔀 /juncao 7", "junção clássica x rápida x rápida + 144 (J6_MODO)", "recalcula a faixa do robô nos três modos da junção (clássica: 20/21/50/60/100/200 · rápida: 9/20/21/50/60 · rápida + EMA 144: 9/20/21/50/60/144; no bot, J6_MODO=rapida144 liga essa última; medias 9,20,21,30 acrescenta uma J6 personalizada só pra teste) com as mesmas velas de 15m, nas moedas que tiveram alerta, e compara: quantos cruzamentos por dia (serrote), o robô ligado direto (vira a cada cruzamento), a saída do robô com stop e a rotina com stop/alvo/prazo. Separa todos os cruzamentos e só os \"de alerta\" (movimento e ADX do filtro do /saida). Ex.: /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (com listas compara todas as combinações de stop, alvo e stop móvel, até 8; trailX = stop móvel a X ATR do melhor preço, armaY = só começa a seguir depois de +Y ATR, beX = zero a zero depois de +X ATR, stop0/alvo0 = sem). Até 7 dias."],
     ["🧪 /radarsim 9 regra stop1 alvo2 horas 1,2,4", "operar só pelos radares (stop, alvo e prazo à escolha)", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta) e sair no stop (stopX = X ATR do 15m; stop0 = sem stop), no alvo (alvoX = X R; alvo0 = sem alvo) ou no prazo (horas 1,2,4), o que vier primeiro. Também aceita trailX (stop móvel a X ATR do melhor preço), armaY (só arma depois de +Y ATR) e beX (zero a zero depois de +X ATR). Mostra acerto, média em R, PF, sem os 3 melhores, o pior trade e quanto o preço andou contra antes de sair. Mesma régua do /saida, pra comparar com o robô no cruzamento. regra = só os alertas que passariam no ADX das regras atuais. btc = separa pelo humor do BTC na hora do alerta (subindo, caindo, de lado); mov = separa pelo movimento da moeda no dia (|24h|: abaixo de 8%, 8 a 15%, 15 a 25%, 25% ou mais); com romp, usa a entrada no rompimento. cruz = em vez dos radares, os alertas do cruzamento (oportunidade, reversão, compressão): entra no preço em que o robô entrou e sai pelo stop/alvo/prazo, uma operação por alerta, sem virar — mede \"ligo no alerta, o robô entra, desligo e sigo com stop manual\". Mostra também ↩️ contra o alerta: quando a moeda fecha cruzada do outro lado em até RADARSIM_CONTRA_VELAS velas (8), entra a favor desse novo cruzamento, uma vez só. Com viradas 0,1,3 (até 5) compara a cadeia com até N viradas: cada perna sai no stop, no alvo, no prazo ou no cruzamento contra, e só vira se saiu pelo cruzamento. Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h. Padrões: stop SAIDA_STOP_ATR, sem alvo, horas RADARSIM_HORAS."],
     ["🌑 /sombras 7", "resumo real x sombra (reversão, repique, volume)", "num só lugar, compara o que alertou com o que a regra barrou e ficou gravado em silêncio, pra reversão (ADX/DI), repique (ADX/DI) e volume (filtro de USDT): acerto em 4h com margem de erro e uma leitura (regra ajuda, atrapalha ou ainda dentro da margem). Sai sozinho 1x por semana (SOMBRA_RESUMO_DIA, padrão domingo, a partir de SOMBRA_RESUMO_H = 20h; SOMBRA_RESUMO=0 desliga)."],
     ["🔎 ... desde V107", "julgar uma regra só com dados depois dela", "acrescente \"desde V107\" (versão) ou \"desde 05/10\" (data) no fim de /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf, /compressao ou /sombras. Ex.: /radarconf 90 desde V104. Alertas gravados antes da V107 não têm versão: pra incluí-los, defina o Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). O ± depois das porcentagens é a margem de erro (95%): se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte."],
@@ -10279,7 +10289,8 @@ Deno.serve(async (req) => {
       // V107: /juncao [dias] [stopX] [alvoX] [horas a,b] — junção clássica x rápida, recalculada nas mesmas velas
       const argsJ = text.split(/\s+/).slice(1);
       const iHJ = argsJ.findIndex((a) => a.startsWith("horas"));
-      const diasJ = Math.min(7, Math.max(1, Math.round(Number(argsJ.find((a, i) => /^\d+$/.test(a) && !(iHJ >= 0 && argsJ[iHJ] === "horas" && i === iHJ + 1))) || 7)));
+      const iMJ = argsJ.findIndex((a) => /^m[eé]dias$/.test(a));
+      const diasJ = Math.min(7, Math.max(1, Math.round(Number(argsJ.find((a, i) => /^\d+$/.test(a) && !(iHJ >= 0 && argsJ[iHJ] === "horas" && i === iHJ + 1) && !(iMJ >= 0 && i === iMJ + 1))) || 7)));
       // V107: stop e alvo aceitam lista (stop1,1.5 alvo1.5,2): compara todas as combinações nas mesmas velas (máx. 6)
       const listaJ = (pref: string, padrao: number, max: number) => {
         const a = argsJ.find((x) => x.startsWith(pref));
@@ -10291,7 +10302,12 @@ Deno.serve(async (req) => {
       const cfgsJ: SimCfg[] = [];
       const umJ = (pref: string) => { const a = argsJ.find((x) => x.startsWith(pref)); const v = a ? Number(a.slice(pref.length)) : NaN; return isFinite(v) && v >= 0 ? Math.min(20, v) : 0; };
       for (const st of listaJ("stop", SAIDA_STOP_ATR, 10)) for (const al of listaJ("alvo", 1.5, 20)) for (const tr of listaJ("trail", 0, 10)) cfgsJ.push({ stopAtr: st, alvoR: al, trailAtr: tr, armaAtr: umJ("arma"), beAtr: umJ("be") });
-      await comAguarde("🔀 Recalculando a faixa nos dois modos da junção, aguarde (pode levar 1 a 2 min)...", () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2]));
+      // V107: medias 9,20,21,30 = J6 personalizada (2 a 8 médias, de 2 a 200 períodos) como 4º modo
+      const iM = argsJ.findIndex((a) => a.startsWith("medias") || a.startsWith("médias"));
+      const mArg = iM >= 0 ? (/^m[eé]dias$/.test(argsJ[iM]) ? argsJ[iM + 1] || "" : argsJ[iM].replace(/^m[eé]dias/, "")) : "";
+      const customJ = [...new Set(mArg.split(/[,;\/]/).map((x) => Math.round(Number(x))).filter((x) => Number.isFinite(x) && x >= 2 && x <= 200))].slice(0, 8);
+      if (iM >= 0 && customJ.length < 2) { await sendTelegram(chatId, "⚠️ Passe pelo menos 2 médias entre 2 e 200. Ex.: /juncao 7 medias 9,20,21,30"); return new Response("ok"); }
+      await comAguarde("🔀 Recalculando a faixa nos modos da junção, aguarde (pode levar 1 a 2 min)...", () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2], customJ));
       return new Response("ok");
     }
     if (text === "/radarsim" || text.startsWith("/radarsim ") || text.startsWith("/radarsim@")) {
