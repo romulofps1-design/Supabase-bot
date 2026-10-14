@@ -1,4 +1,4 @@
-// telegram-bot V96 (V95 + radar de topo e de fundo: "nota subiu" fura o cooldown (RADAR_UPGRADE_DELTA=2, RADAR_UPGRADE_GAP_MIN=30) — 2º alerta marcado ⬆️ quando a nota sobe 2+ pontos desde o último alerta da moeda) · V95 (V94 + filtro opcional COMPRESS_PCT24_MIN (movimento mínimo no dia pra mandar compressão; 0 = desligado)) · V94 (V93 + /radarconf retro fundo: o mesmo teste retroativo pro radar de fundo) · V93 (V92 + colunas de 15 min no /radarconf, no /compressao e no /radarconf retro) · V92 (V91 + /radarconf retro: refaz a nota do radar de topo com as velas e compara 2/10..5/10 sem esperar alerta novo) · V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
+// telegram-bot V99 (V98 + /reversaoconf [dias]: reversão por nota de confiança, lado, ADX e esticada em 24h, mesmo molde do /radarconf) · V98 (V97 + MODO FACA: o fundo com ADX alto (que o radar de fundo não avisa mais) vira candidato SHORT de continuação; FACA_MODO=sombra (padrão, grava em silêncio numa linha própria, fora do /placar) | alerta | off; comando /faca [dias]) · V97 (V96 + radares com corte por ADX: fundo não alerta com ADX ≥ FUNDO_ADX_MAX (padrão 30) e topo só alerta com ADX < TOPO_ADX_MAX (padrão 20); 0 desliga; repique fica de fora) · V96 (V95 + radar de topo e de fundo: "nota subiu" fura o cooldown (RADAR_UPGRADE_DELTA=2, RADAR_UPGRADE_GAP_MIN=30) — 2º alerta marcado ⬆️ quando a nota sobe 2+ pontos desde o último alerta da moeda) · V95 (V94 + filtro opcional COMPRESS_PCT24_MIN (movimento mínimo no dia pra mandar compressão; 0 = desligado)) · V94 (V93 + /radarconf retro fundo: o mesmo teste retroativo pro radar de fundo) · V93 (V92 + colunas de 15 min no /radarconf, no /compressao e no /radarconf retro) · V92 (V91 + /radarconf retro: refaz a nota do radar de topo com as velas e compara 2/10..5/10 sem esperar alerta novo) · V91 (V90 + /radarconf [dias]: radar de topo e de fundo por nota de confiança) · V90 (V89 + filtro opcional de volatilidade no alerta de compressão (COMPRESS_AMP_MIN_PCT, desligado = 0) e a amplitude de 24h passa a ser gravada em cada alerta) · V89 (V88 + conserta o /radarhist: as fatias por esticada e ADX saíam todas 0%/0% porque liam o desfecho no campo errado) · V88 (V87 + /compressao base separa por volatilidade da moeda (terços) e mostra onde os alertas se concentram) · V87 (V86 + o alerta de compressão grava as características (largura, tempo comprimida, volume, velas, inclinação, ADX) na coluna opcional comp_feat; /compressao mostra o resultado por componente) · V86 (V85 + /compressao base: compara a compressão com o que as mesmas moedas fazem em qualquer hora (movimento de 5%+ em 24h)) · V85 (V84 + /compressao mostra também quantos alertas andaram 5%+ pra algum lado em 24h (e quantos foram limpos), por faixa; COMPRESS_ROMPE_PCT/COMPRESS_LIMPO_PCT) · V84 (V83 + /compressao mostra o tempo até o rompimento por faixa (mediana, % em até 30 e 60 min) e a faixa que rompe mais rápido) · V83 (V82 + /compressao [dias]: a compressão por confiança, ADX e lado, com ranking da melhor e da pior faixa) · V82 (V81 + o 🔁 e o /lista mostram o tipo do alerta original (oportunidade/reversão) e o intervalo mínimo entre 🔁 da mesma moeda passa a 30 min por padrão) · V81 (V80 + aviso 🔁 por mensagem só pra moeda que importa ao chat: alerta original recente (ACOMP_AVISO_MAX_H=24), seguida ou com posição; as demais só marcam a virada na /lista; sem espera de confirmação) · V80 (V79 + lista de acompanhamento POR CHAT: cada chat tem a própria vigilância (linhas WL_<chat>_<moeda>), alimentada só pelos alertas que ele recebeu e pelas moedas que ele segue; /lista e /seguir e /parar mexem só na do próprio chat; vigilância antiga migra sozinha) · V79 (V78 + lista de acompanhamento sem contradição: mostra o lado vigiado e o prazo separados do alerta original e da virada) · V78 (V77 + histórico dos radares gravado no Supabase: na virada das 21h o bot reavalia os alertas de topo/fundo/repique dos últimos 9 dias e guarda de forma compacta na linha _RADAR_HIST_ (RADARH_DIAS=60); novo comando /radarhist [dias] [gravar] mostra o desempenho acumulado por tipo, por esticada em 24h (com a faixa de 25% ou mais, pra testar se o radar de topo só funciona em moeda muito forte no dia) e por ADX; sem coluna nova) V77 (V76 + /radar passa a simular "operar só no ROMPIMENTO da vela do alerta": topo entra short rompendo a mínima da vela do alerta, fundo entra long rompendo a máxima, stop no extremo oposto, alvo RADAR_ALVO_R×risco (2), espera RADAR_ENTRADA_VELAS (8); + linha "Virada": entra no 1º rompimento e, se o stop vier, vira pro lado contrário (RADAR_VIRADA_PERNAS=3); mostra também a regra contrária e a entrada direta no alerta pra comparar)
 // telegram-bot V71 (V70 + /saida ganhou a virada encadeada: colunas C/D somam o resultado de TODAS as pernas que o
 // robô faria a partir de cada entrada real — sai no cruzamento vira pro lado contrário na hora, sai no stop espera o
 // próximo cruzamento — incluindo as viradas que o ESTRATEGIA_PUMP nunca alertou (o filtro só decide o AVISO; o robô
@@ -291,6 +291,9 @@ const TOPO_TOQUE_VALE_MIN = numEnv("TOPO_TOQUE_VALE_MIN", String(TOPO_ALTA_MIN))
 const REPIQUE_MOV_ANTES_MIN = numEnv("REPIQUE_MOV_ANTES_MIN", String(Math.min(FUNDO_QUEDA_MIN, TOPO_ALTA_MIN)));
 const REPIQUE_LADO_ATR = numEnv("REPIQUE_LADO_ATR", "1");
 const TOPO_COOLDOWN_MIN = numEnv("TOPO_COOLDOWN_MIN", "240");
+// V97: radar de topo só alerta com ADX BAIXO (histórico dos radares: ADX < 20 funcionou 75% e invalidou 11%, n=44; de 20 pra cima ~50% e ~45%).
+// Vale só pro topo normal; o repique (⭐) fica de fora (amostra pequena e comportamento diferente). TOPO_ADX_MAX=0 desliga.
+const TOPO_ADX_MAX = numEnv("TOPO_ADX_MAX", "20");
 // V96: "nota subiu" fura o cooldown. Antes, qualquer alerta do radar (topo/fundo) bloqueava a moeda por TOPO/FUNDO_COOLDOWN_MIN mesmo que a nota subisse de 3 pra 5/10 logo depois
 // (só aparecia na lista do /topo e /fundo). Agora, se a nota subir RADAR_UPGRADE_DELTA pontos ou mais desde o último alerta da moeda, sai um 2º alerta marcado "⬆️ NOTA SUBIU",
 // respeitando um intervalo mínimo de RADAR_UPGRADE_GAP_MIN minutos desde o alerta anterior. RADAR_UPGRADE_DELTA = 0 desliga.
@@ -342,6 +345,29 @@ const FUNDO_PRE_MIN = numEnv("FUNDO_PRE_MIN", "5");
 const FUNDO_LIBERA_LONG = (Deno.env.get("FUNDO_LIBERA_LONG") || "1") !== "0";
 const CONF_MIN_FUNDO_LONG = numEnv("CONF_MIN_FUNDO_LONG", "6");
 const FUNDO_COOLDOWN_MIN = numEnv("FUNDO_COOLDOWN_MIN", "240");
+// V97: radar de fundo (exceto repique ⭐) NÃO alerta com ADX alto (histórico dos radares: ADX >= 30 antes do alerta funcionou só 35% e invalidou 63%, n=48;
+// com ADX < 30 funcionou ~71%). Só o ALERTA AUTOMÁTICO do radar é cortado; /fundo, /analise e a pontuação seguem como estavam.
+// FUNDO_ADX_MAX=0 desliga. Teste sem mexer no código: ajuste o secret (ex.: 25 corta mais, 35 corta menos).
+const FUNDO_ADX_MAX = numEnv("FUNDO_ADX_MAX", "30");
+// V98: MODO FACA ("faca caindo"): o fundo com ADX alto (que o radar de fundo agora NÃO avisa) é tratado como CONTINUAÇÃO da queda, lado SHORT.
+//   FACA_MODO=sombra (padrão)  grava os candidatos em silêncio numa linha própria (_FACA_SOMBRA_), sem mandar aviso e SEM entrar no /placar,
+//                              /saida, /15min nem nos resumos (não usa a tabela do placar). Resultado com /faca [dias].
+//   FACA_MODO=alerta           além de gravar, manda o aviso 🔪 (experimental) nos chats ativos.   FACA_MODO=off  desliga tudo.
+// FACA_ADX_MIN (30) = ADX mínimo · FACA_CONF_MIN (5) = nota mínima do fundo (baixe pra 3 se quiser mais amostra) · FACA_COOLDOWN_MIN (240)
+// por moeda · FACA_MAX_POR_RODADA (2) · FACA_DIAS_GUARDA (14). Só avalia até ~9 dias de velas, como o /radar.
+const FACA_MODO: "off" | "sombra" | "alerta" = (() => {
+  const v = String(Deno.env.get("FACA_MODO") || "sombra").trim().toLowerCase();
+  if (["off", "0", "desligado", "nao", "não"].includes(v)) return "off";
+  if (["alerta", "on", "1", "ligado", "aviso"].includes(v)) return "alerta";
+  return "sombra";
+})();
+const FACA_ADX_MIN = numEnv("FACA_ADX_MIN", "30");
+const FACA_CONF_MIN = numEnv("FACA_CONF_MIN", "5");
+const FACA_COOLDOWN_MIN = numEnv("FACA_COOLDOWN_MIN", "240");
+const FACA_MAX_POR_RODADA = numEnv("FACA_MAX_POR_RODADA", "2");
+const FACA_DIAS_GUARDA = numEnv("FACA_DIAS_GUARDA", "14");
+const FACA_ROW = "_FACA_SOMBRA_";
+const FACA_MAX = 600;
 const FUNDO_MAX_POR_RODADA = numEnv("FUNDO_MAX_POR_RODADA", "2");
 const FUNDO_BTC_QUEDA_PCT = numEnv("FUNDO_BTC_QUEDA_PCT", "1.5");
 // V42: FUNDO_PTS_MAX é o teto real de pontos somando o pré-filtro (calcFundoPre/calcTopoPre, até 13) +
@@ -1504,6 +1530,71 @@ async function registrarAlertaFundo(SB: any, info: InfoFiltravel, pct: number, c
     await registrarHipotese(SB, info.instId, repique ? "repique" : "fundo", "long", Number(info.preco)); // V74: acompanha a hipótese (invalida/funcionou)
   } catch (e) { console.log("⚠️ registrarAlertaFundo erro", e); }
 }
+// ===== V98: MODO FACA — candidatos de "continuação da queda" (fundo com ADX alto), gravados à parte do placar =====
+type FacaReg = { i: string; t: number; p: number; a: number | null; c: number; q: number };
+const _facaAvaliado = new Map<string, number>();
+async function facaLer(SB: any): Promise<FacaReg[] | null> {
+  try {
+    const { data, error } = await SB.from(TAB).select("last_status").eq("instid", FACA_ROW).maybeSingle();
+    if (error) { console.log("⚠️ modo faca: leitura falhou, pulo a rodada", error.message ?? error); return null; }
+    if (!data?.last_status) return [];
+    try { const j = JSON.parse(data.last_status); return Array.isArray(j) ? j : []; } catch { return []; }
+  } catch (e) { console.log("⚠️ modo faca: leitura falhou", e); return null; }
+}
+async function facaSalvar(SB: any, lista: FacaReg[]) {
+  const corte = Date.now() - FACA_DIAS_GUARDA * 86400000;
+  await upsertLinha(SB, FACA_ROW, { last_status: JSON.stringify(lista.filter((r) => r.t >= corte).slice(-FACA_MAX)), last_alert_at: new Date().toISOString() });
+}
+function msgFaca(info: InfoFiltravel, queda: number, conf: number, vivo: number | null): string {
+  return `🔪 <b>FACA CAINDO — ${info.instId}</b> (experimental)\n${DIVISOR}\n\n` +
+    `Caiu ${queda.toFixed(1)}% e o ADX está em ${Math.round(info.adx ?? 0)} (queda com força). O radar de fundo leria isso como reversão (nota ${conf}/10), mas com ADX alto o histórico dos radares mostra que a queda costuma CONTINUAR.\n\n` +
+    `Preço: ${fmtPrice(vivo ?? info.preco)}\n` +
+    `Ideia em teste: SHORT só se romper a MÍNIMA da vela do alerta, stop na máxima, alvo ${RUP_ALVO_R}R. Não é entrada pronta.\n` +
+    `Resultado acumulado: /faca`;
+}
+async function radarFaca(SB: any, pool: { instId: string; pct: number; volUsdt: number; dd?: number }[], indicadores: (InfoFiltravel | null)[]) {
+  if (FACA_MODO === "off" || !FUNDO_ON || !(FACA_ADX_MIN > 0)) return;
+  const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
+  for (const [k, v] of _facaAvaliado) if (v !== ckVela) _facaAvaliado.delete(k);
+  const cands: { info: InfoFiltravel; queda: number }[] = [];
+  indicadores.forEach((info, i) => {
+    const p = pool[i];
+    if (!info || !info.bottom || !p || info.bottom.repique) return;
+    if (!(typeof info.adx === "number" && isFinite(info.adx) && info.adx >= FACA_ADX_MIN)) return;
+    const queda = quedaEfetiva(p.pct, Math.max(p.dd ?? 0, info.ddPico ?? 0));
+    if (queda < FUNDO_QUEDA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
+    if (ladoAtual(info) === "long") return; // mesma população do radar de fundo
+    if (info.bottom.pts < FUNDO_PRE_MIN) return;
+    cands.push({ info, queda });
+  });
+  if (!cands.length) return;
+  cands.sort((a, b) => b.info.bottom!.pts - a.info.bottom!.pts);
+  const lista = await facaLer(SB);
+  if (!lista) return;
+  const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
+  const agora = Date.now();
+  let gravou = 0;
+  for (const c of cands.slice(0, RADAR_CAND_JANELA)) {
+    if (gravou >= FACA_MAX_POR_RODADA) break;
+    const inst = c.info.instId;
+    if (_facaAvaliado.get(inst) === ckVela) continue;
+    const ult = lista.filter((r) => r.i === inst).reduce((m, r) => Math.max(m, r.t), 0);
+    if (ult && agora - ult < FACA_COOLDOWN_MIN * 60000) continue;
+    const fin = await fundoFinal(c.info.bottom!, inst);
+    _facaAvaliado.set(inst, ckVela);
+    if (fin.conf < FACA_CONF_MIN) continue;
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    lista.push({ i: inst, t: agora, p: Number(c.info.preco), a: r1(c.info.adx), c: fin.conf, q: r1(c.queda) });
+    gravou++;
+    console.log(`🔪 faca (${FACA_MODO}): ${inst} nota ${fin.conf}/10 · ADX ${c.info.adx.toFixed(0)} · queda ${c.queda.toFixed(1)}%`);
+    if (FACA_MODO === "alerta" && ativos.length) {
+      const vivo = await precoAoVivo(inst).catch(() => null);
+      const msg = msgFaca(c.info, c.queda, fin.conf, vivo);
+      await Promise.all(ativos.map((ch) => enviarAlertaMoeda(SB, ch, `FACA_${inst}`, cortar(msg), botaoAnalisar(inst)).catch(() => null)));
+    }
+  }
+  if (gravou) await facaSalvar(SB, lista);
+}
 async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt: number; dd?: number }[], indicadores: (InfoFiltravel | null)[], posMap: Map<string, Pos[] | null>) {
   if (!FUNDO_ON) return;
   const ativos = ALERT_CHAT_IDS.filter((ch) => !silChat(ch));
@@ -1511,6 +1602,7 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
   const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
   for (const [k, v] of _fundoAvaliado) if (v !== ckVela) _fundoAvaliado.delete(k);
   const cands: { info: InfoFiltravel; pct: number; queda: number }[] = [];
+  let barradasAdx = 0; // V97: candidatas cortadas por ADX alto
   indicadores.forEach((info, i) => {
     const p = pool[i];
     if (!info || !info.bottom || !p) return;
@@ -1518,11 +1610,13 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     if (queda < FUNDO_QUEDA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
     if (ladoAtual(info) === "long") return;
     if (info.bottom.pts < (info.bottom.repique ? Math.max(1, FUNDO_PRE_MIN - 1) : FUNDO_PRE_MIN)) return;
+    // V97: ADX desconhecido (NaN/ausente) não barra; só barra quando o valor existe e passa do teto.
+    if (FUNDO_ADX_MAX > 0 && !info.bottom.repique && typeof info.adx === "number" && isFinite(info.adx) && info.adx >= FUNDO_ADX_MAX) { barradasAdx++; return; }
     cands.push({ info, pct: p.pct, queda });
   });
   cands.sort((a, b) => Number(!!b.info.bottom!.repique) - Number(!!a.info.bottom!.repique) || b.info.bottom!.pts - a.info.bottom!.pts);
   const top = cands.slice(0, RADAR_CAND_JANELA); // V74: janela maior que 8/6 — as de cima em cooldown ocupavam todas as vagas e as de baixo nunca saíam
-  console.log(`🟢 radar de fundo: ${cands.length} candidata(s) com queda ≥ ${FUNDO_QUEDA_MIN}% e pré-filtro ≥ ${FUNDO_PRE_MIN} pts`);
+  console.log(`🟢 radar de fundo: ${cands.length} candidata(s) com queda ≥ ${FUNDO_QUEDA_MIN}% e pré-filtro ≥ ${FUNDO_PRE_MIN} pts${barradasAdx ? ` (+${barradasAdx} barrada(s) por ADX ≥ ${FUNDO_ADX_MAX})` : ""}`);
   if (!top.length) return;
   const rowsMap = new Map<string, any>();
   try {
@@ -1740,6 +1834,7 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
   if (!ativos.length) return;
   const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
   const cands: { info: InfoFiltravel; pct: number; alta: number }[] = [];
+  let barradasAdx = 0; // V97
   indicadores.forEach((info, i) => {
     const p = pool[i];
     if (!info || !info.top || !p) return;
@@ -1747,11 +1842,13 @@ async function radarTopo(SB: any, pool: { instId: string; pct: number; volUsdt: 
     if (alta < TOPO_ALTA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
     if (ladoAtual(info) === "short") return;
     if (info.top.pts < (info.top.repique ? Math.max(1, TOPO_PRE_MIN - 1) : TOPO_PRE_MIN)) return;
+    // V97: ADX desconhecido não barra; repique não é cortado por ADX.
+    if (TOPO_ADX_MAX > 0 && !info.top.repique && typeof info.adx === "number" && isFinite(info.adx) && info.adx >= TOPO_ADX_MAX) { barradasAdx++; return; }
     cands.push({ info, pct: p.pct, alta });
   });
   cands.sort((a, b) => Number(!!b.info.top!.repique) - Number(!!a.info.top!.repique) || b.info.top!.pts - a.info.top!.pts);
   const top = cands.slice(0, RADAR_CAND_JANELA); // V74: janela maior que 8/6 — as de cima em cooldown ocupavam todas as vagas e as de baixo nunca saíam
-  console.log(`🔴 radar de topo: ${cands.length} candidata(s) com alta ≥ ${TOPO_ALTA_MIN}% e pré-filtro ≥ ${TOPO_PRE_MIN} pts`);
+  console.log(`🔴 radar de topo: ${cands.length} candidata(s) com alta ≥ ${TOPO_ALTA_MIN}% e pré-filtro ≥ ${TOPO_PRE_MIN} pts${barradasAdx ? ` (+${barradasAdx} barrada(s) por ADX ≥ ${TOPO_ADX_MAX})` : ""}`);
   if (!top.length) return;
   const rowsMap = new Map<string, any>();
   try {
@@ -3081,6 +3178,7 @@ async function runAlertaProativo() {
   // V57: os radares são avisos antecipados (nunca LIGUE AGORA), então seguem rodando com o filtro lateral ligado — a mensagem sai com o aviso 🧱
   if (TOPO_ON) await radarTopo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de topo", e));
   if (FUNDO_ON) await radarFundo(SB, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de fundo", e));
+  if (FACA_MODO !== "off") await radarFaca(SB, pool, indicadores).catch((e) => console.log("❌ erro modo faca", e)); // V98
   if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
@@ -3759,11 +3857,11 @@ const HIP_ALVO_ATR = numEnv("HIP_ALVO_ATR", "3");
 const HIP_ALVO_PCT = numEnv("HIP_ALVO_PCT", "2");
 const HIP_AVISAR_FUNCIONOU = (Deno.env.get("HIP_AVISAR_FUNCIONOU") ?? "1") !== "0";
 const HIP_APAGAR_MIN = numEnv("HIP_APAGAR_MIN", "720");
-type HipTipo = "topo" | "fundo" | "repique";
+type HipTipo = "topo" | "fundo" | "repique" | "faca";
 type HipLado = "long" | "short";
 type HipRes = "invalida" | "funcionou" | "expirou" | "aberta";
 type Hip = { inst: string; tipo: HipTipo; lado: HipLado; preco: number; atr: number; t: number; mfe: number; mae: number };
-const HIP_NOME: Record<HipTipo, string> = { topo: "topo", fundo: "fundo", repique: "repique" };
+const HIP_NOME: Record<HipTipo, string> = { topo: "topo", fundo: "fundo", repique: "repique", faca: "faca" };
 const hipDist = (preco: number, atr: number, kAtr: number, pct: number): number => Math.max(atr > 0 ? kAtr * atr : 0, (preco * pct) / 100);
 // com UM preço (acompanhamento ao vivo)
 function hipPasso(lado: HipLado, preco0: number, atr: number, p: number, idadeMin: number): { res: HipRes; contra: number; favor: number } {
@@ -4038,18 +4136,26 @@ function rupLinha(nome: string, x: RupSim[], comEspera: boolean): string {
   return t;
 }
 // /radar [dias] — com os alertas de radar JÁ enviados (alertas_log) e as velas seguintes, o que aconteceu depois de cada tipo
-async function runRadarStats(chatId: number | string, dias: number, opt?: { pernas?: number; alvo?: number }) {
+async function runRadarStats(chatId: number | string, dias: number, opt?: { pernas?: number; alvo?: number; fonte?: "faca" }) {
   const alvoR = opt?.alvo && opt.alvo > 0 ? opt.alvo : RUP_ALVO_R, pernasMax = opt?.pernas && opt.pernas >= 1 ? Math.round(opt.pernas) : RUP_PERNAS; // V77: /radar [dias] pernasX alvoX
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const dd = Math.min(9, Math.max(1, Math.round(dias || 7)));
   const desde = new Date(Date.now() - dd * 86400000).toISOString();
-  const busca = (cols: string) => SB.from(PLACAR_TABELA).select(cols).gt("criado_em", desde).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).limit(500);
-  let { data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf");
-  if (error && /conf/i.test(String(error.message || ""))) ({ data, error } = await busca("instid, lado, tipo, status, preco, criado_em")); // coluna conf ausente: segue sem a quebra por nota
-  if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas de radar: ${String(error.message || error).slice(0, 120)}`); return; }
-  const rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em);
-  if (!rows.length) { await sendTelegram(chatId, `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
+  let rows: any[] = [];
+  if (opt?.fonte === "faca") { // V98: os candidatos do modo faca vêm da linha própria (_FACA_SOMBRA_), não do log do placar
+    const lista = await facaLer(SB);
+    if (!lista) { await sendTelegram(chatId, "⚠️ Não consegui ler o modo faca no Supabase."); return; }
+    const corteMs = Date.now() - dd * 86400000;
+    rows = lista.filter((r) => r.t > corteMs && Number(r.p) > 0).map((r) => ({ instid: r.i, lado: "short", tipo: "faca", status: "🔪 FACA", preco: r.p, criado_em: new Date(r.t).toISOString(), conf: r.c }));
+  } else {
+    const busca = (cols: string) => SB.from(PLACAR_TABELA).select(cols).gt("criado_em", desde).in("tipo", ["topo", "fundo"]).order("criado_em", { ascending: false }).limit(500);
+    let { data, error } = await busca("instid, lado, tipo, status, preco, criado_em, conf");
+    if (error && /conf/i.test(String(error.message || ""))) ({ data, error } = await busca("instid, lado, tipo, status, preco, criado_em")); // coluna conf ausente: segue sem a quebra por nota
+    if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas de radar: ${String(error.message || error).slice(0, 120)}`); return; }
+    rows = ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em);
+  }
+  if (!rows.length) { await sendTelegram(chatId, opt?.fonte === "faca" ? `🔪 <b>MODO FACA</b> (${FACA_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Modo atual: ${FACA_MODO} · ADX ≥ ${FACA_ADX_MIN} · nota ≥ ${FACA_CONF_MIN}/10. Ele grava sozinho a cada rodada do cron.` : `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
@@ -4065,10 +4171,10 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
       for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= emMs && emMs < d.t[i] + TFMS) { k0 = i; break; } }
       if (k0 < 20) continue;
       const preco0 = Number(r.preco), atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
-      const tipo: HipTipo = String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
+      const tipo: HipTipo = r.tipo === "faca" ? "faca" : String(r.status).includes("REPIQUE") ? "repique" : r.tipo === "fundo" ? "fundo" : "topo";
       const lado: HipLado = r.lado === "long" ? "long" : "short";
       const k24 = k0 - Math.round(1440 / TF_MIN), c24 = k24 >= 0 ? d.c[k24] : 0, mov24 = c24 > 0 ? (preco0 / c24 - 1) * 100 : null; // V76: variacao de 24h ate o alerta
-      const ext = mov24 === null ? null : lado === "short" ? mov24 : -mov24; // positivo = ja andou NO sentido que o radar quer reverter (topo: subiu; fundo: caiu)
+      const ext = mov24 === null ? null : tipo === "faca" ? -mov24 : lado === "short" ? mov24 : -mov24; // faca: quanto a moeda já CAIU (positivo) // positivo = ja andou NO sentido que o radar quer reverter (topo: subiu; fundo: caiu)
       const adxA = adxS[k0 - 1], adxAlerta = Number.isFinite(adxA) ? adxA : null;
       const opostoLado: HipLado = lado === "long" ? "short" : "long", maxB = Math.max(1, Math.round((HIP_HORAS * 60) / TF_MIN)); // V77: simulação do rompimento da vela do alerta
       itens.push({ tipo, inst: id, lado, emMs, preco: preco0, conf: r.conf == null ? null : Number(r.conf), ext, adx: adxAlerta, ...hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN),
@@ -4077,20 +4183,20 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
   });
   const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
   const sg = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
-  let m = `📡 <b>RADARES — o que aconteceu depois do alerta</b> · ${dd} dia(s)${opt?.pernas || opt?.alvo ? ` · 🚪 teste: ${pernasMax} ${pernasMax === 1 ? "perna" : "pernas"} · alvo ${alvoR}R` : ""}\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
-  for (const tipo of ["topo", "fundo", "repique"] as HipTipo[]) {
+  let m = `${opt?.fonte === "faca" ? `🔪 <b>MODO FACA (${FACA_MODO}) — o que aconteceu depois do candidato</b> · SHORT de continuação em fundo com ADX ≥ ${FACA_ADX_MIN}` : "📡 <b>RADARES — o que aconteceu depois do alerta</b>"} · ${dd} dia(s)${opt?.pernas || opt?.alvo ? ` · 🚪 teste: ${pernasMax} ${pernasMax === 1 ? "perna" : "pernas"} · alvo ${alvoR}R` : ""}\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
+  for (const tipo of (opt?.fonte === "faca" ? ["faca"] : ["topo", "fundo", "repique"]) as HipTipo[]) {
     const g = itens.filter((x) => x.tipo === tipo);
     if (!g.length) continue;
     const c = (r: HipRes) => g.filter((x) => x.res === r).length, pc = (n: number) => `${Math.round((n / g.length) * 100)}%`;
     const inval = g.filter((x) => x.res === "invalida");
-    m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
+    m += `${tipo === "topo" ? "🔴" : tipo === "fundo" ? "🟢" : tipo === "faca" ? "🔪" : "⭐"} <b>${HIP_NOME[tipo][0].toUpperCase()}${HIP_NOME[tipo].slice(1)}</b> (n=${g.length})\n`;
     m += `invalidou ${c("invalida")} (${pc(c("invalida"))}) · funcionou ${c("funcionou")} (${pc(c("funcionou"))}) · sem desfecho ${c("expirou") + c("aberta")}\n`;
     m += `a favor mediano ${sg(_med(g.map((x) => x.mfe)))}% · contra mediano ${sg(-_med(g.map((x) => x.mae)))}%${inval.length ? ` · invalida em ~${(_med(inval.map((x) => x.barras)) * TF_MIN / 60).toFixed(1)}h` : ""}\n`;
     m += hipLinhasFatias(g); // V76: por nota exata, esticada em 24h e ADX
     m += hipLinhasBanda(g); // V74: por nota de confiança do alerta
     { // V77: operar só no rompimento da vela do alerta
-      const regraA = tipo === "fundo" ? "fundo (LONG) só entra rompendo a MÁXIMA da vela do alerta" : "topo (SHORT) só entra rompendo a MÍNIMA da vela do alerta";
-      const regraB = tipo === "fundo" ? "contrária: fundo entra VENDIDO rompendo a mínima" : "contrária: topo entra COMPRADO rompendo a máxima";
+      const regraA = tipo === "faca" ? "faca (SHORT, a queda continua) só entra rompendo a MÍNIMA da vela do alerta" : tipo === "fundo" ? "fundo (LONG) só entra rompendo a MÁXIMA da vela do alerta" : "topo (SHORT) só entra rompendo a MÍNIMA da vela do alerta";
+      const regraB = tipo === "faca" ? "contrária: entra COMPRADO rompendo a máxima (a reversão que o fundo clássico apostaria)" : tipo === "fundo" ? "contrária: fundo entra VENDIDO rompendo a mínima" : "contrária: topo entra COMPRADO rompendo a máxima";
       m += `\n🚪 <b>Só no rompimento da vela do alerta</b> (stop no extremo oposto · alvo ${alvoR}R · espera até ${RUP_ESPERA} velas)\n`;
       m += rupLinha(`A) ${regraA}`, g.map((x) => x.rA), true);
       m += rupLinha(`B) ${regraB}`, g.map((x) => x.rB), true);
@@ -5102,6 +5208,81 @@ async function runRadarConf(chatId: number | string, dias: number) {
     m += `\n`;
   }
   m += `<i>Cuidado: cada nota isolada tem poucos alertas; olhe o resumo por faixa e espere o n crescer antes de mudar o corte de confiança do radar. Uso: /radarconf 30</i>`;
+  for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
+}
+// V99: /reversaoconf [dias] — alertas de REVERSÃO (virada contra o dia) abertos por nota de confiança, lado (LONG = fundo / SHORT = topo), ADX e esticada em 24h.
+// Mesmo molde do /radarconf. Esticada = quanto a moeda já andou em 24h NO SENTIDO que a reversão quer desfazer (SHORT: alta; LONG: queda), de r.pct24.
+// Cada fatia é calculada separada (não cruzada): com corte de nota 7 (SHORT) / 6 (LONG) a amostra por fatia já é pequena. Só lê o log, não muda o banco.
+async function runReversaoConf(chatId: number | string, dias: number) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const desde = new Date(Date.now() - dias * 86400000).toISOString();
+  const { data, error } = await lerPaginado((a, b) => SB.from(PLACAR_TABELA).select("*").gt("criado_em", desde).order("criado_em", { ascending: false }).range(a, b));
+  if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler o placar: ${String(error.message || error).replace(/</g, "&lt;")}`); return; }
+  const rev = ((data || []) as any[]).filter((r) => !ehFinalLog(r) && !ehDescartadoLog(r) && r.tipo === "reversao" && !String(r.status || "").includes("REPIQUE"));
+  if (!rev.length) { await sendTelegram(chatId, `🔄 <b>REVERSÃO POR CONFIANÇA</b>\n\nNenhum alerta de reversão nos últimos ${dias} dia(s).`); return; }
+  const rets = (g: any[], h: number) => g.map((r) => retornoLog(r, h)).filter((x): x is number => x !== null);
+  const bloco = (nome: string, g: any[]) => {
+    const r4 = rets(g, 240), pf = _profitFactor(r4);
+    return `<b>${nome}</b> (n=${g.length})\n${linhaStats(g, [15, ...PLACAR_HORIZ_EXIBE])}${r4.length >= 5 && isFinite(pf) ? ` · PF 4h ${pf.toFixed(2)}` : ""}${g.length < 15 ? "\n<i>amostra pequena</i>" : ""}\n\n`;
+  };
+  const sec = (t: string) => `${MINI_DIVISOR}\n<b>${t}</b>\n${MINI_DIVISOR}\n\n`;
+  const ext = (r: any): number | null => {
+    if (r.pct24 == null || !isFinite(Number(r.pct24))) return null;
+    return r.lado === "short" ? Number(r.pct24) : -Number(r.pct24);
+  };
+  const ranque = (titulo: string, itens: { nome: string; g: any[] }[], h: number, rot: string) => {
+    const lista = itens.map(({ nome, g }) => { const x = rets(g, h); return { nome, n: x.length, med: _med(x) }; }).filter((o) => o.n >= 15 && isFinite(o.med));
+    if (lista.length < 2) return "";
+    lista.sort((a, b) => b.med - a.med);
+    const mel = lista[0], pior = lista[lista.length - 1];
+    return `🏆 <b>${titulo} (${rot}, 15+ conferidos):</b> melhor ${mel.nome} (${_sg(mel.med)}, n=${mel.n}) · pior ${pior.nome} (${_sg(pior.med)}, n=${pior.n})\n`;
+  };
+  const ent = rev.filter((r) => r.ent_status === "entrou");
+  let m = `🔄 <b>REVERSÃO POR CONFIANÇA</b> — últimos ${dias} dia(s)\n${DIVISOR}\n${rev.length} alerta(s) de reversão, ${ent.length} em que o robô entrou\n<i>Colunas: 15m · 1h · 4h · 24h. Acerto = preço a favor do lado do alerta (LONG = fundo, SHORT = topo) desde o alerta; % = retorno mediano já com taxa (${TAXA_IDA_VOLTA_PCT.toFixed(2)}% ida e volta). Cada fatia é separada das outras (não cruzada).</i>\n\n`;
+  m += bloco("Todas as reversões", rev);
+  if (ent.length && ent.length < rev.length) m += bloco("Só as que o robô entrou", ent);
+  // 1) por nota exata + faixas
+  const comConf = rev.filter((r) => r.conf != null);
+  m += sec("Por confiança");
+  if (!comConf.length) m += `<i>Sem confiança gravada nesses alertas.</i>\n\n`;
+  else {
+    const niveis = [...new Set(comConf.map((r) => Number(r.conf)))].sort((a, b) => a - b);
+    for (const n of niveis) m += bloco(`Confiança ${n}/10`, comConf.filter((r) => Number(r.conf) === n));
+    const faixas: { nome: string; g: any[] }[] = [
+      { nome: "➖ 6–7", g: comConf.filter((r) => Number(r.conf) <= 7) },
+      { nome: "⬆️ 8", g: comConf.filter((r) => Number(r.conf) === 8) },
+      { nome: "🔝 9–10", g: comConf.filter((r) => Number(r.conf) >= 9) },
+    ];
+    m += `<b>Resumo por faixa</b>\n`;
+    for (const f of faixas) if (f.g.length) m += bloco(f.nome, f.g);
+    m += ranque("Melhor faixa", faixas, 1440, "24h") + ranque("Melhor faixa", faixas, 240, "4h") + ranque("Melhor faixa", faixas, 15, "15 min");
+    m += `\n`;
+  }
+  // 2) por lado
+  const lados = [{ nome: "🟢 LONG (virada pra cima, fundo)", g: rev.filter((r) => r.lado === "long") }, { nome: "🔴 SHORT (virada pra baixo, topo)", g: rev.filter((r) => r.lado === "short") }];
+  m += sec("Por lado");
+  for (const l of lados) if (l.g.length) m += bloco(l.nome, l.g);
+  // 3) por ADX
+  const adxF = [
+    { nome: "😴 ADX < 20", g: rev.filter((r) => r.adx != null && Number(r.adx) < 20) },
+    { nome: "😐 ADX 20–30", g: rev.filter((r) => r.adx != null && Number(r.adx) >= 20 && Number(r.adx) < 30) },
+    { nome: "💪 ADX ≥ 30", g: rev.filter((r) => r.adx != null && Number(r.adx) >= 30) },
+  ];
+  m += sec("Por força da tendência (ADX)");
+  for (const f of adxF) if (f.g.length) m += bloco(f.nome, f.g);
+  m += ranque("Melhor ADX", adxF, 1440, "24h");
+  // 4) por esticada
+  const estF = [
+    { nome: "esticada < 5%", g: rev.filter((r) => { const e = ext(r); return e !== null && e < 5; }) },
+    { nome: "esticada 5% a 15%", g: rev.filter((r) => { const e = ext(r); return e !== null && e >= 5 && e < 15; }) },
+    { nome: "esticada 15% a 25%", g: rev.filter((r) => { const e = ext(r); return e !== null && e >= 15 && e < 25; }) },
+    { nome: "esticada ≥ 25%", g: rev.filter((r) => { const e = ext(r); return e !== null && e >= 25; }) },
+  ];
+  m += `\n` + sec("Por esticada em 24h (andou no sentido que a reversão quer desfazer)");
+  for (const f of estF) if (f.g.length) m += bloco(f.nome, f.g);
+  m += ranque("Melhor esticada", estF, 1440, "24h");
+  m += `\n<i>Cuidado: com corte de nota ${CONF_MIN_REVERSAO} (SHORT) e ${CONF_MIN_FUNDO_LONG} (LONG) cada fatia tem poucos alertas; só confie onde n ≥ 15 e espere crescer antes de mudar CONF_MIN_REVERSAO. Uso: /reversaoconf 30</i>`;
   for (const parte of dividirHtml(m)) await sendTelegram(chatId, parte);
 }
 // V92: /radarconf retro — refaz, com as velas dos últimos ~9 dias, a nota do RADAR DE TOPO (calcTopoPre) de cada moeda de tempos em tempos e mede o que aconteceu depois (SHORT),
@@ -8646,11 +8827,13 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
 
   sec("📊 Resultados", [
     ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
+    ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por quanto a moeda já esticou em 24h — pra decidir se vale mexer no CONF_MIN_REVERSAO. O número é a quantidade de dias"],
     ["🗜️ /compressao 30", "compressão por faixa de confiança, ADX e lado", "mostra, só pra compressão, qual faixa de confiança (6, 7, 8, 9–10), de ADX e de lado rende melhor (acerto e retorno mediano em 1h, 4h e 24h) — pra decidir se vale subir o COMPRESS_CONF_MIN. O número é a quantidade de dias"],
     ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
     ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
     ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro)"],
     ["📚 /radarhist 30", "histórico dos radares acumulado no Supabase", "o que o /radar mostra, mas guardado dia a dia (além dos 9 dias das velas): por tipo, por esticada em 24h (inclui 25% ou mais) e por ADX. Grava sozinho na virada das 21h; /radarhist gravar força agora"],
+    ["🔪 /faca 7", "modo faca: fundo com ADX alto como continuação (SHORT)", "candidatos do modo faca (FACA_MODO: sombra grava em silêncio, alerta também avisa, off desliga): o que aconteceu depois, com as mesmas regras do /radar (invalidou/funcionou, rompimento da vela, virada). Fica fora do /placar. O número é a quantidade de dias (até 9)"],
     ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
     ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET"],
     ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
@@ -8727,8 +8910,8 @@ function montarConfig(): string {
   m += `⏱ <b>V32 · alerta dos minutos finais</b> (${on(FINAL_ON)})\n• 🚨 janela: de ${FINAL_JANELA_MAX_MIN} a ${FINAL_JANELA_MIN_MIN} min antes do fechamento da vela ${TIMEFRAME} (cron a cada 1–2 min)\n• avisa se o preço já está ${FINAL_ENTRADA_PCT}%+ além da linha projetada · cancela só se recuar ${FINAL_CANCELA_PCT}% (ou ${FINAL_CANCELA_ATR}×ATR) pra dentro (histerese)\n• 🕒 PREPARE: de ${FINAL_PREPARE_MAX_MIN} a ${FINAL_JANELA_MAX_MIN} min antes, moeda a ≤ ${FINAL_PREPARE_DIST_PCT}% da linha e chegando (máx ${FINAL_PREPARE_MAX} por rodada, confiança mín. −${FINAL_PREPARE_FOLGA_CONF})\n• 🔜 se a vela fechar sem cruzar mas seguir a ≤ ${FINAL_PROXIMA_DIST_PCT}% da linha e chegando, avisa que a chance passa pra próxima vela\n• ⚡ janela forte de horário no fechamento · placar próprio no /placar (${on(FINAL_PLACAR_ON)})\n• pré-filtro ${FINAL_PREFILTRO_PCT}% da linha · máx ${FINAL_MAX_POR_RODADA} por rodada · confirma ✅/❌ no fechamento\n\n`;
   m += `🛡️ <b>V29</b>\n• filtro BTC: ${on(BTC_DIR_ON)} (±${BTC_DIR_PCT}%/h pontua) · reversão barrada contra BTC ≥ ±${BTC_BLOQ_REV_PCT}%/h (SHORT com BTC subindo · LONG com BTC caindo)${BTC_BLOQ_REV_PCT > 0 ? "" : " (desligado)"}\n• webhook: ${WEBHOOK_SECRET ? "com secret_token ✅" : "SEM secret_token ⚠️"} · cron: ${CRON_SO_HEADER ? "só por header ✅" : "aceita segredo na URL ⚠️"}\n• anti-repetição salva no Supabase\n\n`;
   m += `📐 <b>V36 · inclinação e compressão</b>\n• inclinação da faixa (${INCLINA_JAN} velas, em velas típicas por vela): forte ≥ ${INCLINA_FORTE} (−2 contra) · moderada ≥ ${INCLINA_MOD} (−1 contra, +1 a favor) · plana ≤ ${INCLINA_PLANA} · virada com sinais de fundo/topo: penalidade aliviada\n• 1º cruzamento em faixa comprimida sem volume ≥ ${VOL_ACEL_RATIO}×: −1\n• 🗜️ radar de compressão (${on(COMPRESS_ON)}): faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica (muito: ≤ ${Math.round(COMPRESS_REL * 100)}%) · volume ≥ ${COMPRESS_VOL_MIN}× · confiança ≥ ${COMPRESS_CONF_MIN}/10 · rodízio de ${COMPRESS_ROT_N} pares por rodada · cooldown ${COMPRESS_COOLDOWN_MIN} min · máx ${COMPRESS_MAX_POR_RODADA} por rodada · entra no /placar (lado do 1º fechamento fora da faixa, em até ${ENTRADA_MAX_CANDLES * TF_MIN} min)\n• ⭐ repique nos dois lados (SHORT no radar de topo · LONG no radar de fundo): bônus +${REPIQUE_BONUS} pt · confiança mín. ${REPIQUE_CONF_MIN}/10 (topo comum ${TOPO_CONF_MIN}) · cooldown ${REPIQUE_COOLDOWN_MIN} min · até ${REPIQUE_MAX_POR_RODADA} por rodada · placar separado por lado · tipo (oportunidade/reversão) só considera o dia virado fora de ±${REPIQUE_PCT_ZONA}% (zona morta contra ruído perto de 0%)\n• 📋 /oportunidade e /reversao: top ${LISTA_POOL_LADO} que mais subiram + top ${LISTA_POOL_LADO} que mais caíram, classificados pelo LADO da virada (igual ao alerta)\n\n`;
-  m += `🔴 <b>V35 · radar de topo</b> (${on(TOPO_ON)})\n• alta ≥ ${TOPO_ALTA_MIN}% (em 24h ou desde a mínima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_ALTA} · rejeição na faixa após alta ≥ ${TOPO_TOQUE_VALE_MIN}% pontua · confiança ≥ ${TOPO_CONF_MIN}/10 · pré-filtro ≥ ${TOPO_PRE_MIN} pts · cooldown ${TOPO_COOLDOWN_MIN} min\n\n`;
-  m += `🟢 <b>V28/V34 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% (em 24h ou desde a máxima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_RECUO} moedas que mais recuaram · toque na faixa após recuo ≥ ${FUNDO_TOQUE_PICO_MIN}% pontua · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n• V63: book (±${BOOK_IMB_MIN_PCT}%) e inclinação da faixa também contam a favor/contra a virada (antes só funding/OI/BTC) · no /analise, /fundo e /topo com inclinação; nas listas em massa só o book\n• V59: no /analise, sem radar aceso e moeda ≥3× ATR esticada a favor do robô, aviso ⚠️ "já esticou" (entrada tardia)\n\n`;
+  m += `🔴 <b>V35 · radar de topo</b> (${on(TOPO_ON)})\n• V97: ${TOPO_ADX_MAX > 0 ? `só alerta com ADX < ${TOPO_ADX_MAX} (TOPO_ADX_MAX; repique fica de fora)` : "corte por ADX desligado (TOPO_ADX_MAX=0)"}\n• alta ≥ ${TOPO_ALTA_MIN}% (em 24h ou desde a mínima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_ALTA} · rejeição na faixa após alta ≥ ${TOPO_TOQUE_VALE_MIN}% pontua · confiança ≥ ${TOPO_CONF_MIN}/10 · pré-filtro ≥ ${TOPO_PRE_MIN} pts · cooldown ${TOPO_COOLDOWN_MIN} min\n\n`;
+  m += `🟢 <b>V28/V34 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% (em 24h ou desde a máxima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_RECUO} moedas que mais recuaram · toque na faixa após recuo ≥ ${FUNDO_TOQUE_PICO_MIN}% pontua · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• V97: ${FUNDO_ADX_MAX > 0 ? `não alerta com ADX ≥ ${FUNDO_ADX_MAX} (FUNDO_ADX_MAX)` : "corte por ADX desligado (FUNDO_ADX_MAX=0)"}\n• V98: modo faca (${FACA_MODO}): fundo com ADX ≥ ${FACA_ADX_MIN} e nota ≥ ${FACA_CONF_MIN}/10 vira candidato SHORT de continuação (FACA_MODO=sombra|alerta|off) · /faca\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n• V63: book (±${BOOK_IMB_MIN_PCT}%) e inclinação da faixa também contam a favor/contra a virada (antes só funding/OI/BTC) · no /analise, /fundo e /topo com inclinação; nas listas em massa só o book\n• V59: no /analise, sem radar aceso e moeda ≥3× ATR esticada a favor do robô, aviso ⚠️ "já esticou" (entrada tardia)\n\n`;
   m += `🧭 <b>V26</b>\n• squeeze: faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica · volume das velas ≥ ${VOL_ACEL_RATIO}× (seco ≤ ${VOL_SECO_RATIO}×)\n• alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou passar de 2× o prazo\n• confiança: verde ≥ ${CONF_VERDE}/10 · amarelo ≥ ${CONF_AMARELO}/10\n• modo pump (${on(ESTRAT_PUMP)}): mín. confiança oportunidade ${CONF_MIN_OPORT} · reversão ${CONF_MIN_REVERSAO} · serrote ≥ ${SERROTE_MAX} trocas/4h barra · RSI máx LONG ${FILTRO_RSI_MAX_LONG} · limite ${LIMITE_LADO} por lado\n`;
   m += `\n${MINI_DIVISOR}\n`;
   m += `🧹 <b>Filtros</b> (${on(ALERT_FILTROS_ON)})\n• volume ≥ ${(FILTRO_VOL_MIN_USDT / 1e6).toFixed(1)}M USDT (antes do corte do pool) · ADX ≥ ${FILTRO_ADX_MIN}${FILTRO_ADX_SUBINDO ? ` e subindo${FILTRO_ADX_SUBINDO_ATE > 0 ? ` (só exige subir abaixo de ${FILTRO_ADX_SUBINDO_ATE})` : ""}` : ""}\n• ${ESTRAT_PUMP ? `RSI (modo pump, um lado só): LONG barrado acima de ${FILTRO_RSI_MAX_LONG} · SHORT barrado abaixo de ${FILTRO_RSI_MIN}` : `RSI entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX}`} · distância ≤ ${FILTRO_DIST_MAX_PCT}% (só nas listas)\n• amplitude mín. ${FILTRO_AMPLITUDE_MIN > 0 ? `${FILTRO_AMPLITUDE_MIN}%` : "desligada"}\n• 🚫 lista negra (${BLACKLIST_MOEDAS.size}): ${BLACKLIST_MOEDAS.size ? [...BLACKLIST_MOEDAS].sort().join(", ") : "nenhuma"}\n\n`;
@@ -8965,6 +9148,12 @@ Deno.serve(async (req) => {
       await comAguarde("📚 Lendo o histórico dos radares, aguarde...", () => runRadarHist(chatId, dH, gravarH));
       return new Response("ok");
     }
+    if (text === "/faca" || text.startsWith("/faca ") || text.startsWith("/faca@")) {
+      // V98: /faca [dias] — resultado do modo faca (candidatos gravados em silêncio ou enviados), com as mesmas regras do /radar
+      const dF = Math.min(9, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
+      await comAguarde("🔪 Avaliando o modo faca, aguarde...", () => runRadarStats(chatId, dF, { fonte: "faca" }));
+      return new Response("ok");
+    }
     if (text === "/radar" || text.startsWith("/radar ") || text.startsWith("/radar@")) {
       // V77: /radar [dias] [pernasN] [alvoN] — ex.: /radar 9 pernas2 alvo3 (ordem livre; alvo aceita decimal: alvo1.5 ou alvo1,5)
       const argsR = text.split(/\s+/).slice(1);
@@ -9014,6 +9203,12 @@ Deno.serve(async (req) => {
       if (cfg && !(cfg.trava > 0 && cfg.cb > 0)) { await sendTelegram(chatId, "⚠️ Trava e callback precisam ser maiores que zero. Ex.: /saida 9 QNT 5/3.5"); return new Response("ok"); }
       const filtro = tudo || !SAIDA_FILTRO_PADRAO ? null : { mov: SAIDA_MOV_PADRAO, adx: SAIDA_ADX_PADRAO, subindo: SAIDA_ADX_SUBINDO };
       await comAguarde("🚪 Simulando a saída real, aguarde...", () => runSaida(chatId, dias, { moeda, cfg: cfg ?? SAIDA_CFG_PADRAO, filtro }));
+      return new Response("ok");
+    }
+    if (text === "/reversaoconf" || text.startsWith("/reversaoconf ") || text.startsWith("/reversaoconf@")) {
+      // V99: /reversaoconf [dias] — reversão por nota, lado, ADX e esticada
+      const diasRv = Math.min(90, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 30)));
+      await rodarEmBackground(runReversaoConf(chatId, diasRv));
       return new Response("ok");
     }
     if (text === "/radarconf" || text.startsWith("/radarconf ") || text.startsWith("/radarconf@")) {
