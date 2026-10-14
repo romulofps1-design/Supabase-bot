@@ -6313,6 +6313,117 @@ async function runRadarSim(chatId: number | string, dias: number, soRegra: boole
   m += `<i>Os alertas entram em sequência, sem limite de posições nem de capital. Prazo ainda não terminado = fora da conta. Ex.: /radarsim 9 regra stop1 alvo2 horas 1,2,4 · /radarsim 9 stop3 horas 4,8,24 · stop0 = sem stop · alvo0 = sem alvo · trailX = stop móvel · armaY = arma depois de +Y ATR · beX = zero a zero · btc = separa pelo humor do BTC · mov = separa pelo movimento da moeda no dia (com "romp", no rompimento) · cruz = alertas do cruzamento (ligo no alerta, o robô entra, desligo e sigo com stop) · com cruz, viradas 0,1,3 = compara até N viradas. Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h.</i>`;
   await enviarEmPartes(chatId, m);
 }
+// ===== V107: /facasim [dias] [foguete] [stopX] [alvoX] [horas a,b] — onde entrar no modo faca (ou foguete) =====
+// Compara três entradas nos MESMOS candidatos, a partir das velas (não precisa gravar nada novo; vale pros candidatos já guardados):
+// (1) direto no preço do candidato; (2) rompendo a mínima da vela do candidato (máxima no foguete) em até RUP_ESPERA velas, cancela se romper o outro
+// lado antes (a ideia que o alerta da faca descreve); (3) rompendo o ÚLTIMO FUNDO ANTERIOR ainda não perdido (topo no foguete): o pivô mais recente
+// (FACASIM_PIVO_ESQ velas à esquerda e FACASIM_PIVO_DIR à direita, já confirmado na vela do candidato, até FACASIM_PIVO_VELAS velas pra trás) que
+// nenhuma vela depois dele furou; espera até FACASIM_ESPERA velas. Entrada no nível (ou na abertura, se abrir além) e o stop é conferido já na vela do
+// rompimento (pior caso). 1R = 1×ATR da vela do candidato, taxa descontada. Pra comparar em pé de igualdade, também mostra o "direto" só nos que romperam.
+const FACASIM_PIVO_ESQ = numEnv("FACASIM_PIVO_ESQ", "5");
+const FACASIM_PIVO_DIR = numEnv("FACASIM_PIVO_DIR", "3");
+const FACASIM_PIVO_VELAS = numEnv("FACASIM_PIVO_VELAS", "96");
+const FACASIM_ESPERA = numEnv("FACASIM_ESPERA", "16");
+// V107: sem stop/alvo no comando, compara este pacote (apertado, padrão, solto, alvo curto, zero a zero e stop móvel sem alvo)
+const FACASIM_PACOTE: SimCfg[] = [
+  { stopAtr: 0.5, alvoR: 2 }, { stopAtr: 1, alvoR: 2 }, { stopAtr: 2, alvoR: 2 }, { stopAtr: 1, alvoR: 1 },
+  { stopAtr: 1, alvoR: 2, beAtr: 1 }, { stopAtr: 1, alvoR: 0, trailAtr: 1, armaAtr: 1 },
+];
+async function runFacaSim(chatId: number | string, dias: number, foguete: boolean, cfgs: SimCfg[], horas: number[]) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const dd = Math.min(9, Math.max(1, Math.round(dias || 7)));
+  const lista = foguete ? await fogueteLer(SB) : await facaLer(SB);
+  const titulo = foguete ? "🚀 <b>FOGUETE: ONDE ENTRAR</b>" : "🔪 <b>FACA: ONDE ENTRAR</b>";
+  if (!lista) { await sendTelegram(chatId, `⚠️ Não consegui ler o modo ${foguete ? "foguete" : "faca"} no Supabase.`); return; }
+  const corteMs = Date.now() - dd * 86400000;
+  const cands = lista.filter((r) => r.t > corteMs && Number(r.p) > 0 && desdeOk(desdeDoChat(chatId), r.t, r.v));
+  if (!cands.length) { await sendTelegram(chatId, `${titulo}\n\nNenhum candidato gravado nos últimos ${dd} dia(s).`); return; }
+  const lado: HipLado = foguete ? "long" : "short", long = foguete;
+  const porMoeda = new Map<string, FacaReg[]>();
+  for (const r of cands) { const a = porMoeda.get(r.i) || []; a.push(r); porMoeda.set(r.i, a); }
+  const TFMS = TF_MIN * 60000, E = Math.max(1, FACASIM_PIVO_ESQ), D = Math.max(1, FACASIM_PIVO_DIR);
+  type It = { dir: Map<string, SimRes>; vela: Map<string, SimRes> | null; piv: Map<string, SimRes> | null; temPiv: boolean; distAtr: number | null; velasAte: number | null };
+  const itens: It[] = [];
+  await emLotes([...porMoeda.keys()], 5, async (id) => {
+    const d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
+    if (!d) return;
+    for (const r of porMoeda.get(id)!) {
+      let k0 = -1;
+      for (let i = d.t.length - 1; i >= 0; i--) { if (d.t[i] <= r.t && r.t < d.t[i] + TFMS) { k0 = i; break; } }
+      if (k0 < E + D + 20 || k0 >= d.c.length - 1) continue;
+      const atr = calcATR(d.h.slice(0, k0 + 1), d.l.slice(0, k0 + 1), d.c.slice(0, k0 + 1), 14);
+      if (!(atr > 0)) continue;
+      const px = Number(r.p);
+      const sim = (kIni: number, ent: number, checa: boolean) => {
+        const mp = new Map<string, SimRes>();
+        cfgs.forEach((cf, ci) => { for (const h of horas) mp.set(`${ci}|${h}`, simSegurar(d, kIni, lado, ent, atr, Math.max(1, Math.round((h * 60) / TF_MIN)), cf, checa)); });
+        return mp;
+      };
+      // (2) rompimento da vela do candidato
+      const hi = d.h[k0], lo = d.l[k0];
+      let kV = -1, pxV = 0;
+      for (let k = k0 + 1; k <= Math.min(k0 + RUP_ESPERA, d.c.length - 1); k++) {
+        const gat = long ? d.h[k] > hi : d.l[k] < lo, contra = long ? d.l[k] < lo : d.h[k] > hi;
+        if (gat) { kV = k; pxV = long ? Math.max(hi, d.o[k]) : Math.min(lo, d.o[k]); break; }
+        if (contra) break;
+      }
+      // (3) último fundo (topo no foguete) anterior ainda não perdido: pivô confirmado até a vela do candidato
+      let nivel: number | null = null;
+      for (let j = k0 - D; j >= Math.max(E, k0 - FACASIM_PIVO_VELAS); j--) {
+        let ehPiv = true;
+        for (let x = j - E; x <= j + D && ehPiv; x++) if (x !== j && (long ? d.h[x] >= d.h[j] : d.l[x] <= d.l[j])) ehPiv = false;
+        if (!ehPiv) continue;
+        const nv = long ? d.h[j] : d.l[j];
+        let furado = false;
+        for (let x = j + 1; x <= k0 && !furado; x++) if (long ? d.h[x] > nv : d.l[x] < nv) furado = true;
+        if (!furado) { nivel = nv; break; }
+      }
+      let kP = -1, pxP = 0;
+      if (nivel !== null) for (let k = k0 + 1; k <= Math.min(k0 + FACASIM_ESPERA, d.c.length - 1); k++) {
+        if (long ? d.h[k] > nivel : d.l[k] < nivel) { kP = k; pxP = long ? Math.max(nivel, d.o[k]) : Math.min(nivel, d.o[k]); break; }
+      }
+      itens.push({
+        dir: sim(k0 + 1, px, false),
+        vela: kV > 0 ? sim(kV + 1, pxV, true) : null,
+        piv: kP > 0 ? sim(kP + 1, pxP, true) : null,
+        temPiv: nivel !== null,
+        distAtr: nivel !== null ? Math.abs(px - nivel) / atr : null,
+        velasAte: kP > 0 ? kP - k0 : null,
+      });
+    }
+  });
+  if (!itens.length) { await sendTelegram(chatId, `${titulo}\n\nNão consegui as velas dos candidatos. Tente de novo em alguns minutos.`); return; }
+  const fmt = (xs: SimRes[]): string => {
+    const v = xs.filter((x): x is NonNullable<SimRes> => !!x);
+    if (!v.length) return "<i>sem resultado</i>";
+    const rs = v.map((x) => x.r), ac = rs.filter((x) => x > 0).length, med = rs.reduce((t, x) => t + x, 0) / rs.length;
+    const sem3 = rs.length > 5 ? [...rs].sort((a, b) => b - a).slice(3) : null;
+    const sg = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(2)}`;
+    return `${Math.round((ac / rs.length) * 100)}% ${sg(med)}R${sem3 ? ` (s/3 ${sg(sem3.reduce((t, x) => t + x, 0) / sem3.length)})` : ""}${rs.length < 15 ? "⚠️" : ""}`;
+  };
+  const hTxt = (h: number) => (h < 1 ? `${Math.round(h * 60)}min` : `${h}h`);
+  const linha = (rot: string, g: It[], pega: (i: It) => Map<string, SimRes> | null, ci: number) =>
+    `  ${rot} (n=${g.filter((i) => pega(i)).length}): ${horas.map((h) => `${hTxt(h)} ${fmt(g.map((i) => pega(i)?.get(`${ci}|${h}`) ?? null))}`).join(" · ")}\n`;
+  const nVela = itens.filter((i) => i.vela).length, comPiv = itens.filter((i) => i.temPiv), nPiv = itens.filter((i) => i.piv).length;
+  const dists = comPiv.map((i) => i.distAtr!).filter((x) => isFinite(x)), vAte = itens.map((i) => i.velasAte).filter((x): x is number => x !== null);
+  const ext = foguete ? "topo" : "fundo", romp = foguete ? "máxima" : "mínima";
+  const romperam = itens.filter((i) => i.piv), naoRomperam = itens.filter((i) => !i.piv);
+  let m = `${titulo} — ${dd} dia(s) · ${itens.length} candidato(s) · ${foguete ? "LONG" : "SHORT"} de continuação\n${DIVISOR}\n`;
+  m += `<i>1R = 1×ATR da vela do candidato · taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada · stop e alvo contados a partir da entrada. Rompimento: entra no nível (ou na abertura, se abrir além) e o stop já vale na vela do rompimento (pior caso). Último ${ext} anterior = pivô ${E}/${D} velas ainda não perdido, até ${FACASIM_PIVO_VELAS} velas pra trás; espera até ${FACASIM_ESPERA} velas. Cada célula: acerto · média em R (s/3 = sem os 3 melhores); ⚠️ = menos de 15.</i>\n\n`;
+  m += `📍 Último ${ext} anterior: achado em ${comPiv.length} de ${itens.length} · distância mediana do preço do candidato ${dists.length ? `${_med(dists).toFixed(1)} ATR` : "—"} · rompeu em ${nPiv}${vAte.length ? ` (mediana ${Math.round(_med(vAte))} velas depois)` : ""} · rompeu a ${romp} da vela em ${nVela}\n`;
+  m += `1️⃣ direto no candidato · 2️⃣ rompendo a ${romp} da vela · 3️⃣ rompendo o último ${ext} anterior · ⚖️ direto, só nos que romperam o ${ext} (compare com o 3️⃣) · ✖️ direto, nos que não romperam\n\n`;
+  cfgs.forEach((cf, ci) => {
+    m += `${MINI_DIVISOR}\n<b>${simCfgTxt(cf)}</b>\n`;
+    m += linha("1️⃣", itens, (i) => i.dir, ci);
+    m += linha("2️⃣", itens, (i) => i.vela, ci);
+    m += linha("3️⃣", itens, (i) => i.piv, ci);
+    m += linha("⚖️", romperam, (i) => i.dir, ci);
+    m += linha("✖️", naoRomperam, (i) => i.dir, ci);
+  });
+  m += `\n<i>O justo é 3️⃣ x ⚖️ (mesmas moedas, entrada diferente); 1️⃣ x 3️⃣ favorece o 3️⃣, porque ele só existe quando a queda continua. Sem stop/alvo no comando, compara o pacote: apertado (0,5 ATR), padrão (1), solto (2), alvo curto (1R), zero a zero em +1 ATR e stop móvel sem alvo. Ou escolha: /facasim 7 stop0.5,1,2 alvo1,2,3 (todas as combinações, até 8) · trail1 = stop móvel a 1 ATR do melhor preço · arma1 = só começa a seguir depois de +1 ATR · be1 = zero a zero em +1 ATR · stop0 = sem stop · alvo0 = sem alvo · horas 2,4,8 · foguete = o espelho LONG. Pivô e espera nos Secrets FACASIM_PIVO_ESQ/DIR (${E}/${D}), FACASIM_PIVO_VELAS (${FACASIM_PIVO_VELAS}), FACASIM_ESPERA (${FACASIM_ESPERA}).</i>`;
+  await enviarEmPartes(chatId, m);
+}
 // ===== V107: /juncao [dias] [stopX] [alvoX] [horas a,b] — compara a junção CLÁSSICA x RÁPIDA (J6_MODO) =====
 // Os alertas foram gerados num modo só, então aqui a faixa é recalculada NOS DOIS MODOS a partir das velas, nas mesmas moedas (as que tiveram
 // alerta no período), e cada cruzamento vira uma entrada (fechamento da vela que fechou do outro lado da faixa, como o robô).
@@ -10119,6 +10230,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro) V107: acrescente mov15 (ou mov20, mov25) pra ver só as moedas que andaram 15%+ no dia; comp, oport, rev, fundo ou topo filtram por tipo de alerta (ex.: /saida 9 tudo comp desde V107 = a mão virada só na compressão nova); a mensagem também separa por faixa de movimento (📏)."],
     ["📚 /radarhist 30", "histórico dos radares acumulado no Supabase", "o que o /radar mostra, mas guardado dia a dia (além dos 9 dias das velas): por tipo, por esticada em 24h (inclui 25% ou mais) e por ADX. Grava sozinho na virada das 21h; /radarhist gravar força agora"],
     ["🚀 /foguete 7", "modo foguete: topo com ADX alto como continuação (LONG)", "espelho do modo faca: o topo que o radar não avisa por ADX alto (≥ FOGUETE_ADX_MIN, padrão 30) e com nota de topo ≥ FOGUETE_GRAVA_MIN (3) é gravado em silêncio como candidato LONG de continuação da alta. Mostra o que aconteceu depois, com as mesmas regras do /radar (inclusive por humor do BTC). FOGUETE_MODO=off desliga. A nota mede o quanto a alta parece topo: o LONG aposta contra ela, então nota maior não é LONG melhor."],
+    ["🔪 /facasim 7", "faca: onde entrar (direto x rompimento da vela x rompimento do último fundo anterior)", "pros candidatos do modo faca, compara 3 entradas SHORT: direto no preço do candidato, rompendo a mínima da vela do candidato e rompendo o último fundo anterior ainda não perdido (pivô). Mostra também o direto só nos que romperam o fundo, pra comparar em pé de igualdade. Sem stop/alvo no comando, compara um pacote de saídas: stop apertado (0,5 ATR), padrão (1), solto (2), alvo curto (1R), zero a zero e stop móvel sem alvo, em 2h e 4h. Ou escolha com listas: /facasim 7 stop0.5,1,2 alvo1,2,3 horas 2,4,8 (todas as combinações, até 8; trailX, armaY, beX, stop0/alvo0 = sem). /facasim 7 foguete = o mesmo pro foguete (LONG rompendo o último topo anterior). Até 9 dias."],
     ["🔪 /faca 7", "modo faca: fundo com ADX alto como continuação (SHORT)", "candidatos do modo faca (FACA_MODO: sombra grava em silêncio, alerta também avisa, off desliga): o que aconteceu depois, com as mesmas regras do /radar (invalidou/funcionou, rompimento da vela, virada). Fica fora do /placar. O número é a quantidade de dias (até 9)"],
     ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
     ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET"],
@@ -10526,6 +10638,27 @@ Deno.serve(async (req) => {
       // V107: /foguete [dias] — espelho do /faca: topo com ADX alto como LONG de continuação (só sombra)
       const dFg = Math.min(9, Math.max(1, Math.round(Number(text.split(/\s+/)[1]) || 7)));
       await comAguarde("🚀 Avaliando o modo foguete, aguarde...", () => runRadarStats(chatId, dFg, { fonte: "foguete" }));
+      return new Response("ok");
+    }
+    if (text === "/facasim" || text.startsWith("/facasim ") || text.startsWith("/facasim@")) {
+      // V107: /facasim [dias] [foguete] [stopX] [alvoX] [horas a,b] — faca (ou foguete): direto x rompimento da vela x rompimento do último fundo/topo anterior
+      const argsFs = text.split(/\s+/).slice(1);
+      const iHF = argsFs.findIndex((a) => a.startsWith("horas"));
+      const diasFs = Math.min(9, Math.max(1, Math.round(Number(argsFs.find((a, i) => /^\d+$/.test(a) && !(iHF >= 0 && argsFs[iHF] === "horas" && i === iHF + 1))) || 7)));
+      const numF = (pref: string, padrao: number) => { const a = argsFs.find((x) => x.startsWith(pref)); const v = a ? Number(a.slice(pref.length).replace(",", ".")) : NaN; return isFinite(v) && v >= 0 ? v : padrao; };
+      const hF = iHF >= 0 ? (argsFs[iHF] === "horas" ? argsFs[iHF + 1] || "" : argsFs[iHF].slice(5)) : "";
+      const horasFs = (hF ? hF.split(/[,;]/).map((x) => Number(x.replace(",", "."))) : [2, 4]).filter((x) => x > 0 && x <= 24).slice(0, 4);
+      // V107: stop/alvo/trail aceitam lista (stop0.5,1,2) = todas as combinações (até 8); sem nenhum deles = pacote FACASIM_PACOTE
+      const listaF = (pref: string, padrao: number, max: number) => {
+        const a = argsFs.find((x) => x.startsWith(pref));
+        const vs = a ? a.slice(pref.length).split(/[;,|]/).map((x) => Number(x)).filter((v) => isFinite(v) && v >= 0 && v <= max) : [];
+        return vs.length ? [...new Set(vs)].slice(0, 4) : [padrao];
+      };
+      const escolheuF = argsFs.some((a) => /^(stop|alvo|trail|be|arma)\d/.test(a));
+      const cfgsFs: SimCfg[] = [];
+      if (escolheuF) for (const st of listaF("stop", SAIDA_STOP_ATR, 10)) for (const al of listaF("alvo", 2, 20)) for (const tr of listaF("trail", 0, 10)) cfgsFs.push({ stopAtr: st, alvoR: al, trailAtr: tr, armaAtr: Math.min(20, numF("arma", 0)), beAtr: Math.min(20, numF("be", 0)) });
+      const fogFs = argsFs.some((a) => /^fogu/.test(a));
+      await comAguarde(fogFs ? "🚀 Simulando as entradas do foguete, aguarde..." : "🔪 Simulando as entradas da faca, aguarde...", () => runFacaSim(chatId, diasFs, fogFs, cfgsFs.length ? cfgsFs.slice(0, 8) : FACASIM_PACOTE, horasFs.length ? horasFs : [2, 4]));
       return new Response("ok");
     }
     if (text === "/faca" || text.startsWith("/faca ") || text.startsWith("/faca@")) {
