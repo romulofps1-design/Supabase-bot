@@ -10256,6 +10256,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🔪 /facasim 7", "faca: onde entrar (direto x rompimento da vela x rompimento do último fundo anterior)", "pros candidatos do modo faca, compara 3 entradas SHORT: direto no preço do candidato, rompendo a mínima da vela do candidato e rompendo o último fundo anterior ainda não perdido (pivô). Mostra também o direto só nos que romperam o fundo, pra comparar em pé de igualdade. Sem stop/alvo no comando, compara um pacote de saídas: stop apertado (0,5 ATR), padrão (1), solto (2), alvo curto (1R), zero a zero e stop móvel sem alvo, em 2h e 4h. Ou escolha com listas: /facasim 7 stop0.5,1,2 alvo1,2,3 horas 2,4,8 (todas as combinações, até 8; trailX, armaY, beX, stop0/alvo0 = sem). /facasim 7 foguete = o mesmo pro foguete (LONG rompendo o último topo anterior). Até 9 dias."],
     ["🔪 /faca 7", "modo faca: fundo com ADX alto como continuação (SHORT)", "candidatos do modo faca (FACA_MODO: sombra grava em silêncio, alerta também avisa, off desliga): o que aconteceu depois, com as mesmas regras do /radar (invalidou/funcionou, rompimento da vela, virada). Fica fora do /placar. O número é a quantidade de dias (até 9)"],
     ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
+    ["🧪 /motorteste", "testa a ligação com o modo alerta do motor", "manda um alerta de TESTE pro motor (BTC, ou /motorteste SOL): o motor grava e recusa de propósito (tipo teste), sem nenhuma ordem. Se aparecer no site em \"alertas que não entraram\", a ligação bot → motor está certa. Precisa do modo alerta ligado no site"],
     ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP e, do modo alerta, alerta_stop / alerta_alvo / alerta_prazo), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET. O modo alerta (cada alerta de fundo vai pro motor, que decide pela configuração do site) precisa também do MOTOR_ALERTA_SECRET"],
     ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
     ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso. /div diag mostra por que avisou ou não (regra a regra, com 15m pra comparar com o TradingView)"],
@@ -10708,6 +10709,23 @@ Deno.serve(async (req) => {
       }
       const dR = Math.min(9, Math.max(1, Math.round(dRn || 7)));
       await comAguarde("📡 Conferindo o que aconteceu depois dos alertas de radar, aguarde...", () => runRadarStats(chatId, dR, { pernas: pernasR, alvo: alvoRn }));
+      return new Response("ok");
+    }
+    if (text === "/motorteste" || text.startsWith("/motorteste ") || text.startsWith("/motorteste@")) {
+      // V107: testa a ligação bot -> motor do modo alerta SEM risco: manda um alerta com tipo "teste", que o motor grava e RECUSA
+      // (tipo fora da lista: o site só deixa escolher fundo/repique). Aparece no site em "alertas que não entraram".
+      const argMt = String(text.split(/\s+/)[1] || "BTC").toUpperCase();
+      const instMt = argMt.includes("-") ? argMt : `${argMt}-USDT`;
+      if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) { await sendTelegram(chatId, `🧪 <b>/motorteste</b>\n\nFaltam Secrets no bot: ${!MOTOR_URL ? "<b>MOTOR_URL</b> " : ""}${!MOTOR_ALERTA_SECRET ? "<b>MOTOR_ALERTA_SECRET</b>" : ""}`); return new Response("ok"); }
+      const pxMt = await precoAoVivo(instMt);
+      if (!pxMt) { await sendTelegram(chatId, `🧪 Não achei o preço de ${instMt}. Tente outra moeda: /motorteste SOL`); return new Response("ok"); }
+      try {
+        const r = await fetch(MOTOR_URL, { method: "POST", headers: motorHeaders({ "x-alerta-secret": MOTOR_ALERTA_SECRET }), body: JSON.stringify({ action: "alerta", instId: instMt, side: "long", tipo: "teste", preco: pxMt, atr: pxMt * 0.01, nota: 0 }), signal: AbortSignal.timeout(10000) });
+        const j: any = await r.json().catch(() => null);
+        await sendTelegram(chatId, r.ok && j?.ok
+          ? `🧪 <b>Ligação bot → motor OK</b> (${instMt})\n${j.gravados ? `O motor gravou ${j.gravados} alerta(s) de teste. Em até 1 min ele aparece no site em "alertas que não entraram" como <i>tipo teste fora da lista</i> (é recusado de propósito: nenhuma ordem, nem simulada).` : `O motor respondeu, mas não gravou: ${String(j.msg || "modo alerta desligado no site").replace(/</g, "&lt;")}. Ligue o modo alerta no site e repita.`}`
+          : `🧪 <b>O motor recusou</b> (HTTP ${r.status})${j?.error ? `: ${String(j.error).slice(0, 200).replace(/</g, "&lt;")}` : ""}\n401/403 = confira MOTOR_ALERTA_SECRET (igual ao ALERTA_SECRET do motor) e MOTOR_ANON_KEY · 404 = confira MOTOR_URL · 500 = rode o SQL do modo alerta.`);
+      } catch (e) { await sendTelegram(chatId, `🧪 Não consegui falar com o motor: ${String(e).slice(0, 200).replace(/</g, "&lt;")}. Confira MOTOR_URL.`); }
       return new Response("ok");
     }
     if (text === "/trades" || text.startsWith("/trades ") || text.startsWith("/trades@")) {
