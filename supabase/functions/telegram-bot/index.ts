@@ -1,10 +1,11 @@
-// telegram-bot V120 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V121 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V121 (V120 + /juncao so +us: só as moedas do +, sem as que deram alerta, pra ver uma moeda sozinha no período todo). Só análises: alertas, bot e motor não mudam.
 // V120 (V119 + /juncao pdvela15,20,30: o pump e dump também pela vela de 15m que sobe ou cai X% da abertura até a máxima ou a mínima; fora 3 dias depois, no reteste, filtros, semanas e carteira). Só análises: alertas, bot e motor não mudam.
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V120"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V121"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -6921,7 +6922,7 @@ function juncaoCarteiraDeArgs(args: string[]): { vagas: number[] } | null {
   const vs = a ? [...new Set(a.replace(/^vagas?/, "").split(/[,;]/).map(Number).filter((v) => Number.isInteger(v) && v >= 1 && v <= 10))].slice(0, 4) : [];
   return { vagas: vs.length ? vs.sort((x, y) => x - y) : [1, 2, 4] };
 }
-async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false, novos: NovoJ[] = [], filtros: FiltroJ[] | null = null, reteste: number | null = null, semanas = false, retesteEmAtr = false, porMoeda = false, extraMoedas: string[] = [], retesteModo: "perto" | "toque" = "perto", rodizio: number | null = null, volume = false, amostra = false, extras: { saidas?: SaidaPctJ[]; soModos?: string[]; carteira?: { vagas: number[] } } = {}) {
+async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false, novos: NovoJ[] = [], filtros: FiltroJ[] | null = null, reteste: number | null = null, semanas = false, retesteEmAtr = false, porMoeda = false, extraMoedas: string[] = [], retesteModo: "perto" | "toque" = "perto", rodizio: number | null = null, volume = false, amostra = false, extras: { saidas?: SaidaPctJ[]; soModos?: string[]; carteira?: { vagas: number[] }; so?: boolean } = {}) {
   // V107: até 4 J6 personalizadas no mesmo teste (chaves c0..c3)
   // V108: com "pura", cada modo vem seguido da versão J6 pura dele (classica, classica_pura, rapida, rapida_pura, ...), pra comparar lado a lado
   // V109: com "novos", compara a faixa que o bot usa (J6_MODO) com os modos novos; com "filtros", o motor real roda de novo com cada filtro de regime
@@ -6958,7 +6959,11 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   const dd = Math.min(JUNCAO_MAX_DIAS, Math.max(1, Math.round(dias || 7)));
   const desdeMs = Date.now() - dd * 86400000;
   let moedasBase: string[] = [];
-  if (amostra) {
+  // V121: "so +us +truth" = só as moedas do +, sem as que deram alerta (pra ver uma moeda sozinha, com o robô ligado o período todo)
+  const soExtra = !!extras.so && extraMoedas.length > 0;
+  if (soExtra) {
+    // só as do +
+  } else if (amostra) {
     // V114: amostra = moedas espalhadas pelo volume de 24h em USDT (o de agora, do ticker da BloFin), da que mais gira até a que menos gira
     // (a partir de JUNCAO_AMOSTRA_MIN USDT), sem depender de alerta. As moedas com alerta já passaram pelo filtro de volume do bot.
     await getVariacoes24h().catch(() => [] as VarInfo[]);
@@ -7356,7 +7361,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   const titulo = novos.length
     ? `🔀 <b>JUNÇÃO: FAIXA ${faixaBot.toUpperCase()} (a do bot) x ${novos.length} MODO(S) NOVO(S)${customs.length ? ` x ${customs.length} PERSONALIZADA(S)` : ""}${pura ? " · com a J6 PURA" : ""}</b>`
     : `🔀 <b>JUNÇÃO: ${modosBase.filter((k) => !/^c\d+$/.test(k)).map((k) => (k === "classica" ? "CLÁSSICA" : k === "rapida" ? "RÁPIDA" : "RÁPIDA + 144")).join(" x ")}${customs.length ? ` x ${customs.length} PERSONALIZADA(S)` : ""}${pura ? " · cada uma também com a J6 PURA" : ""}</b>`; // V117: só os modos pedidos
-  let m = `${titulo} — ${dd} dia(s) · ${moedasOk} moeda(s) ${amostra ? "da amostra por volume (espalhadas do maior ao menor volume de 24h da BloFin)" : "com alerta no período"}${moedasCurtas ? ` (${moedasCurtas} com menos histórico que o período)` : ""}\n${DIVISOR}\n`;
+  let m = `${titulo} — ${dd} dia(s) · ${soExtra ? `só ${extraMoedas.map((x) => x.replace(/-USDT$/, "")).join(", ")} (as moedas do +)` : `${moedasOk} moeda(s) ${amostra ? "da amostra por volume (espalhadas do maior ao menor volume de 24h da BloFin)" : "com alerta no período"}`}${moedasCurtas ? ` (${moedasCurtas} com menos histórico que o período)` : ""}\n${DIVISOR}\n`;
   m += `<i>Faixa recalculada em todos os modos com as mesmas velas de 15m; entrada no fechamento da vela que cruzou. 1R = 1×ATR, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada. "De alerta" = |24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO} na vela do cruzamento (desde a V109 o ADX é o da própria vela; até a V108 vinha o de 27 velas depois, e o "de alerta" saía melhor do que era). Hoje o bot usa a ${faixaBot} (J6_MODO).${pura ? " 🎯 J6 pura = a faixa vira só a linha da J6 (sem a SUPREMA): o cruzamento é a vela fechar do outro lado da J6. Cada J6 aparece logo antes da versão pura dela." : ""}${novos.length ? " 📈 SuperTrend = linha a N×ATR do preço que só anda a favor; vira quando a vela fecha do outro lado (igual ao Supertrend do TradingView). 🧱 Folga = a faixa do bot, mas a vela precisa fechar além dela por X ATR pra virar. 🕯️ Chandelier = stop a N×ATR da máxima (ou mínima) das últimas velas; vira quando fecha além do stop do lado oposto. 📦 Donchian = vira quando fecha acima da máxima (ou abaixo da mínima) das N velas anteriores." : ""}</i>\n\n`;
   // V115: cortes de volume pedidos (vol e unid): no reteste e no semanas, o mão virada sai separado pelo volume de 24h na vela da entrada.
   // Uma linha pra cada mínimo de USDT; cada corte de unidades vai junto com o 1º mínimo de USDT (quando pedido), como "no mínimo 100k USDT".
@@ -7456,7 +7461,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
         }
       }
     }
-    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
+    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%; so +us = só essa moeda) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
     await enviarEmPartes(chatId, m);
     return;
   }
@@ -7647,7 +7652,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
       }
       m += "\n";
     }
-    m += `<i>Uso: /juncao 7 moedas · /juncao 28 novos moedas · +us põe uma moeda no teste mesmo sem alerta no período (ex.: /juncao 7 moedas +us +ray) · amostra = moedas espalhadas pelo volume da BloFin, não só as que deram alerta.</i>`;
+    m += `<i>Uso: /juncao 7 moedas · /juncao 28 novos moedas · +us põe uma moeda no teste mesmo sem alerta no período (ex.: /juncao 7 moedas +us +ray) · so +us = só ela · amostra = moedas espalhadas pelo volume da BloFin, não só as que deram alerta.</i>`;
     await enviarEmPartes(chatId, m);
     return;
   }
@@ -7715,7 +7720,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
       }
       m += "\n";
     }
-    m += `<i>Compare na mesma saída. O ${retNome} só existe quando o preço se afasta e volta, então tem menos entradas: ele vale se a média, o PF e o "sem os 3 melhores" melhorarem sem o n ficar pequeno demais; a "soma" mostra se entrar mais vezes (nos dois) rende mais no total. Uso: /juncao 28 reteste1 alvo2 · reteste0.3 muda a distância (padrão 0.5%, a do 🟡 PERTO) · retesteatr1 mede em ATR · toque = o pavio encosta na faixa e volta (toque1 = depois de se afastar 1%, o padrão; toqueatr1 em ATR) · pura = também na J6 pura · semanas = cada linha por semana · vol100k unid10m,20m,30m = o mão virada separado por volume · top10,20 = no top de variação · pd30 (ou pd20,30,50) = sem pump e dump · pdvela15,20,30 = sem vela de 15m de ±X% · 5/3.5 = saída no lucro com o trailing do robô · degraus5:1,10:5 = stop em degraus · classica, rapida ou rapida144 = só esse modo (rodada mais leve) · a janela vem dos Secrets ALERT_FRESCO_CANDLES e ALERT_RETESTE_MAX_CANDLES · stop/alvo mudam a 🎯 e a 🧭; horas muda a 🧭.</i>`;
+    m += `<i>Compare na mesma saída. O ${retNome} só existe quando o preço se afasta e volta, então tem menos entradas: ele vale se a média, o PF e o "sem os 3 melhores" melhorarem sem o n ficar pequeno demais; a "soma" mostra se entrar mais vezes (nos dois) rende mais no total. Uso: /juncao 28 reteste1 alvo2 · reteste0.3 muda a distância (padrão 0.5%, a do 🟡 PERTO) · retesteatr1 mede em ATR · toque = o pavio encosta na faixa e volta (toque1 = depois de se afastar 1%, o padrão; toqueatr1 em ATR) · pura = também na J6 pura · semanas = cada linha por semana · vol100k unid10m,20m,30m = o mão virada separado por volume · top10,20 = no top de variação · pd30 (ou pd20,30,50) = sem pump e dump · pdvela15,20,30 = sem vela de 15m de ±X% · so +us = só essa moeda, o período todo · 5/3.5 = saída no lucro com o trailing do robô · degraus5:1,10:5 = stop em degraus · classica, rapida ou rapida144 = só esse modo (rodada mais leve) · a janela vem dos Secrets ALERT_FRESCO_CANDLES e ALERT_RETESTE_MAX_CANDLES · stop/alvo mudam a 🎯 e a 🧭; horas muda a 🧭.</i>`;
     await enviarEmPartes(chatId, m);
     return;
   }
@@ -12051,6 +12056,7 @@ async function tratarRequisicao(req: Request): Promise<Response> {
       const semanasJ = argsJ.some((a) => /^semanas?$/.test(a)); // V111: cada linha separada por semana
       const porMoedaJ = argsJ.includes("moedas"); // V111: melhores e piores moedas
       const extraMoedasJ = [...new Set(argsJ.map((a) => /^\+([a-z0-9]{1,15}?)(?:-?usdt)?$/.exec(a)).filter((x): x is RegExpExecArray => !!x).map((x) => `${x[1].toUpperCase()}-USDT`))].slice(0, 10); // V111: +us
+      const soJ = extraMoedasJ.length > 0 && argsJ.some((a) => /^s[oó]$/.test(a)); // V121: "so +us" = só as moedas do +
       // V113: rodizio (ou rodizio3) = a cada 7 (ou N) dias, escolhe as moedas pelo que aconteceu nos N dias antes e mede os N dias seguintes
       const mRodJ = argsJ.map((a) => /^rod[ií]zio(\d{1,2})?$/.exec(a)).find((x) => !!x);
       const rodizioJ = mRodJ ? Math.min(14, Math.max(2, mRodJ[1] ? Number(mRodJ[1]) : 7)) : null;
@@ -12058,8 +12064,8 @@ async function tratarRequisicao(req: Request): Promise<Response> {
       const volumeJ = argsJ.includes("volume"), amostraJ = argsJ.includes("amostra");
       const saidasJ = juncaoSaidasDeArgs(argsJ), soModosJ = juncaoModosDeArgs(argsJ); // V117
       const carteiraJ = juncaoCarteiraDeArgs(argsJ); // V118: carteira com 1 a 4 moedas ligadas enquanto passam nas condições
-      const extraJ = [puraJ ? "com a J6 pura" : "", novosJ.length ? `com ${novosJ.length} modo(s) novo(s)` : "", filtrosJ ? "com os filtros" : "", retesteJ !== null ? (retModoJ === "toque" ? "com o toque e volta" : "com o reteste") : "", semanasJ ? "semana a semana" : "", porMoedaJ ? "por moeda" : "", rodizioJ ? `rodízio de ${rodizioJ} dias` : "", volumeJ ? "por volume" : "", amostraJ ? "amostra por volume" : "", saidasJ.length ? `${Math.min(4, saidasJ.length)} saída(s) no lucro` : "", carteiraJ ? `carteira de ${carteiraJ.vagas.join(", ")} vaga(s)` : "", soModosJ.length ? `só ${soModosJ.join(" e ")}` : "", extraMoedasJ.length ? `+${extraMoedasJ.length} moeda(s)` : "", diasJ > 7 ? `${diasJ} dias` : ""].filter(Boolean).join(", ");
-      await comAguarde(`🔀 Recalculando a faixa nos modos da junção${extraJ ? ` (${extraJ})` : ""}, aguarde (pode levar 1 a 3 min${extraJ ? ", um pouco mais com os extras" : ""})...`, () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2], customsJ.slice(0, 4), argsJ.includes("mov"), puraJ, novosJ, filtrosJ, retesteJ, semanasJ, retAtrJ, porMoedaJ, extraMoedasJ, retModoJ, rodizioJ, volumeJ, amostraJ, { saidas: saidasJ, soModos: soModosJ, carteira: carteiraJ ?? undefined }));
+      const extraJ = [puraJ ? "com a J6 pura" : "", novosJ.length ? `com ${novosJ.length} modo(s) novo(s)` : "", filtrosJ ? "com os filtros" : "", retesteJ !== null ? (retModoJ === "toque" ? "com o toque e volta" : "com o reteste") : "", semanasJ ? "semana a semana" : "", porMoedaJ ? "por moeda" : "", rodizioJ ? `rodízio de ${rodizioJ} dias` : "", volumeJ ? "por volume" : "", amostraJ ? "amostra por volume" : "", saidasJ.length ? `${Math.min(4, saidasJ.length)} saída(s) no lucro` : "", carteiraJ ? `carteira de ${carteiraJ.vagas.join(", ")} vaga(s)` : "", soModosJ.length ? `só ${soModosJ.join(" e ")}` : "", extraMoedasJ.length ? (soJ ? `só ${extraMoedasJ.map((x) => x.replace(/-USDT$/, "")).join(", ")}` : `+${extraMoedasJ.length} moeda(s)`) : "", diasJ > 7 ? `${diasJ} dias` : ""].filter(Boolean).join(", ");
+      await comAguarde(`🔀 Recalculando a faixa nos modos da junção${extraJ ? ` (${extraJ})` : ""}, aguarde (pode levar 1 a 3 min${extraJ ? ", um pouco mais com os extras" : ""})...`, () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2], customsJ.slice(0, 4), argsJ.includes("mov"), puraJ, novosJ, filtrosJ, retesteJ, semanasJ, retAtrJ, porMoedaJ, extraMoedasJ, retModoJ, rodizioJ, volumeJ, amostraJ, { saidas: saidasJ, soModos: soModosJ, carteira: carteiraJ ?? undefined, so: soJ }));
       return new Response("ok");
     }
     if (text === "/velas" || text.startsWith("/velas ") || text.startsWith("/velas@")) {
