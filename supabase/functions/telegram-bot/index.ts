@@ -1,6 +1,6 @@
 // telegram-bot V109 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V109 (V108 + ADX alinhado à vela nas análises: /juncao, /radarconf (e retro), /faca, /foguete, /radarsim regra e o histórico dos radares liam o ADX de 27 velas DEPOIS (adxNaVela corrige; os alertas ao vivo não tinham o erro) · /juncao novos: SuperTrend, faixa com folga, Chandelier e Donchian na mesma conta da faixa · /juncao filtros: o motor real com ADX, Choppiness e ER como filtro de regime · /juncao mov: linha do ADX abaixo do mínimo · /velas: as velas de 15m num arquivo CSV. Só análises: alertas, bot e motor não mudam)
+// V109 (V108 + ADX alinhado à vela nas análises: /juncao, /radarconf (e retro), /faca, /foguete, /radarsim regra e o histórico dos radares liam o ADX de 27 velas DEPOIS (adxNaVela corrige; os alertas ao vivo não tinham o erro) · /juncao novos: SuperTrend, faixa com folga, Chandelier e Donchian na mesma conta da faixa · /juncao filtros: o motor real com ADX, Choppiness e ER como filtro de regime · /juncao mov: linha do ADX abaixo do mínimo · /velas: as velas de 15m num arquivo CSV · pedidos de análise sem Telegram: um comando de leitura gravado na tabela analises_pedidos roda na rodada do cron (requisição separada) e a resposta fica na própria linha. Só análises: alertas, bot e motor não mudam)
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const BOT_VERSAO = "V109"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
@@ -98,6 +98,10 @@ const ALLOWED_CHAT_IDS = (Deno.env.get("ALLOWED_CHAT_IDS") || "")
 .split(",")
 .map((s) => s.trim())
 .filter(Boolean);
+// V109: modo captura dos pedidos de análise (tabela analises_pedidos, ver rodarPedidosAnalise): o comando roda com um chat falso "cap_<uuid>"
+// e as mensagens ficam guardadas aqui em vez de ir pro Telegram (sendTelegram, editarTelegram, apagarMsg e tgEnviarArquivo olham isto).
+const _capturas = new Map<string, { msgs: (string | null)[] }>();
+const ehCaptura = (chatId: unknown): boolean => typeof chatId === "string" && _capturas.has(chatId);
 const ALERT_EXCLUIR = (Deno.env.get("ALERT_EXCLUIR_IDS") || "").split(",").map((x) => x.trim()).filter(Boolean);
 const ALERT_CHAT_IDS = [...new Set(ALLOWED_CHAT_IDS)].filter((x) => !ALERT_EXCLUIR.includes(x));
 let ALERT_OPORT_PCT_MIN = numEnv("ALERT_OPORT_PCT_MIN", "8");
@@ -558,6 +562,7 @@ configurarMenuBotao();
 // V74: apagarMsgStatus separa "ok" / "gone" (400-404: mensagem já não existe ou não dá mais pra apagar — comum quando um alerta novo
 // substitui o velho) de "retry" (429, 5xx ou rede — erro temporário; vale tentar de novo). apagarMsg segue devolvendo boolean como antes.
 async function apagarMsgStatus(chatId: number | string, id: number): Promise<"ok" | "gone" | "retry"> {
+  if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; if (id >= 1 && id <= cap.msgs.length) cap.msgs[id - 1] = null; return "ok"; } // V109: some com o "aguarde" do pedido
   try {
     const r = await fetch(`${TG_API}/deleteMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: chatId, message_id: id }) });
     const j: any = await J(r);
@@ -680,6 +685,7 @@ async function tgPost(path: string, body: any): Promise<any> {
 const textoSemHtml = (t: string): string =>
   t.replace(/<\/?(b|i|u|s|a|code|pre)\b[^>]*>/gi, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
 async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes, opts?: { semUi?: boolean }): Promise<number | null> {
+  if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; cap.msgs.push(text); return cap.msgs.length; } // V109: pedido de análise, guarda em vez de mandar
   if (await getModo(chatId) === "experiente") text = compactarExperiente(text);
   if (text.length > 4096) text = cortar(text); // rede de segurança: acima disso o Telegram recusa e a mensagem se perdia em silêncio
   // texto grande: o botão "⬆️ Ir ao topo" já vai na própria mensagem (teclado inline, 1 chamada só).
@@ -848,6 +854,7 @@ async function avisarAdmin(texto: string): Promise<void> {
 // distância/tempo restando — em vez de mandar uma nova a cada rodada do cron). Se a edição falhar (mensagem
 // muito antiga, apagada pelo usuário etc.) devolve false pra quem chamou mandar uma mensagem nova.
 async function editarTelegram(chatId: number | string, messageId: number, text: string, botoes?: Botoes): Promise<boolean> {
+  if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; if (messageId >= 1 && messageId <= cap.msgs.length) cap.msgs[messageId - 1] = text; else cap.msgs.push(text); return true; } // V109
   let t = text;
   if (await getModo(chatId) === "experiente") t = compactarExperiente(t);
   const markup = botoes ? { reply_markup: { inline_keyboard: botoes } } : {};
@@ -6922,6 +6929,7 @@ async function blofinVelasHistorico(instId: string, bar: string, quantas: number
 }
 // Manda um arquivo pelo Telegram (sendDocument). Legenda até 1024 caracteres.
 async function tgEnviarArquivo(chatId: number | string, nomeArq: string, conteudo: string, legenda = ""): Promise<boolean> {
+  if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; cap.msgs.push(`📎 [arquivo ${nomeArq}, ${(conteudo.length / 1048576).toFixed(1)} MB: no pedido de análise o arquivo não vai]`); return true; }
   try {
     const fd = new FormData();
     fd.append("chat_id", String(chatId));
@@ -6964,6 +6972,66 @@ async function runVelasExport(chatId: number | string, dias: number, maxMoedas: 
   const legenda = `🕯️ <b>Velas de ${TIMEFRAME}</b> · ${dd} dia(s) + ${VELAS_AQUEC} velas de aquecimento · ${blocos.length} moeda(s) com alerta no período (${(csv.length / 1048576).toFixed(1)} MB)${curtas ? ` · ${curtas} com menos histórico que o pedido` : ""}${planoB ? ` · ${planoB} pelo plano B (1000 velas)` : ""}. Colunas: instid, t (abertura, ms UTC), o, h, l, c, v.`;
   const ok = await tgEnviarArquivo(chatId, nomeArq, csv, legenda);
   if (!ok) await sendTelegram(chatId, `⚠️ Não consegui mandar o arquivo (${(csv.length / 1048576).toFixed(1)} MB). Tente com menos dias ou moedas: /velas 15 moedas20`);
+}
+// ===== V109: pedidos de análise sem Telegram (tabela analises_pedidos) =====
+// Quem tem acesso ao banco (o dono, ou o Claude pelo conector do Supabase) grava um comando de análise na tabela analises_pedidos (status
+// "pendente"). A cada rodada do cron (2 min), se houver pedido, a function chama a si mesma numa requisição separada (x-tarefa: pedidos, com o
+// CRON_SECRET), pra não pesar no tempo do alerta. Essa requisição pega UM pedido, roda o comando como se tivesse chegado pelo Telegram (mesmo
+// roteador, mesmas opções), só que com um chat falso "cap_<uuid>": as mensagens ficam na coluna resultado em vez de ir pro Telegram. Só comandos
+// de leitura (PEDIDOS_CMDS). Pedido "rodando" há mais de PEDIDOS_TRAVADO_MIN minutos (function encerrada no meio) vira "erro". Sem a tabela,
+// nada acontece (o cron só tenta ler e segue).
+// Tabela: id (identity), criado_em, comando, status (pendente | rodando | feito | erro), iniciado_em, terminado_em, segundos, versao, resultado.
+const PEDIDOS_TABELA = "analises_pedidos";
+const PEDIDOS_CMDS = ["/juncao", "/saida", "/radarsim", "/radarconf", "/radarhist", "/radar", "/facasim", "/faca", "/foguete", "/placar", "/15min", "/reversaoconf", "/repsombra", "/volconf", "/compressao", "/sombras"];
+const PEDIDOS_TRAVADO_MIN = 15;
+const FUNCAO_NOME = (Deno.env.get("FUNCAO_NOME") || "telegram-bot").trim(); // nome (slug) desta function, pra ela chamar a si mesma
+async function executarComandoCapturado(comando: string): Promise<string> {
+  const cmd = String(comando || "").trim().replace(/\s+/g, " ");
+  const base = cmd.toLowerCase().split(" ")[0].replace(/@\w+$/, "");
+  if (!PEDIDOS_CMDS.includes(base)) throw new Error(`"${base}" não roda por pedido. Só os de leitura: ${PEDIDOS_CMDS.join(" ")}`);
+  if (base === "/radarhist" && /\sgravar\b/i.test(cmd)) throw new Error("/radarhist gravar não roda por pedido (só a leitura).");
+  const id = `cap_${crypto.randomUUID()}`;
+  _capturas.set(id, { msgs: [] });
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (WEBHOOK_SECRET) headers["x-telegram-bot-api-secret-token"] = WEBHOOK_SECRET;
+    const corpo = { update_id: 0, message: { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id, type: "private" }, from: { id }, text: cmd } };
+    await tratarRequisicao(new Request("http://pedido.interno/", { method: "POST", headers, body: JSON.stringify(corpo) }));
+    return (_capturas.get(id)?.msgs || []).filter((x): x is string => typeof x === "string").join("\n\n");
+  } finally { _capturas.delete(id); }
+}
+async function rodarPedidosAnalise(): Promise<void> {
+  const SB = getSupabase();
+  if (!SB) return;
+  const agoraIso = () => new Date().toISOString();
+  await SB.from(PEDIDOS_TABELA).update({ status: "erro", terminado_em: agoraIso(), resultado: `⚠️ passou de ${PEDIDOS_TRAVADO_MIN} min rodando (a function foi encerrada no meio). Grave o pedido de novo.` })
+    .eq("status", "rodando").lt("iniciado_em", new Date(Date.now() - PEDIDOS_TRAVADO_MIN * 60000).toISOString());
+  const { data: fila, error } = await SB.from(PEDIDOS_TABELA).select("id, comando").eq("status", "pendente").order("id", { ascending: true }).limit(1);
+  if (error) { console.log("⚠️ pedidos de análise: não li a fila", error.message ?? error); return; }
+  const p = (fila || [])[0] as { id: number; comando: string } | undefined;
+  if (!p) return;
+  const { data: pego } = await SB.from(PEDIDOS_TABELA).update({ status: "rodando", iniciado_em: agoraIso(), versao: BOT_VERSAO }).eq("id", p.id).eq("status", "pendente").select("id");
+  if (!pego || !pego.length) return; // outra requisição pegou este pedido
+  const t0 = Date.now();
+  let status = "feito", resultado = "";
+  try {
+    resultado = await executarComandoCapturado(p.comando);
+    if (!resultado.trim()) { status = "erro"; resultado = "⚠️ o comando não devolveu nada (veja os logs da function)."; }
+  } catch (e) { status = "erro"; resultado = `⚠️ ${String((e as any)?.message ?? e)}`; }
+  const segundos = Math.round((Date.now() - t0) / 1000);
+  const { error: eFim } = await SB.from(PEDIDOS_TABELA).update({ status, resultado, terminado_em: agoraIso(), segundos }).eq("id", p.id);
+  if (eFim) console.log("⚠️ pedidos de análise: não gravei o resultado", eFim.message ?? eFim);
+  console.log(`📝 pedido de análise ${p.id} (${p.comando}): ${status} em ${segundos}s`);
+}
+// Chamado na rodada do cron: se tem pedido pendente, abre uma requisição separada pra ele (a rodada do alerta não espera a análise).
+async function chutarPedidosAnalise(): Promise<void> {
+  if (!SUPABASE_URL || !CRON_SECRET) return;
+  const SB = getSupabase();
+  if (!SB) return;
+  const { data, error } = await SB.from(PEDIDOS_TABELA).select("id").eq("status", "pendente").limit(1);
+  if (error || !data?.length) return; // sem a tabela ou sem pedido: nada a fazer
+  await fetch(`${SUPABASE_URL}/functions/v1/${FUNCAO_NOME}`, { method: "POST", headers: { "x-cron-secret": CRON_SECRET, "x-tarefa": "pedidos" } })
+    .then((r) => r.text()).catch((e) => console.log("⚠️ pedidos de análise: não consegui chamar a function", e));
 }
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
 async function runRepiqueSombra(chatId: number | string, dias: number) {
@@ -10807,7 +10875,9 @@ function montarConfig(): string {
   m += `\n<i>Tokens e chaves nunca aparecem aqui.</i>`;
   return m;
 }
-Deno.serve(async (req) => {
+// V109: o tratamento da requisição virou uma função com nome (antes era anônima dentro do Deno.serve) pra os pedidos de análise poderem
+// chamar o mesmo roteador de comandos por dentro (executarComandoCapturado). Pro Telegram e pro cron nada muda.
+async function tratarRequisicao(req: Request): Promise<Response> {
   try {
     const urlObj = new URL(req.url);
     const cronQuery = urlObj.searchParams.get("cron_secret");
@@ -10816,13 +10886,23 @@ Deno.serve(async (req) => {
       (cronHeader !== null && igualSeguro(cronHeader, CRON_SECRET)) ||
       (!CRON_SO_HEADER && cronQuery !== null && igualSeguro(cronQuery, CRON_SECRET)));
     if (cronOk) {
+      // V109: requisição separada só pros pedidos de análise (aberta pela rodada do cron quando há pedido na tabela)
+      if (req.headers.get("x-tarefa") === "pedidos") {
+        const tp = rodarPedidosAnalise().catch((e) => console.log("❌ erro nos pedidos de análise", e));
+        if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) { EdgeRuntime.waitUntil(tp); return new Response("ok - pedidos iniciados"); }
+        await tp;
+        return new Response("ok - pedidos executados");
+      }
       if (cronHeader === null) console.log("⚠️ cron chamado com o segredo na URL (aparece em log): passe pro header x-cron-secret e ligue CRON_SO_HEADER=1");
       const tarefa = runAlertaProativo().catch((e) => console.log("❌ erro alerta proativo", e));
+      const pedidos = chutarPedidosAnalise().catch((e) => console.log("⚠️ pedidos de análise", e)); // V109
       if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
         EdgeRuntime.waitUntil(tarefa);
+        EdgeRuntime.waitUntil(pedidos);
         return new Response("ok - alerta proativo iniciado");
       }
       await tarefa;
+      await pedidos;
       return new Response("ok - alerta proativo executado");
     }
     if (req.method !== "POST") return new Response("ok");
@@ -10841,7 +10921,7 @@ Deno.serve(async (req) => {
     const text = TECLADO_CMD[textoBruto] ?? textoBruto;
     if (!chatId) return new Response("ok");
     const remetente = cq?.from?.id ?? update?.message?.from?.id ?? chatId;
-    if (!ALLOWED_CHAT_IDS.includes(String(chatId))) {
+    if (!ALLOWED_CHAT_IDS.includes(String(chatId)) && !ehCaptura(chatId)) { // V109: o chat falso de um pedido de análise em andamento também passa
       console.log(`⛔ chat_id ${chatId} nao autorizado (fora de ALLOWED_CHAT_IDS) - ignorando mensagem "${text}"`);
       if (!cq && (text === "/start" || text === "/help" || /^\/comandos?(@\w+)?$/i.test(text))) {
         await fetch(`${TG_API}/sendMessage`, {
@@ -10914,10 +10994,11 @@ Deno.serve(async (req) => {
       }
       return new Response("ok");
     }
-    if (text.startsWith("/")) {
+    if (text.startsWith("/") && !ehCaptura(chatId)) { // V109: pedido de análise não tem mensagens de tela pra limpar
       await uiLimpar(chatId, cq ? [] : [message?.message_id]).catch((e) => console.log("⚠️ uiLimpar", e));
     }
     const rodarEmBackground = (tarefa: Promise<void>) => {
+      if (ehCaptura(chatId)) return tarefa; // V109: no pedido de análise, espera terminar (a resposta vai pra tabela)
       if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
         EdgeRuntime.waitUntil(tarefa);
         return Promise.resolve();
@@ -11308,4 +11389,5 @@ Deno.serve(async (req) => {
     console.log("❌ ERRO GERAL telegram-bot", e);
     return new Response("ok");
   }
-});
+}
+Deno.serve(tratarRequisicao);
