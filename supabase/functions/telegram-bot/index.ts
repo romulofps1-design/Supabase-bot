@@ -689,10 +689,11 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
   const markup = { reply_markup: inline ? { inline_keyboard: inline } : { keyboard: TECLADO_FIXO, resize_keyboard: true } };
   let id: number | null = null;
   try {
-    const j: any = await tgPost("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, disable_notification: false, ...markup });
+    const mudo = SILENCIO_MODO === "mudo" && emSilencio(); // V107: horário mudo = chega sem som
+    const j: any = await tgPost("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, disable_notification: mudo, ...markup });
     if (j.ok === false) {
       console.log(`⚠️ sendTelegram HTML falhou (${JSON.stringify(j).slice(0,200)}), tentando sem parse_mode`);
-      const j2: any = await tgPost("sendMessage", { chat_id: chatId, text: textoSemHtml(text), disable_web_page_preview: true, ...markup });
+      const j2: any = await tgPost("sendMessage", { chat_id: chatId, text: textoSemHtml(text), disable_web_page_preview: true, disable_notification: mudo, ...markup });
       id = j2?.result?.message_id ?? null;
     } else id = j?.result?.message_id ?? null;
   } catch (e) { console.log("Erro sendTelegram", e); }
@@ -9401,6 +9402,9 @@ const SILENCIO_ON = (Deno.env.get("SILENCIO") || "1") !== "0";
 const SILENCIO_INI_H = numEnv("SILENCIO_INI_H", "3");
 const SILENCIO_FIM_H = numEnv("SILENCIO_FIM_H", "6");
 const SILENCIO_PROTECAO = (Deno.env.get("SILENCIO_PROTECAO") || "1") !== "0";
+// V107: SILENCIO_MODO=mudo (padrão) = no horário do silêncio TUDO continua rodando (radares, alertas, placar, modo alerta do motor), só que as
+// mensagens chegam SEM SOM (disable_notification). SILENCIO_MODO=pausa = o comportamento antigo (nada de alerta novo no horário, só proteção).
+const SILENCIO_MODO: "mudo" | "pausa" = String(Deno.env.get("SILENCIO_MODO") || "mudo").trim().toLowerCase() === "pausa" ? "pausa" : "mudo";
 function emSilencio(): boolean {
   if (!SILENCIO_ON) return false;
   const h = new Date(Date.now() + X_TZ_OFFSET_H * 3600000).getUTCHours();
@@ -9941,7 +9945,7 @@ async function carregarPausas(SB: any) {
   _pausas = m;
 }
 function silChat(ch: string | number): boolean {
-  return emSilencio() || (_pausas.get(String(ch)) ?? 0) > Date.now();
+  return (SILENCIO_MODO === "pausa" && emSilencio()) || (_pausas.get(String(ch)) ?? 0) > Date.now(); // V107: no modo mudo o horário não pausa nada
 }
 const horaLocal = (ms: number) => new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString().slice(11, 16);
 async function heartbeat(SB: any, txt: string) {
@@ -9978,7 +9982,7 @@ async function runPausar(chatId: number | string, arg: string) {
     const { data } = await SB.from(TAB).select("last_status").eq("instid", id).maybeSingle();
     const ate = Number(data?.last_status);
     const estado = ate > Date.now() ? `⏸ Pausado até <b>${horaLocal(ate)}</b>.\n\n` : "";
-    await sendTelegram(chatId, `${estado}⏸ <b>Pausar alertas</b> por quanto tempo?\n(O silêncio das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h continua funcionando sozinho.)`,
+    await sendTelegram(chatId, `${estado}⏸ <b>Pausar alertas</b> por quanto tempo?\n(${SILENCIO_MODO === "mudo" ? `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h os alertas continuam, só que sem som.` : `O silêncio das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h continua funcionando sozinho.`})`,
       [[{ text: "⏸ 1h", callback_data: "/pausar 1" }, { text: "⏸ 2h", callback_data: "/pausar 2" }, { text: "⏸ 3h", callback_data: "/pausar 3" }], [{ text: "▶️ Retomar", callback_data: "/retomar" }]]);
     return;
   }
@@ -10032,7 +10036,7 @@ async function runStatus(chatId: number | string) {
     } catch { }
   }
   const msg = `🩺 <b>STATUS</b>\n${DIVISOR}\n\n${testes.join("\n")}\n${cron}\n${fonte}${lateral}\n` +
-    pausa + (emSilencio() ? `🌙 Silêncio automático agora (${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h)\n` : "") +
+    pausa + (emSilencio() ? (SILENCIO_MODO === "mudo" ? `🌙 Horário mudo agora (${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h): tudo rodando, alertas chegam sem som\n` : `🌙 Silêncio automático agora (${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h)\n`) : "") +
     `⭐ Seguidas: ${nSeg}/${SEG_MAX}\n` +
     (ALERTA_AUTOAPAGAR_MIN > 0 ? `🗑️ Auto-apagar: ${nDel} alerta(s) na fila (some${nDel ? "m" : ""} em até ${ALERTA_AUTOAPAGAR_MIN} min)\n` : "") +
     `🔔 Este chat ${ALERT_CHAT_IDS.includes(String(chatId)) ? "recebe" : "NÃO recebe"} os alertas automáticos\n` +
@@ -10203,7 +10207,7 @@ function textoHelp(chatId: number | string): string {
 
   if (SILENCIO_ON) {
     t += `${MINI_DIVISOR}\n<b>🌙 Silêncio</b>\n`;
-    t += `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local)${SILENCIO_PROTECAO ? ": só passa alerta de proteção de posição aberta" : ""}.\n\n`;
+    t += SILENCIO_MODO === "mudo" ? `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local): tudo continua (alertas, placar, modo alerta do motor), só que as mensagens chegam sem som.\n\n` : `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local)${SILENCIO_PROTECAO ? ": só passa alerta de proteção de posição aberta" : ""}.\n\n`;
   }
 
   t += `${DIVISOR}\n📖 Lista de comandos: /comandos\n🆔 Seu chat_id: <b>${chatId}</b>`;
@@ -10350,7 +10354,7 @@ function montarConfig(): string {
   m += `🎯 <b>Stop / alvo / trailing</b>\n• stop: faixa + ${STOP_ATR_MULT}×ATR · alvo RR ${ALVO_RR}:1\n• stop de reserva: ${STOP_ATR_RESERVA}×ATR\n• trailing (${on(PROT_LUCRO_ON)}): degrau de ${TRAIL_ATR_MULT}×ATR\n• RSI esticado: ≥ ${ESTICADO_RSI} (long) · ≤ ${100 - ESTICADO_RSI} (short)\n\n`;
   m += `🚨 <b>Risco</b> (${on(RISCO_ON)}): liquidação &lt; ${RISCO_LIQ_PCT}% (crítico ${RISCO_LIQ_CRITICO_PCT}%) · prejuízo ≥ ${RISCO_PERDA_PCT}% (crítico ${RISCO_PERDA_CRITICA_PCT}%) · reenvio ${RISCO_COOLDOWN_MIN} min\n`;
   m += `\n${MINI_DIVISOR}\n`;
-  m += `🌙 <b>Silêncio</b> (${on(SILENCIO_ON)}): ${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h, proteção ${on(SILENCIO_PROTECAO)} · fuso ${tz}\n`;
+  m += `🌙 <b>Silêncio</b> (${on(SILENCIO_ON)}): ${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h, ${SILENCIO_MODO === "mudo" ? "modo MUDO (tudo roda, mensagens sem som; SILENCIO_MODO=pausa volta ao antigo)" : `modo pausa, proteção ${on(SILENCIO_PROTECAO)}`} · fuso ${tz}\n`;
   m += `🗓️ <b>Resumos</b> (${on(RESUMO_ON)}): manhã ${RESUMO_MANHA_H}h · noite ${RESUMO_NOITE_H}h · V59: "FIM DO RESUMO" se apaga em ${PAINEL_FIM_APAGAR_H > 0 ? `${PAINEL_FIM_APAGAR_H}h` : "nunca (PAINEL_FIM_APAGAR_H=0)"}\n`;
   m += `⭐ seguidas: ${SEG_MAX} por pessoa\n`;
   m += `📡 Fallback de dados avisa a partir de ${FONTE_FALLBACK_PCT}% das consultas e normaliza abaixo de ${FONTE_NORMALIZA_PCT}%\n`;
