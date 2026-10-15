@@ -1,9 +1,9 @@
-// telegram-bot V107 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V108 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX e filtro por tipo (comp, oport, rev, fundo, topo); /juncao (junção clássica x rápida x rápida + EMA 144 recalculada nas mesmas velas; J6_MODO=rapida144 no bot, medias X,Y,Z pra testar uma J6 personalizada, com listas de stop/alvo/stop móvel); simulações com stop móvel (trailX, armaY) e zero a zero (beX); /radarsim cruz (ligo no alerta, o robô entra, desligo e sigo com stop: uma operação por alerta, sem virar; e ↩️ contra o alerta: se a moeda cruza do outro lado em até RADARSIM_CONTRA_VELAS velas, entra a favor do novo cruzamento, uma vez só; viradas 0,1,3 compara a cadeia com até N viradas, cada perna saindo no stop/alvo/prazo ou no cruzamento contra); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho; modo alerta: cada alerta de fundo e cada oportunidade que cruzou também vai pro motor V58 (Secret MOTOR_ALERTA_SECRET), que decide pela configuração do site)
+// V108 (V107 + /juncao pura: cada J6 testada no /juncao (clássica, rápida, rápida + 144 e as personalizadas) também na versão "J6 pura" — a faixa vira só a linha da J6, sem a SUPREMA/J3: entra quando a vela fecha do outro lado da J6 e vira no cruzamento contrário. Só teste no /juncao: alertas, bot e motor não mudam)
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V107"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V108"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -6471,6 +6471,7 @@ async function runFacaSim(chatId: number | string, dias: number, foguete: boolea
 // Três jeitos de operar: (1) robô ligado direto — entra em todo cruzamento e sai no próximo (vira sozinho, sem stop); (2) saída do robô com stop
 // (sai no cruzamento contrário ou no stop de SAIDA_STOP_ATR × ATR); (3) a rotina "liga no alerta e segue com stop/alvo/prazo" (ignora o cruzamento contra).
 // Duas fatias: todos os cruzamentos e só os "de alerta" (|24h| ≥ SAIDA_MOV_PADRAO e ADX ≥ SAIDA_ADX_PADRAO na vela do cruzamento).
+// V108: "/juncao 7 pura" acrescenta, logo depois de cada modo, a versão "J6 pura" dele (a faixa vira só a linha da J6, sem a SUPREMA) - ver bandaPura.
 const JUNCAO_MAX_MOEDAS = numEnv("JUNCAO_MAX_MOEDAS", "40");
 type ModoJ6 = "classica" | "rapida" | "rapida144" | "custom";
 // V107: J6 personalizada (/juncao ... medias 9,20,21,30): só a J6 muda; a J3 continua 21/50/60, como no indicador
@@ -6490,6 +6491,10 @@ function bandaModo(closes: number[], modo: Exclude<ModoJ6, "custom">, peso: numb
     return { sup: ((j3 + j6) / 2) * peso + j6 * (1 - peso), j6 };
   });
 }
+// V108: "J6 pura" (/juncao ... pura) = a faixa vira SÓ a linha da J6, sem a SUPREMA (que mistura a J3 21/50/60). Topo e fundo da faixa passam a ser a
+// própria J6: o lado é "acima" ou "abaixo" da J6 e o cruzamento é a vela fechar do outro lado dela. Todo o resto da conta (robô, motor, rotina) não muda.
+const bandaPura = (b: { sup: number; j6: number }[]): { sup: number; j6: number }[] => b.map((x) => ({ sup: x.j6, j6: x.j6 }));
+const PURA_SUF = "_pura"; // chave do modo: "classica_pura", "rapida_pura", "rapida144_pura", "c0_pura"...
 // V107: o motor de verdade (bot-engine V47+), vela a vela: sinal = a vela FECHA além da faixa e a anterior não fechava (igual ao crossover do TradingView;
 // inclui voltar pra dentro da faixa e romper de novo do MESMO lado). Posicionado: sinal do mesmo lado é ignorado, sinal oposto vira a mão no fechamento,
 // voltar pra dentro da faixa NÃO tira da posição; o stop (aqui SAIDA_STOP_ATR × ATR da entrada) fecha no meio da vela. Depois de um stop automático, um
@@ -6538,9 +6543,11 @@ function simMotor(d: XVelas, b: { sup: number; j6: number }[], kIni: number, des
   }
   return out; // a posição ainda aberta no fim fica fora da conta
 }
-async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false) {
+async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false) {
   // V107: até 4 J6 personalizadas no mesmo teste (chaves c0..c3)
-  const modosAtivos: string[] = ["classica", "rapida", "rapida144", ...customs.map((_, i) => `c${i}`)];
+  // V108: com "pura", cada modo vem seguido da versão J6 pura dele (classica, classica_pura, rapida, rapida_pura, ...), pra comparar lado a lado
+  const modosBase: string[] = ["classica", "rapida", "rapida144", ...customs.map((_, i) => `c${i}`)];
+  const modosAtivos: string[] = pura ? modosBase.flatMap((k) => [k, k + PURA_SUF]) : modosBase;
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
   const dd = Math.min(7, Math.max(1, Math.round(dias || 7))); // as médias são exponenciais: as 300 primeiras das 1000 velas ficam de aquecimento (≈ 7 dias úteis)
@@ -6562,8 +6569,16 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     if (!d || d.c.length < 300) return;
     moedasOk++;
     const adxS = xAdxSerie(d.h, d.l, d.c, 14);
+    // V108: a versão pura usa a MESMA J6 do modo base (calculada uma vez por moeda), só sem a SUPREMA
+    const bandas = new Map<string, { sup: number; j6: number }[]>();
+    const bandaDe = (modo: string): { sup: number; j6: number }[] => {
+      const base = modo.endsWith(PURA_SUF) ? modo.slice(0, -PURA_SUF.length) : modo;
+      let bb = bandas.get(base);
+      if (!bb) { bb = /^c\d+$/.test(base) ? bandaCustom(d.c, customs[Number(base.slice(1))]) : bandaModo(d.c, base as Exclude<ModoJ6, "custom">); bandas.set(base, bb); }
+      return base === modo ? bb : bandaPura(bb);
+    };
     for (const modo of modosAtivos) {
-      const b = modo.startsWith("c") && modo !== "classica" ? bandaCustom(d.c, customs[Number(modo.slice(1))]) : bandaModo(d.c, modo as Exclude<ModoJ6, "custom">);
+      const b = bandaDe(modo);
       const ladoEm = (k: number): HipLado | null => d.c[k] > Math.max(b[k].sup, b[k].j6) ? "long" : d.c[k] < Math.min(b[k].sup, b[k].j6) ? "short" : null;
       // cruzamentos: a vela fecha do lado oposto ao último lado definido
       const evs: { k: number; lado: HipLado }[] = [];
@@ -6609,12 +6624,18 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   const hTxt = (h: number) => (h < 1 ? `${Math.round(h * 60)}min` : `${h}h`);
   const nome: Record<string, string> = { classica: "🐢 CLÁSSICA (20/21/50/60/100/200)", rapida: "⚡ RÁPIDA (9/20/21/50/60)", rapida144: "⚡➕ RÁPIDA + EMA 144 (9/20/21/50/60/144)" };
   customs.forEach((c, i) => { nome[`c${i}`] = `🧪 PERSONALIZADA ${customs.length > 1 ? `${i + 1} ` : ""}(J6 = ${c.join("/")}; J3 = 21/50/60)`; });
-  let m = `🔀 <b>JUNÇÃO: CLÁSSICA x RÁPIDA x RÁPIDA + 144${customs.length ? ` x ${customs.length} PERSONALIZADA(S)` : ""}</b> — ${dd} dia(s) · ${moedasOk} moeda(s) com alerta no período\n${DIVISOR}\n`;
-  m += `<i>Faixa recalculada em todos os modos com as mesmas velas de 15m; entrada no fechamento da vela que cruzou. 1R = 1×ATR, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada. "De alerta" = |24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO} na vela do cruzamento. Hoje o bot usa a ${J6_R144 ? "rápida + 144" : J6_RAPIDA ? "rápida" : "clássica"} (J6_MODO).</i>\n\n`;
+  // V108: nomes da versão J6 pura de cada modo (a personalizada pura nao tem J3)
+  nome["classica" + PURA_SUF] = "🎯 J6 PURA CLÁSSICA (20/21/50/60/100/200) · só a linha da J6, sem a SUPREMA";
+  nome["rapida" + PURA_SUF] = "🎯 J6 PURA RÁPIDA (9/20/21/50/60) · só a linha da J6, sem a SUPREMA";
+  nome["rapida144" + PURA_SUF] = "🎯 J6 PURA RÁPIDA + 144 (9/20/21/50/60/144) · só a linha da J6, sem a SUPREMA";
+  customs.forEach((c, i) => { nome[`c${i}${PURA_SUF}`] = `🎯 J6 PURA PERSONALIZADA ${customs.length > 1 ? `${i + 1} ` : ""}(J6 = ${c.join("/")}) · só a linha da J6, sem a SUPREMA`; });
+  let m = `🔀 <b>JUNÇÃO: CLÁSSICA x RÁPIDA x RÁPIDA + 144${customs.length ? ` x ${customs.length} PERSONALIZADA(S)` : ""}${pura ? " · cada uma também com a J6 PURA" : ""}</b> — ${dd} dia(s) · ${moedasOk} moeda(s) com alerta no período\n${DIVISOR}\n`;
+  m += `<i>Faixa recalculada em todos os modos com as mesmas velas de 15m; entrada no fechamento da vela que cruzou. 1R = 1×ATR, taxa de ${TAXA_IDA_VOLTA_PCT.toFixed(2)}% descontada. "De alerta" = |24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO} na vela do cruzamento. Hoje o bot usa a ${J6_R144 ? "rápida + 144" : J6_RAPIDA ? "rápida" : "clássica"} (J6_MODO).${pura ? " 🎯 J6 pura = a faixa vira só a linha da J6 (sem a SUPREMA): o cruzamento é a vela fechar do outro lado da J6. Cada J6 aparece logo antes da versão pura dela." : ""}</i>\n\n`;
   if (porMov) {
     // V107: /juncao ... mov — a mesma conta, separada pelo quanto a moeda andou nas 24h (subindo OU caindo) na vela da entrada, com ADX ≥ SAIDA_ADX_PADRAO
     const curto: Record<string, string> = { classica: "🐢 clássica", rapida: "⚡ rápida", rapida144: "⚡➕ rápida+144" };
     customs.forEach((c, i) => { curto[`c${i}`] = `🧪 ${c.join("/")}`; });
+    for (const k of modosBase) curto[k + PURA_SUF] = `🎯 ${curto[k].replace(/^\S+\s+/u, "")} pura`; // V108: "🎯 clássica pura", "🎯 9/20/21/30 pura"...
     const fmtC = (rs: number[]): string => {
       if (rs.length < 5) return `n=${rs.length} <i>(pouco)</i>`;
       const media = rs.reduce((t, x) => t + x, 0) / rs.length, sem3 = rs.length > 5 ? [...rs].sort((a, b) => b - a).slice(3) : rs;
@@ -6652,7 +6673,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     }
     m += "\n";
   }
-  m += `<i>${customs.length ? "A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo. " : ""}Menos cruzamentos por dia e mais tempo entre eles = faixa menos "serrada". Compare os dois modos linha a linha; a diferença só vale onde as margens (±) não se cruzam. 🔂 motor real = como o bot-engine V47: sinal quando a vela fecha além da faixa e a anterior não fechava, posição mantida dentro da faixa, vira no sinal oposto, sai no stop e REENTRA se romper de novo do mesmo lado (operações seguidas, sem sobreposição; "de alerta" medido na vela de cada entrada). Uso: /juncao 7 · /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (listas: compara todas as combinações, até 8) · trail1,2 = stop móvel · arma2 = só arma depois de +2 ATR · be1 = zero a zero em +1 ATR · stop0 = sem stop · alvo0 = sem alvo · mov = separa pelo movimento da moeda no dia · máx. de moedas no Secret JUNCAO_MAX_MOEDAS (${JUNCAO_MAX_MOEDAS}).</i>`;
+  m += `<i>${customs.length ? "A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo. " : ""}${pura ? "A J6 pura também é só teste: o bot e o motor operam a faixa (SUPREMA + J6). Sem a faixa, o preço cruza mais vezes: compare cada J6 com a versão pura logo abaixo dela (cruzamentos por dia, tempo entre eles e o resultado). " : ""}Menos cruzamentos por dia e mais tempo entre eles = faixa menos "serrada". Compare os dois modos linha a linha; a diferença só vale onde as margens (±) não se cruzam. 🔂 motor real = como o bot-engine V47: sinal quando a vela fecha além da faixa e a anterior não fechava, posição mantida dentro da faixa, vira no sinal oposto, sai no stop e REENTRA se romper de novo do mesmo lado (operações seguidas, sem sobreposição; "de alerta" medido na vela de cada entrada). Uso: /juncao 7 · /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (listas: compara todas as combinações, até 8) · trail1,2 = stop móvel · arma2 = só arma depois de +2 ATR · be1 = zero a zero em +1 ATR · stop0 = sem stop · alvo0 = sem alvo · mov = separa pelo movimento da moeda no dia · pura = cada J6 também sozinha, sem a SUPREMA · máx. de moedas no Secret JUNCAO_MAX_MOEDAS (${JUNCAO_MAX_MOEDAS}).</i>`;
   await enviarEmPartes(chatId, m);
 }
 // V104: /repsombra [dias] — repique (⭐) real x modo sombra (o que a regra de ADX/DI barrou). Mesmo molde do /reversaoconf: só lê o log, não muda o banco.
@@ -10285,7 +10306,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🚪 /saida 7", "o robô virando a cada cruzamento", "simula o robô ligado nos alertas, virando a cada cruzamento e com o trailing do motor. Já filtra do seu jeito (moeda 8%+ no dia e ADX 14+ subindo). Extras: tudo (sem filtro), mov15, comp/oport/rev/fundo/topo, ou uma moeda (/saida QNT)"],
     ["🧪 /radarsim 9", "operar os alertas com stop, alvo e prazo", "entra nos alertas de topo, fundo e repique e sai no stop, no alvo ou no prazo. Extras: romp (entra no rompimento da vela), regra, btc, mov. Com cruz usa os alertas de cruzamento: entra junto com o robô e segue com stop, sem virar (viradas 0,1,3 compara deixar virar até N vezes)"],
     ["🔪 /facasim 7", "faca: onde entrar no SHORT", "compara entrar direto, no rompimento da vela ou no rompimento do último fundo, com várias saídas (stop apertado, normal e solto, alvo curto, zero a zero, stop móvel). /facasim 7 foguete faz o mesmo pro LONG"],
-    ["🔀 /juncao 7", "compara as junções da faixa", "recalcula a faixa nas versões clássica, rápida e rápida + 144 (e nas suas, com medias 9,20,21,30) e compara serrote, robô virando e rotina com stop e alvo. Com mov no fim, separa pelo quanto a moeda andou no dia"],
+    ["🔀 /juncao 7", "compara as junções da faixa", "recalcula a faixa nas versões clássica, rápida e rápida + 144 (e nas suas, com medias 9,20,21,30) e compara serrote, robô virando e rotina com stop e alvo. Com pura, cada J6 também sozinha, sem a SUPREMA (/juncao 7 pura). Com mov no fim, separa pelo quanto a moeda andou no dia"],
   ], c ? "stop1 · alvo2 · horas 1,2,4 · trail1 · arma1 · be1 · stop0/alvo0 = sem · listas comparam tudo" : "Opções: stop1 = stop a 1 ATR do 15m · alvo2 = alvo em 2R · horas 1,2,4 = prazo · trail1 = stop móvel a 1 ATR · arma1 = o stop móvel só começa depois de +1 ATR · be1 = zero a zero depois de +1 ATR · stop0/alvo0 = sem. Com listas (stop1,1.5) compara todas as combinações. 2 a 3 ATR do 15m ≈ 1 ATR do 1h.");
 
   sec("🤖 Motor", [
@@ -10672,7 +10693,9 @@ Deno.serve(async (req) => {
         }
       });
       if (argsJ.some((a) => /^m[eé]dias/.test(a)) && !customsJ.length) { await sendTelegram(chatId, "⚠️ Passe pelo menos 2 médias entre 2 e 200. Ex.: /juncao 7 medias 9,20,21,30"); return new Response("ok"); }
-      await comAguarde("🔀 Recalculando a faixa nos modos da junção, aguarde (pode levar 1 a 3 min)...", () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2], customsJ.slice(0, 4), argsJ.includes("mov")));
+      // V108: "pura" (ou "j6pura") = cada J6 também na versão pura, só a linha da J6 sem a SUPREMA
+      const puraJ = argsJ.some((a) => /^(j6)?pur[ao]$/.test(a));
+      await comAguarde(`🔀 Recalculando a faixa nos modos da junção${puraJ ? " (com a J6 pura)" : ""}, aguarde (pode levar 1 a 3 min${puraJ ? ", um pouco mais com a J6 pura" : ""})...`, () => runJuncao(chatId, diasJ, cfgsJ.slice(0, 8), horasJ.length ? horasJ : [1, 2], customsJ.slice(0, 4), argsJ.includes("mov"), puraJ));
       return new Response("ok");
     }
     if (text === "/radarsim" || text.startsWith("/radarsim ") || text.startsWith("/radarsim@")) {
