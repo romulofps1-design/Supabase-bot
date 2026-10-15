@@ -1,6 +1,6 @@
 // telegram-bot V107 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX e filtro por tipo (comp, oport, rev, fundo, topo); /juncao (junção clássica x rápida x rápida + EMA 144 recalculada nas mesmas velas; J6_MODO=rapida144 no bot, medias X,Y,Z pra testar uma J6 personalizada, com listas de stop/alvo/stop móvel); simulações com stop móvel (trailX, armaY) e zero a zero (beX); /radarsim cruz (ligo no alerta, o robô entra, desligo e sigo com stop: uma operação por alerta, sem virar; e ↩️ contra o alerta: se a moeda cruza do outro lado em até RADARSIM_CONTRA_VELAS velas, entra a favor do novo cruzamento, uma vez só; viradas 0,1,3 compara a cadeia com até N viradas, cada perna saindo no stop/alvo/prazo ou no cruzamento contra); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho)
+// V107 (V106 + versão gravada em cada alerta (coluna versao) e filtro "desde V107" / "desde dd/mm" nos comandos de estatística (VERSAO_DATAS pra alertas antigos); margem de erro (± intervalo de Wilson 95%) nas porcentagens; o REPIQUE segue a regra do repique (ADX >= REPIQUE_ADX_MIN e DI a favor) também no alerta principal, antes só no radar; /config mudou (só o que difere do padrão); resumo semanal das sombras (real x sombra de reversão, repique e volume) e /sombras [dias]; /radarsim (operar só pelos radares com stop, alvo e prazo à escolha, e por humor do BTC; régua do /saida); modo foguete (espelho da faca: topo com ADX alto como LONG de continuação, só sombra) e /foguete; /radar separa por humor do BTC; /saida e /radarsim separam por movimento da moeda no dia (📏) e /saida aceita movX e filtro por tipo (comp, oport, rev, fundo, topo); /juncao (junção clássica x rápida x rápida + EMA 144 recalculada nas mesmas velas; J6_MODO=rapida144 no bot, medias X,Y,Z pra testar uma J6 personalizada, com listas de stop/alvo/stop móvel); simulações com stop móvel (trailX, armaY) e zero a zero (beX); /radarsim cruz (ligo no alerta, o robô entra, desligo e sigo com stop: uma operação por alerta, sem virar; e ↩️ contra o alerta: se a moeda cruza do outro lado em até RADARSIM_CONTRA_VELAS velas, entra a favor do novo cruzamento, uma vez só; viradas 0,1,3 compara a cadeia com até N viradas, cada perna saindo no stop/alvo/prazo ou no cruzamento contra); placar em duas filas (alertas novos não ficam mais sem conferir); comandos longos saem em partes; corrige o numEnv: Secret numérico inválido lido no começo do arquivo derrubava a function na carga; histórico de versões saiu do cabeçalho; modo alerta: cada alerta de fundo/repique também vai pro motor V58 (Secret MOTOR_ALERTA_SECRET), que decide pela configuração do site)
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const BOT_VERSAO = "V107"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
@@ -1828,6 +1828,8 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     _fundoAvaliado.set(inst, ckVela);
     await registrarAlertaFundo(SB, c.info, c.pct, fin.conf, !!fin.repique);
     await upsertLinha(SB, "_FUNDO_" + inst, { last_status: `${fin.conf}/10`, last_alert_at: new Date().toISOString() });
+    // V107: modo alerta do motor (em segundo plano: a rodada espera no fim, depois de liberar a trava)
+    _bgTarefas.push(enviarAlertaMotor({ inst, side: "long", tipo: fin.repique ? "repique" : "fundo", preco: Number(vivo ?? c.info.preco), atr: Number(c.info.atr), nota: fin.conf, vol: volDe(inst)?.u ?? null }).catch((e) => console.log("⚠️ modo alerta falhou", e)));
     if (ehRep) enviadosRep++; else enviados++;
     console.log(`🟢 radar de fundo enviado: ${inst} ${fin.conf}/10${ehRep ? " ⭐ repique" : ""}${subidaDe !== null ? ` (nota subiu de ${subidaDe})` : ""}`);
   }
@@ -4042,6 +4044,27 @@ async function runDivDiag(chatId: number | string) {
 const MOTOR_URL = (Deno.env.get("MOTOR_URL") || "").trim();
 const MOTOR_LEITURA_SECRET = (Deno.env.get("MOTOR_LEITURA_SECRET") || "").trim();
 const MOTOR_USER_EMAIL = (Deno.env.get("MOTOR_USER_EMAIL") || "").trim();
+// V107: MODO ALERTA do motor (V58+). Cada alerta de FUNDO (e repique) que sai no Telegram também vai pro motor, que decide pela configuração do site
+// (ligado, simulação, banca, stop/alvo/prazo, limites). Secret MOTOR_ALERTA_SECRET = o ALERTA_SECRET do motor (chave que SÓ grava o alerta como pendente).
+// Sem MOTOR_URL ou sem MOTOR_ALERTA_SECRET, não manda nada. Nunca atrasa nem derruba o alerta do Telegram (roda em segundo plano, com timeout).
+const MOTOR_ALERTA_SECRET = (Deno.env.get("MOTOR_ALERTA_SECRET") || "").trim();
+// V107: se a função do motor exige JWT no gateway do Supabase ("Verify JWT" ligado), o Secret MOTOR_ANON_KEY (a anon key PÚBLICA do projeto do motor,
+// a mesma que o site usa) vai como Authorization. Ela não dá acesso a nada no motor: quem autoriza é a chave de leitura / do modo alerta.
+const MOTOR_ANON_KEY = (Deno.env.get("MOTOR_ANON_KEY") || "").trim();
+const motorHeaders = (extra: Record<string, string>): Record<string, string> => ({ "Content-Type": "application/json", ...(MOTOR_ANON_KEY ? { Authorization: `Bearer ${MOTOR_ANON_KEY}`, apikey: MOTOR_ANON_KEY } : {}), ...extra });
+async function enviarAlertaMotor(o: { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null }) {
+  if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) return;
+  if (!(o.preco > 0) || !(o.atr > 0)) { console.log(`⚠️ modo alerta: ${o.inst} sem preço/ATR válido, não mandei pro motor`); return; }
+  try {
+    const r = await fetch(MOTOR_URL, {
+      method: "POST", headers: motorHeaders({ "x-alerta-secret": MOTOR_ALERTA_SECRET }),
+      body: JSON.stringify({ action: "alerta", instId: o.inst, side: o.side, tipo: o.tipo, preco: o.preco, atr: o.atr, nota: o.nota, vol_usdt: o.vol }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const j: any = await r.json().catch(() => null);
+    console.log(r.ok && j?.ok ? `📨 modo alerta: ${o.inst} ${o.tipo} enviado ao motor (${j.gravados ?? 0} pendente(s)${j.msg ? ` · ${j.msg}` : ""})` : `⚠️ modo alerta: o motor recusou ${o.inst} (HTTP ${r.status}${j?.error ? `: ${String(j.error).slice(0, 160)}` : ""})`);
+  } catch (e) { console.log(`⚠️ modo alerta: falha ao mandar ${o.inst} pro motor (${e})`); }
+}
 type TradeMotor = { inst_id: string; side: string; action: "open" | "close"; size: number | null; price: number | null; cost_usdt: number | null; pnl_usdt: number | null; motivo: string | null; created_at: string };
 function resumoTrades(rows: TradeMotor[], dias: number): string {
   const opens = rows.filter((r) => r.action === "open"), closes = rows.filter((r) => r.action === "close");
@@ -4086,7 +4109,7 @@ async function runTrades(chatId: number | string, dias: number) {
     return;
   }
   try {
-    const r = await fetch(MOTOR_URL, { method: "POST", headers: { "Content-Type": "application/json", "x-leitura-secret": MOTOR_LEITURA_SECRET }, body: JSON.stringify({ action: "trades", dias, ...(MOTOR_USER_EMAIL ? { user_email: MOTOR_USER_EMAIL } : {}) }) });
+    const r = await fetch(MOTOR_URL, { method: "POST", headers: motorHeaders({ "x-leitura-secret": MOTOR_LEITURA_SECRET }), body: JSON.stringify({ action: "trades", dias, ...(MOTOR_USER_EMAIL ? { user_email: MOTOR_USER_EMAIL } : {}) }) });
     const j: any = await r.json().catch(() => null);
     if (!r.ok || !j?.ok) { await sendTelegram(chatId, `⚠️ O motor recusou a leitura (HTTP ${r.status}${j?.error ? `: ${String(j.error).slice(0, 160)}` : ""}). Confira MOTOR_URL, o LEITURA_SECRET do motor e se o motor já está na versão com a ação "trades".`); return; }
     for (const parte of dividirHtml(resumoTrades((j.trades || []) as TradeMotor[], Number(j.dias) || dias))) await sendTelegram(chatId, parte);
@@ -10233,7 +10256,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🔪 /facasim 7", "faca: onde entrar (direto x rompimento da vela x rompimento do último fundo anterior)", "pros candidatos do modo faca, compara 3 entradas SHORT: direto no preço do candidato, rompendo a mínima da vela do candidato e rompendo o último fundo anterior ainda não perdido (pivô). Mostra também o direto só nos que romperam o fundo, pra comparar em pé de igualdade. Sem stop/alvo no comando, compara um pacote de saídas: stop apertado (0,5 ATR), padrão (1), solto (2), alvo curto (1R), zero a zero e stop móvel sem alvo, em 2h e 4h. Ou escolha com listas: /facasim 7 stop0.5,1,2 alvo1,2,3 horas 2,4,8 (todas as combinações, até 8; trailX, armaY, beX, stop0/alvo0 = sem). /facasim 7 foguete = o mesmo pro foguete (LONG rompendo o último topo anterior). Até 9 dias."],
     ["🔪 /faca 7", "modo faca: fundo com ADX alto como continuação (SHORT)", "candidatos do modo faca (FACA_MODO: sombra grava em silêncio, alerta também avisa, off desliga): o que aconteceu depois, com as mesmas regras do /radar (invalidou/funcionou, rompimento da vela, virada). Fica fora do /placar. O número é a quantidade de dias (até 9)"],
     ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
-    ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET"],
+    ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP e, do modo alerta, alerta_stop / alerta_alvo / alerta_prazo), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET. O modo alerta (cada alerta de fundo vai pro motor, que decide pela configuração do site) precisa também do MOTOR_ALERTA_SECRET"],
     ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
     ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso. /div diag mostra por que avisou ou não (regra a regra, com 15m pra comparar com o TradingView)"],
     ["🧾 /meuplacar 7", "seus trades reais x alertas", "seus trades reais x alertas do bot (precisa da chave BloFin)"],
@@ -10323,6 +10346,7 @@ function montarConfig(): string {
   m += `⭐ seguidas: ${SEG_MAX} por pessoa\n`;
   m += `📡 Fallback de dados avisa a partir de ${FONTE_FALLBACK_PCT}% das consultas e normaliza abaixo de ${FONTE_NORMALIZA_PCT}%\n`;
   m += `⏱ Cron: aviso se parar > ${CRON_AVISO_MIN} min (/status alerta > ${CRON_ALERTA_MIN} min) · trava contra sobreposição ${(CRON_LOCK_TIMEOUT_MS / 1000).toFixed(0)}s\n`;
+  m += `🤖 Modo alerta do motor: ${MOTOR_URL && MOTOR_ALERTA_SECRET ? "alertas de fundo (e repique) vão pro motor; ligar, simular e limites ficam no site" : "não envia (faltam MOTOR_URL e/ou MOTOR_ALERTA_SECRET)"}\n`;
   m += `🎯 Antecipação: auto-calibração ${on(AUTO_CALIB_ON)} a cada ${AUTO_CALIB_INTERVALO_H}h (janela ${AUTO_CALIB_DIAS}d, mín. ${ANTEC_CALIB_MIN} amostras) · confiabilidade por moeda: mín. ${CONFIAB_MIN_AMOSTRA} em até ${CONFIAB_JANELA_N} últimas previsões\n`;
   m += `\n${MINI_DIVISOR}\n`;
   m += `🧠 <b>IA (/pergunta e /veredito)</b>\n• Gemini: ${Deno.env.get("GEMINI_API_KEY") ? "chave configurada ✅" : "SEM chave (GEMINI_API_KEY) ⚠️"}${IA_LIMITE_DIARIO_GEMINI > 0 ? ` · limite ${IA_LIMITE_DIARIO_GEMINI}/dia` : " · sem limite diário"}\n• Claude: ${Deno.env.get("ANTHROPIC_API_KEY") ? "chave configurada ✅" : "SEM chave (ANTHROPIC_API_KEY) ⚠️"}${IA_LIMITE_DIARIO_CLAUDE > 0 ? ` · limite ${IA_LIMITE_DIARIO_CLAUDE}/dia` : " · sem limite diário"}\n• aviso quando faltar ≤ ${IA_AVISO_RESTANTE} consultas · env: IA_LIMITE_DIARIO_GEMINI, IA_LIMITE_DIARIO_CLAUDE (0 = sem limite), IA_AVISO_RESTANTE, GEMINI_MODEL, CLAUDE_MODEL\n\n`;
