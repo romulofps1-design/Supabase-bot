@@ -1304,8 +1304,17 @@ function dividirTexto(texto: string, max = 3800): string[] {
   const partes: string[] = [];
   let cur: string[] = [];
   const tam = (ls: string[]) => ls.join("\n").length;
-  for (const linha of texto.split("\n")) {
-    if (cur.length && tam([...cur, linha]) > max) {
+  // V107: linha sozinha maior que o limite é quebrada em pedaços (num espaço, se der)
+  const linhas: string[] = [];
+  for (const l of texto.split("\n")) {
+    let r = l;
+    while (r.length > max) { let c = r.lastIndexOf(" ", max); if (c < max * 0.5) c = max; linhas.push(r.slice(0, c)); r = r.slice(c).replace(/^ /, ""); }
+    linhas.push(r);
+  }
+  for (const linha of linhas) {
+    // V107: "while" (antes "if"): depois de cortar na última linha em branco, o resto + a linha nova ainda podia passar do limite,
+    // e a parte seguinte saía com mais de 4096 caracteres -> o sendTelegram cortava ("...(cortado)" no /config).
+    while (cur.length && tam([...cur, linha]) > max) {
       let corte = cur.length;
       for (let k = cur.length - 1; k > 0; k--) if (ehQuebra(cur[k])) { corte = k; break; }
       partes.push(cur.slice(0, corte).join("\n"));
@@ -10213,89 +10222,100 @@ function textoHelp(chatId: number | string): string {
   t += `${DIVISOR}\n📖 Lista de comandos: /comandos\n🆔 Seu chat_id: <b>${chatId}</b>`;
   return t;
 }
+// V107: /comandos reescrito — descrições curtas e diretas, comandos agrupados pelo que fazem (consultar, mercado, resultado dos
+// alertas, simulações, motor) e as opções das simulações explicadas uma vez só, numa legenda.
 function textoComandos(chatId: number | string, modoAtual: Modo, remetente: number | string): string {
   const c = modoAtual === "experiente"; // compacto: uma linha curta por comando
   let t = `📖 <b>Comandos</b>\n${DIVISOR}\n`;
   let primeiro = true;
-  const sec = (titulo: string, itens: [string, string, string][]) => {
+  const sec = (titulo: string, itens: [string, string, string][], nota = "") => {
     t += primeiro ? `\n<b>${titulo}</b>\n` : `\n${MINI_DIVISOR}\n<b>${titulo}</b>\n`;
     primeiro = false;
+    if (nota) t += `<i>${nota}</i>\n`;
     for (const [cmd, curto, longo] of itens) t += `${cmd} — ${c ? curto : longo}\n`;
   };
 
-  sec("🔎 Consultar", [
-    ["🔎 /analise ONE", "veredito completo + guia de fora/dentro", "veredito, \"ligar o robô?\" (PREPARE / LIGUE AGORA), tempo até o fechamento da vela, distância ao Indicador e guia pra quem está de fora e pra quem já está dentro"],
-    ["⚖️ /comparar MOEDA1 MOEDA2", "qual tem a confiança mais alta agora", "roda o mesmo cálculo de confiança do /analise nas duas e mostra lado a lado, com o veredito de qual sinal está mais forte agora"],
-  ]);
-
-  sec("🧠 Perguntar à IA", [
-    ["🤖 /pergunta ONE [pergunta]", "Gemini", "roda o /analise da moeda e manda pro Gemini responder; sem pergunta, ele dá um veredito curto (ligar, esperar ou evitar)"],
-    ["🧠 /veredito ONE [pergunta]", "Claude", "igual o /pergunta, mas usa o Claude"],
-    ["🏆 /melhor [pergunta]", "Gemini compara as moedas da varredura", "roda as varreduras de oportunidade e reversão e pede pro Gemini comparar e dizer qual moeda está mais bem posicionada agora (filtro inicial; confirme com /pergunta)"],
-    ["🎓 /estudo", "checklist + como funciona o filtro de lateral", "checklist com os 8 pontos pra conferir no /analise antes de decidir ligar o robô, e a aula do filtro de mercado lateral (o que é, os 3 requisitos e os estados)"],
+  sec("🔎 Consultar uma moeda", [
+    ["🔎 /analise ONE", "veredito completo", "diz se é hora de ligar o robô (PREPARE / LIGUE AGORA), quanto falta pro fechamento da vela, a distância até a linha e o que fazer se você está de fora ou já dentro"],
+    ["⚖️ /comparar ONE SOL", "qual das duas está mais forte", "calcula a nota de confiança das duas moedas e mostra lado a lado qual sinal está mais forte agora"],
+    ["🤖 /pergunta ONE [pergunta]", "pergunta ao Gemini", "manda o /analise da moeda pro Gemini; sem pergunta, ele diz se é hora de ligar, esperar ou evitar"],
+    ["🧠 /veredito ONE [pergunta]", "pergunta ao Claude", "igual ao /pergunta, mas quem responde é o Claude"],
+    ["🏆 /melhor", "a IA escolhe a melhor da varredura", "roda /oportunidade e /reversao e pede pro Gemini apontar a moeda mais bem posicionada. É um primeiro filtro: confirme com /pergunta"],
+    ["🎓 /estudo", "checklist antes de ligar", "os 8 pontos pra conferir no /analise antes de ligar o robô, mais a aula do filtro de mercado lateral"],
   ]);
 
   const varreduras: [string, string, string][] = [
-    ["🚀 /oportunidade", "a favor do dia, perto do Indicador", "a favor do dia (LONG em moeda que subiu, SHORT em moeda que caiu), com liquidez e tendência, perto do Indicador"],
-    ["🔄 /reversao", "contra o dia, perto do Indicador", "vira contra o dia: SHORT em moeda que subiu (LONG → SHORT) e LONG em moeda que caiu (SHORT → LONG, só com sinais de fundo), perto do Indicador"],
+    ["🚀 /oportunidade", "a favor do dia, perto da linha", "moedas perto da linha a favor do dia: LONG nas que subiram, SHORT nas que caíram (com liquidez e tendência)"],
+    ["🔄 /reversao", "contra o dia, perto da linha", "moedas perto da linha contra o dia: SHORT nas que subiram e LONG nas que caíram (este só com sinal de fundo)"],
   ];
-  if (FUNDO_ON) varreduras.push(["🟢 /fundo", "sinais de fundo (⭐ repique primeiro)", "caíram ≥10% (no dia ou desde a máxima recente) e já mostram sinais de fundo (possível virada SHORT → LONG); ⭐ repique = disparou, recuou até a faixa e segura nela (retomada da alta), vem primeiro"]);
-  if (TOPO_ON) varreduras.push(["🔴 /topo", "sinais de topo (⭐ repique primeiro)", "subiram ≥10% (no dia ou desde a mínima recente) e já mostram sinais de topo (possível virada LONG → SHORT); ⭐ repique = despencou, repicou até a faixa e foi rejeitada (retomada da queda), vem primeiro"]);
-  sec("📡 Varreduras", varreduras);
+  if (FUNDO_ON) varreduras.push(["🟢 /fundo", "caíram e mostram sinal de fundo", `caíram ${FUNDO_QUEDA_MIN}%+ e já mostram sinal de fundo (possível virada pra LONG). ⭐ Repique vem primeiro: disparou, voltou até a faixa e está segurando`]);
+  if (TOPO_ON) varreduras.push(["🔴 /topo", "subiram e mostram sinal de topo", `subiram ${TOPO_ALTA_MIN}%+ e já mostram sinal de topo (possível virada pra SHORT). ⭐ Repique vem primeiro: despencou, voltou até a faixa e foi rejeitada`]);
+  sec("📡 Procurar moedas", varreduras);
 
   sec("⭐ Acompanhar", [
-    ["📋 /lista", "moedas em acompanhamento", "moedas em acompanhamento (alerta original + situação atual)"],
-    ["⭐ /seguir ONE", "segue uma moeda (sem moeda: mostra as seguidas)", "moeda sua, avisada mesmo fora do top 40; /seguir sem moeda mostra as que você já segue (botões 🔎 e ❌ na lista)"],
-    ["❌ /parar ONE", "deixa de seguir", "deixa de acompanhar a moeda"],
+    ["📋 /lista", "moedas em acompanhamento", "moedas que o bot está acompanhando depois de um alerta: como era no alerta e como estão agora"],
+    ["⭐ /seguir ONE", "seguir uma moeda", "o bot avisa dessa moeda mesmo fora das que mais andaram. Sem moeda, mostra as que você segue (com botões 🔎 e ❌)"],
+    ["❌ /parar ONE", "parar de seguir", "deixa de seguir a moeda"],
   ]);
 
-  sec("📊 Resultados", [
-    ["🎯 /radarconf 30", "radar de topo e de fundo por nota de confiança", "mostra, pro radar de topo e pro de fundo, o acerto (1h, 4h, 24h) de cada nota de confiança e por faixa baixa/média/alta, pra ver se nota maior acerta mais. O número é a quantidade de dias"],
-    ["🔄 /reversaoconf 30", "reversão por nota, lado, ADX e esticada + modo sombra", "mostra, só pros alertas de reversão (virada contra o dia), o acerto (15m, 1h, 4h, 24h) por nota de confiança, por lado (LONG/SHORT), por força do ADX e por esticada em 24h. A reversão só alerta com ADX ≤ 20 e DI a favor; o que essa regra barra fica gravado em silêncio (🌑 sombra) e aparece no relatório pra comparar. O número é a quantidade de dias"],
-    ["💧 /volconf 7", "resultado por volume (USDT x unidades) + sombra abaixo do filtro", "mostra, pros radares (topo, fundo, repique) e pros alertas de oportunidade/reversão, quanto funcionou e quanto foi invalidado: (A) só o que passa no filtro de volume (FILTRO_VOL_MIN_USDT), (B) sem filtro, incluindo a 🌑 sombra gravada abaixo dele, (C) por faixa de volume em USDT, (D) por quartis de volume em unidades da moeda e (E) os dois filtros juntos. No fim diz quantos pontos o USDT e as unidades separam. ⚠️ = menos de 8 alertas. Só os últimos 9 dias (usa as velas). Os alertas de antes da V106 não têm volume."],
-    ["🔀 /juncao 7", "junção clássica x rápida x rápida + 144 (J6_MODO)", "recalcula a faixa do robô nos três modos da junção (clássica: 20/21/50/60/100/200 · rápida: 9/20/21/50/60 · rápida + EMA 144: 9/20/21/50/60/144; no bot, J6_MODO=rapida144 liga essa última; medias 9,20,21,30 acrescenta uma J6 personalizada só pra teste; repita medias até 4x pra comparar várias de uma vez) com as mesmas velas de 15m, nas moedas que tiveram alerta, e compara: quantos cruzamentos por dia (serrote), o robô ligado direto (vira a cada cruzamento), a saída do robô com stop e a rotina com stop/alvo/prazo. Separa todos os cruzamentos e só os \"de alerta\" (movimento e ADX do filtro do /saida). Ex.: /juncao 7 stop1,1.5 alvo1.5,2 horas 1,2 (com listas compara todas as combinações de stop, alvo e stop móvel, até 8; trailX = stop móvel a X ATR do melhor preço, armaY = só começa a seguir depois de +Y ATR, beX = zero a zero depois de +X ATR, stop0/alvo0 = sem). Com \"mov\" no fim, mostra só o resumo separado pelo quanto a moeda andou no dia (abaixo de 8%, 8–15%, 15–25%, 25%+), com o motor real e a rotina lado a lado. Até 7 dias."],
-    ["🧪 /radarsim 9 regra stop1 alvo2 horas 1,2,4", "operar só pelos radares (stop, alvo e prazo à escolha)", "simula entrar nos alertas de topo, fundo e repique (direto no alerta ou no rompimento da vela do alerta) e sair no stop (stopX = X ATR do 15m; stop0 = sem stop), no alvo (alvoX = X R; alvo0 = sem alvo) ou no prazo (horas 1,2,4), o que vier primeiro. Também aceita trailX (stop móvel a X ATR do melhor preço), armaY (só arma depois de +Y ATR) e beX (zero a zero depois de +X ATR). Mostra acerto, média em R, PF, sem os 3 melhores, o pior trade e quanto o preço andou contra antes de sair. Mesma régua do /saida, pra comparar com o robô no cruzamento. regra = só os alertas que passariam no ADX das regras atuais. btc = separa pelo humor do BTC na hora do alerta (subindo, caindo, de lado); mov = separa pelo movimento da moeda no dia (|24h|: abaixo de 8%, 8 a 15%, 15 a 25%, 25% ou mais); com romp, usa a entrada no rompimento. cruz = em vez dos radares, os alertas do cruzamento (oportunidade, reversão, compressão): entra no preço em que o robô entrou e sai pelo stop/alvo/prazo, uma operação por alerta, sem virar — mede \"ligo no alerta, o robô entra, desligo e sigo com stop manual\". Mostra também ↩️ contra o alerta: quando a moeda fecha cruzada do outro lado em até RADARSIM_CONTRA_VELAS velas (8), entra a favor desse novo cruzamento, uma vez só. Com viradas 0,1,3 (até 5) compara a cadeia com até N viradas: cada perna sai no stop, no alvo, no prazo ou no cruzamento contra, e só vira se saiu pelo cruzamento. Stop de 2 a 3 ATR do 15m ≈ 1 ATR do 1h. Padrões: stop SAIDA_STOP_ATR, sem alvo, horas RADARSIM_HORAS."],
-    ["🌑 /sombras 7", "resumo real x sombra (reversão, repique, volume)", "num só lugar, compara o que alertou com o que a regra barrou e ficou gravado em silêncio, pra reversão (ADX/DI), repique (ADX/DI) e volume (filtro de USDT): acerto em 4h com margem de erro e uma leitura (regra ajuda, atrapalha ou ainda dentro da margem). Sai sozinho 1x por semana (SOMBRA_RESUMO_DIA, padrão domingo, a partir de SOMBRA_RESUMO_H = 20h; SOMBRA_RESUMO=0 desliga)."],
-    ["🔎 ... desde V107", "julgar uma regra só com dados depois dela", "acrescente \"desde V107\" (versão) ou \"desde 05/10\" (data) no fim de /placar, /15min, /meuplacar, /saida, /radar, /radarconf, /reversaoconf, /repsombra, /volconf, /compressao ou /sombras. Ex.: /radarconf 90 desde V104. Alertas gravados antes da V107 não têm versão: pra incluí-los, defina o Secret VERSAO_DATAS (ex.: V104=2026-10-01,V105=2026-10-08). O ± depois das porcentagens é a margem de erro (95%): se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte."],
-    ["⚙️ /config mudou", "só os ajustes diferentes do padrão (admin)", "lista os Secrets numéricos que você mudou (com o padrão ao lado), os valores inválidos que o bot está ignorando e os demais Secrets definidos (tokens e chaves ocultos). /config sozinho mostra tudo por seção."],
-    ["⭐ /repsombra 30", "repique real x sombra (ADX e DI)", "mostra os repiques que alertaram e, em separado, os que a regra de ADX/DI barrou e ficaram gravados em silêncio (🌑 sombra): acerto (15m, 1h, 4h, 24h) e retorno mediano. O repique só alerta com ADX ≥ 24 e DI a favor; use pra decidir se a regra está cortando sinal bom. O número é a quantidade de dias"],
-    ["🗜️ /compressao 30", "compressão por faixa de confiança, ADX e lado", "mostra, só pra compressão, qual faixa de confiança (6, 7, 8, 9–10), de ADX e de lado rende melhor (acerto e retorno mediano em 1h, 4h e 24h) — pra decidir se vale subir o COMPRESS_CONF_MIN. O número é a quantidade de dias"],
-    ["📊 /placar 7", "taxa de acerto dos alertas", "taxa de acerto dos alertas (1h, 4h, 24h); o número é a quantidade de dias"],
-    ["⏱ /15min 7", "placar do horizonte de 15m", "placar separado só do horizonte de 15 min (alertas frescos, PF, extremos)"],
-    ["🚪 /saida", "simula a saída real do robô", "simula a saída do robô nos últimos 7 dias (até 9): R médio, profit factor, sem os 3 melhores, viradas, lateral contra tendência e o trailing do motor em % (hoje 0,5/0,3 contra 5/3,5 contínuo e em degraus de 5%). Já vem filtrado pelo que você usa: moeda com |24h| ≥ 8% e ADX ≥ 14 subindo. Opcional: /saida 9 · /saida QNT · /saida 5/3.5/3 · /saida tudo (sem filtro) V107: acrescente mov15 (ou mov20, mov25) pra ver só as moedas que andaram 15%+ no dia; comp, oport, rev, fundo ou topo filtram por tipo de alerta (ex.: /saida 9 tudo comp desde V107 = a mão virada só na compressão nova); a mensagem também separa por faixa de movimento (📏)."],
-    ["📚 /radarhist 30", "histórico dos radares acumulado no Supabase", "o que o /radar mostra, mas guardado dia a dia (além dos 9 dias das velas): por tipo, por esticada em 24h (inclui 25% ou mais) e por ADX. Grava sozinho na virada das 21h; /radarhist gravar força agora"],
-    ["🚀 /foguete 7", "modo foguete: topo com ADX alto como continuação (LONG)", "espelho do modo faca: o topo que o radar não avisa por ADX alto (≥ FOGUETE_ADX_MIN, padrão 30) e com nota de topo ≥ FOGUETE_GRAVA_MIN (3) é gravado em silêncio como candidato LONG de continuação da alta. Mostra o que aconteceu depois, com as mesmas regras do /radar (inclusive por humor do BTC). FOGUETE_MODO=off desliga. A nota mede o quanto a alta parece topo: o LONG aposta contra ela, então nota maior não é LONG melhor."],
-    ["🔪 /facasim 7", "faca: onde entrar (direto x rompimento da vela x rompimento do último fundo anterior)", "pros candidatos do modo faca, compara 3 entradas SHORT: direto no preço do candidato, rompendo a mínima da vela do candidato e rompendo o último fundo anterior ainda não perdido (pivô). Mostra também o direto só nos que romperam o fundo, pra comparar em pé de igualdade. Sem stop/alvo no comando, compara um pacote de saídas: stop apertado (0,5 ATR), padrão (1), solto (2), alvo curto (1R), zero a zero e stop móvel sem alvo, em 2h e 4h. Ou escolha com listas: /facasim 7 stop0.5,1,2 alvo1,2,3 horas 2,4,8 (todas as combinações, até 8; trailX, armaY, beX, stop0/alvo0 = sem). /facasim 7 foguete = o mesmo pro foguete (LONG rompendo o último topo anterior). Até 9 dias."],
-    ["🔪 /faca 7", "modo faca: fundo com ADX alto como continuação (SHORT)", "candidatos do modo faca (FACA_MODO: sombra grava em silêncio, alerta também avisa, off desliga): o que aconteceu depois, com as mesmas regras do /radar (invalidou/funcionou, rompimento da vela, virada). Fica fora do /placar. O número é a quantidade de dias (até 9)"],
-    ["📡 /radar 7 pernas2 alvo3", "o que aconteceu depois dos radares", "com os alertas de topo e fundo já enviados e as velas seguintes, mostra quantos foram invalidados (preço andou contra a ideia), quantos funcionaram e quanto andou; as maiores invalidações. Os alertas ao vivo de \"invalidado\" e \"funcionou\" saem sozinhos (HIP_ON)"],
-    ["🧪 /motorteste", "testa a ligação com o modo alerta do motor", "manda um alerta de TESTE pro motor (BTC, ou /motorteste SOL): o motor grava e recusa de propósito (tipo teste), sem nenhuma ordem. Se aparecer no site em \"alertas que não entraram\", a ligação bot → motor está certa. Precisa do modo alerta ligado no site"],
-    ["🧾 /trades 7", "trades reais do motor", "histórico real do motor (outro Supabase, lido por chave só de leitura): acertos, PnL, taxa estimada, fechamentos por motivo (virada, trailing, SL/TP e, do modo alerta, alerta_stop / alerta_alvo / alerta_prazo), melhores e piores moedas. Precisa dos Secrets MOTOR_URL e MOTOR_LEITURA_SECRET. O modo alerta (cada alerta de fundo vai pro motor, que decide pela configuração do site) precisa também do MOTOR_ALERTA_SECRET"],
-    ["📜 /logs", "volume de logs", "mostra o nível de logs da função (LOG_NIVEL: tudo, normal, erro ou mudo), quantos logs foram ocultados e como mudar pelos Secrets"],
-    ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (regular e oculta) em 1h, 4h, diário e semanal: o que está antecipado em aberto e o que o BTC fez depois de cada aviso. /div diag mostra por que avisou ou não (regra a regra, com 15m pra comparar com o TradingView)"],
-    ["🧾 /meuplacar 7", "seus trades reais x alertas", "seus trades reais x alertas do bot (precisa da chave BloFin)"],
-    ["🌅 /resumo", "painel do dia", "painel do dia (21h a 21h), atualizado a cada hora: agenda e notícias no topo, BTC (comparação desde as 21h e 8h), posições e janelas fortes; no fechamento das 21h vêm os 15m em destaque, seu resultado real e o comparativo com o ciclo anterior"],
-    ["📰 /noticia", "falas do Trump e notícias que mexem no mercado", "últimas notícias de impacto: falas do Trump (espelho do Truth Social) e manchetes de cripto/macro, traduzidas pro português quando o Gemini está configurado; aceita /noticia trump, /noticia cripto e /noticia 24 (horas). Avisa sozinho quando o Trump posta algo de alto impacto"],
-    ["📅 /agenda", "dados econômicos de hoje e amanhã", "dados econômicos importantes de hoje e amanhã (avisa 60 e 15 min antes, pra você evitar operar, e depois compara o resultado com a projeção)"],
+  sec("📰 Mercado", [
+    ["🌅 /resumo", "painel do dia", "painel do dia (21h a 21h), atualizado a cada hora: agenda, notícias, BTC, suas posições e janelas fortes. Às 21h fecha o dia com seu resultado real e o comparativo com o dia anterior"],
+    ["📰 /noticia", "notícias que mexem no mercado", "falas do Trump e manchetes de cripto/macro de impacto, em português. Filtre com /noticia trump, /noticia cripto ou /noticia 24 (horas). Avisa sozinho quando sai algo forte"],
+    ["📅 /agenda", "dados econômicos de hoje e amanhã", "CPI, payroll, Fed e outros dados de hoje e amanhã. Avisa 60 e 15 min antes e depois compara o resultado com a projeção"],
+    ["📐 /div", "divergência de RSI do BTC", "divergências de RSI do BTC (normal e oculta) em 1h, 4h, diário e semanal: as que estão em aberto e o que o BTC fez depois de cada uma. /div diag explica por que avisou ou não"],
+  ]);
+
+  sec("📊 Como os alertas se saíram", [
+    ["📊 /placar 7", "acerto dos alertas", "acerto dos alertas em 1h, 4h e 24h"],
+    ["⏱ /15min 7", "acerto em 15 min", "acerto só em 15 min: alertas frescos, profit factor e extremos"],
+    ["📡 /radar 7", "o que veio depois dos radares", "pros alertas de topo e fundo: quantos funcionaram, quantos foram invalidados e quanto o preço andou, separado pelo humor do BTC e pelo movimento da moeda no dia"],
+    ["🎯 /radarconf 30", "radares por nota", "acerto dos radares de topo e de fundo em cada nota de confiança, pra ver se nota maior acerta mais"],
+    ["🔄 /reversaoconf 30", "reversão por nota, lado e ADX", "acerto só da reversão, por nota, lado, força do ADX e quanto a moeda já tinha esticado, comparando com o que a regra de ADX/DI barrou (🌑 sombra)"],
+    ["⭐ /repsombra 30", "repique: alertou x barrado", "repiques que alertaram x os que a regra de ADX/DI barrou: acerto e retorno de cada grupo, pra ver se a regra está cortando sinal bom"],
+    ["🗜️ /compressao 30", "compressão por nota, ADX e lado", "qual nota, ADX e lado rendem mais na compressão, pra decidir se vale subir a nota mínima"],
+    ["💧 /volconf 7", "resultado por volume", "como os alertas se saem por faixa de volume (em USDT e em unidades da moeda), incluindo os que ficaram abaixo do filtro (🌑 sombra). Até 9 dias"],
+    ["🌑 /sombras 7", "o que as regras barraram x o que alertou", "num lugar só (reversão, repique e volume): o que alertou x o que a regra barrou e se a regra está ajudando, atrapalhando ou se ainda é cedo pra dizer. Chega sozinho uma vez por semana"],
+    ["📚 /radarhist 30", "histórico longo dos radares", "o mesmo do /radar, guardado dia a dia (passa dos 9 dias de velas). Grava sozinho às 21h; /radarhist gravar força agora"],
+    ["🔪 /faca 7", "fundos com ADX alto (SHORT)", "fundos com ADX alto que podem continuar caindo, gravados em silêncio: o que aconteceu depois. Fica fora do /placar"],
+    ["🚀 /foguete 7", "topos com ADX alto (LONG)", "espelho da faca: topos com ADX alto que podem continuar subindo. A nota mede o quanto parece topo, então nota alta não é LONG melhor"],
+    ["🔎 ... desde V107", "só depois de uma versão ou data", "coloque \"desde V107\" ou \"desde 05/10\" no fim de qualquer comando desta lista pra julgar uma regra só com dados depois dela. Ex.: /radarconf 90 desde V104"],
+  ], c ? "o número é a quantidade de dias" : "O número é a quantidade de dias. O ± nas porcentagens é a margem de erro: se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte.");
+
+  sec("🧪 Simulações", [
+    ["🚪 /saida 7", "o robô virando a cada cruzamento", "simula o robô ligado nos alertas, virando a cada cruzamento e com o trailing do motor. Já filtra do seu jeito (moeda 8%+ no dia e ADX 14+ subindo). Extras: tudo (sem filtro), mov15, comp/oport/rev/fundo/topo, ou uma moeda (/saida QNT)"],
+    ["🧪 /radarsim 9", "operar os alertas com stop, alvo e prazo", "entra nos alertas de topo, fundo e repique e sai no stop, no alvo ou no prazo. Extras: romp (entra no rompimento da vela), regra, btc, mov. Com cruz usa os alertas de cruzamento: entra junto com o robô e segue com stop, sem virar (viradas 0,1,3 compara deixar virar até N vezes)"],
+    ["🔪 /facasim 7", "faca: onde entrar no SHORT", "compara entrar direto, no rompimento da vela ou no rompimento do último fundo, com várias saídas (stop apertado, normal e solto, alvo curto, zero a zero, stop móvel). /facasim 7 foguete faz o mesmo pro LONG"],
+    ["🔀 /juncao 7", "compara as junções da faixa", "recalcula a faixa nas versões clássica, rápida e rápida + 144 (e nas suas, com medias 9,20,21,30) e compara serrote, robô virando e rotina com stop e alvo. Com mov no fim, separa pelo quanto a moeda andou no dia"],
+  ], c ? "stop1 · alvo2 · horas 1,2,4 · trail1 · arma1 · be1 · stop0/alvo0 = sem · listas comparam tudo" : "Opções: stop1 = stop a 1 ATR do 15m · alvo2 = alvo em 2R · horas 1,2,4 = prazo · trail1 = stop móvel a 1 ATR · arma1 = o stop móvel só começa depois de +1 ATR · be1 = zero a zero depois de +1 ATR · stop0/alvo0 = sem. Com listas (stop1,1.5) compara todas as combinações. 2 a 3 ATR do 15m ≈ 1 ATR do 1h.");
+
+  sec("🤖 Motor", [
+    ["🧾 /trades 7", "trades reais do motor", "histórico real do motor: acertos, resultado, taxas, por que cada operação saiu (virada, trailing, stop, alvo, prazo) e as melhores e piores moedas"],
+    ["🧪 /motorteste", "testa a ligação com o motor", "manda um alerta de teste (BTC, ou /motorteste SOL). O motor grava e recusa de propósito, sem abrir ordem. Se aparecer no site em \"não entraram\", a ligação está ok"],
   ]);
 
   const temChave = !!credDe(chatId);
   sec("💼 Sua conta BloFin", [
-    ["💼 /robo", c ? `posições e sugestões ${temChave ? "🔑" : "🔒 sem chave vinculada"}` : "", "posições abertas, sugestão para cada uma e resultado do dia (só leitura)"],
+    ["💼 /robo", `posições e sugestões${temChave ? "" : " 🔒"}`, "suas posições abertas, uma sugestão pra cada uma e o resultado do dia (só leitura)"],
+    ["🧾 /meuplacar 7", `seus trades x alertas${temChave ? "" : " 🔒"}`, "seus trades reais comparados com os alertas do bot"],
   ]);
-  if (!c) t += temChave ? "🔑 chave vinculada a este chat\n" : "🔑 nenhuma chave vinculada a este chat (o /robo fica desativado aqui)\n";
+  if (!c) t += temChave ? "🔑 chave vinculada a este chat\n" : "🔒 nenhuma chave BloFin vinculada a este chat: esses dois ficam desativados aqui\n";
 
   const ajustes: [string, string, string][] = [
-    ["⏸ /pausar", "pausa os alertas (1h, 2h ou 3h)", "pausa os alertas por 1h, 2h ou 3h"],
+    ["⏸ /pausar", "pausa os alertas", "pausa os alertas por 1h, 2h ou 3h"],
     ["▶️ /retomar", "volta os alertas", "volta os alertas antes do fim da pausa"],
-    ["⌨️ /menu", "teclado fixo", "ativa o teclado fixo embaixo"],
-    ["🎛️ /modo", `agora: ${c ? "⚡ Experiente" : "🎓 Novato"}`, `troca entre Novato e Experiente (agora: ${c ? "⚡ Experiente" : "🎓 Novato"})`],
+    ["⌨️ /menu", "teclado fixo", "mostra o teclado de atalhos aqui embaixo"],
+    ["🎛️ /modo", `agora: ${c ? "⚡ Experiente" : "🎓 Novato"}`, `troca entre Novato (explicações completas) e Experiente (resumido). Agora: ${c ? "⚡ Experiente" : "🎓 Novato"}`],
     ["🩺 /status", "testa as conexões", "testa Supabase, corretora, sua conta BloFin e o cron"],
   ];
-  if (ehAdmin(chatId, remetente)) ajustes.push(["⚙️ /config", "parâmetros em uso (admin)", "parâmetros em uso (só você, admin)"]);
+  if (ehAdmin(chatId, remetente)) {
+    ajustes.push(["⚙️ /config", "configuração em uso", "tudo o que está valendo agora, por assunto (só admin)"]);
+    ajustes.push(["⚙️ /config mudou", "só o que difere do padrão", "os Secrets que você mudou (com o padrão ao lado), os valores inválidos que o bot está ignorando e os demais definidos (tokens e chaves ocultos)"]);
+    ajustes.push(["📜 /logs", "nível de log", "quanto a função escreve no log (tudo, normal, erro ou mudo), quantos foram ocultados e como mudar"]);
+  }
   sec("⚙️ Ajustes", ajustes);
 
   t += `\n${DIVISOR}\nℹ️ Como o robô e os alertas funcionam: /help\n`;
-  t += c ? `🆔 chat_id: ${chatId}${ALERT_CHAT_IDS.length ? ` · 🔔 alerta proativo ativo (≥${ALERT_OPORT_PCT_MIN}%/${ALERT_REV_PCT_MIN}%)` : " · 🔔 alerta proativo desativado"}` : `🆔 Seu chat_id: <b>${chatId}</b>`;
+  t += c ? `🆔 chat_id: ${chatId}${ALERT_CHAT_IDS.length ? ` · 🔔 alertas ativos (${ALERT_OPORT_PCT_MIN}%+ / ${ALERT_REV_PCT_MIN}%+)` : " · 🔔 alertas desativados"}` : `🆔 Seu chat_id: <b>${chatId}</b>`;
   return t;
 }
 function textoEstudo(blocoAgenda = ""): string {
@@ -10332,42 +10352,149 @@ function textoAulaLateral(): string {
   t += `Estado agora: /resumo\n`;
   return t;
 }
+// V107: /config reescrito — organizado por assunto, em linguagem direta, sem número de versão nem nome de Secret no meio do texto
+// (os nomes dos Secrets ficam no /config mudou). Antes terminava com cortar(), que jogava fora tudo depois de ~4000 caracteres.
 function montarConfig(): string {
-  const on = (b: boolean) => (b ? "ligado" : "desligado");
+  const est = (b: boolean) => (b ? "ligado" : "desligado");
+  const tit = (emoji: string, nome: string, ligado?: boolean, extra = "") =>
+    `${emoji} <b>${nome}</b>${ligado === undefined ? "" : ` · ${est(ligado)}`}${extra}\n`;
   const tz = `UTC${X_TZ_OFFSET_H >= 0 ? "+" : ""}${X_TZ_OFFSET_H}`;
   const adminFixo = !!Deno.env.get("ADMIN_CHAT_ID") || !!Deno.env.get("BLOFIN_OWNER_CHAT_ID");
-  let m = `⚙️ <b>CONFIG</b> (valores em uso agora)\n${DIVISOR}\n\n`;
-  m += `🔔 <b>Alertas</b>\n• oportunidade ≥ ${ALERT_OPORT_PCT_MIN}% · reversão ≥ ${ALERT_REV_PCT_MIN}% (24h)\n• cooldown ${ALERT_COOLDOWN_MIN} min · repetição idêntica ${ALERT_COOLDOWN_REPETIDO_MIN} min\n• fresco ≤ ${ALERT_FRESCO_CANDLES} velas · idade máx ${ALERT_IDADE_MAX_CANDLES || "sem limite"}\n• máx ${ALERT_MAX_POR_RODADA} por rodada · pool ${ALERT_POOL} · acompanhamento ${WATCH_HORAS}h (repete a cada virada: ${WATCH_REPETIR ? "sim" : "não"})\n• antecipação: ${ANTEC_ETA_MAX_CANDLES} velas (${ANTEC_ETA_MAX_CANDLES * TF_MIN} min), distância ≤ ${ANTEC_DIST_MAX_PCT}%\n• auto-apagar: ${ALERTA_AUTOAPAGAR_MIN > 0 ? `${ALERTA_AUTOAPAGAR_MIN} min` : "desligado"}\n\n`;
-  m += `💸 <b>Taxa no placar</b>: ${TAXA_IDA_VOLTA_PCT.toFixed(3)}% ida e volta (taker ${TAXA_TAKER_PCT}% × 2; ajuste com TAXA_TAKER_PCT ou TAXA_IDA_VOLTA_PCT)\n`;
-  m += `📏 <b>Placar</b>: entrada pelo fechamento da vela do cruzamento ${on(PLACAR_ENTRADA_ON && _placarTemEntrada)}${PLACAR_ENTRADA_ON && !_placarTemEntrada ? " (faltam as colunas: rode o ALTER TABLE V30)" : ""} · cruzamento vale até ${ENTRADA_MAX_CANDLES} velas (${ENTRADA_MAX_CANDLES * TF_MIN} min) depois do aviso\n`;
-  m += `\n${MINI_DIVISOR}\n`;
-  m += `⏱ <b>V32 · alerta dos minutos finais</b> (${on(FINAL_ON)})\n• 🚨 janela: de ${FINAL_JANELA_MAX_MIN} a ${FINAL_JANELA_MIN_MIN} min antes do fechamento da vela ${TIMEFRAME} (cron a cada 1–2 min)\n• avisa se o preço já está ${FINAL_ENTRADA_PCT}%+ além da linha projetada · cancela só se recuar ${FINAL_CANCELA_PCT}% (ou ${FINAL_CANCELA_ATR}×ATR) pra dentro (histerese)\n• 🕒 PREPARE: de ${FINAL_PREPARE_MAX_MIN} a ${FINAL_JANELA_MAX_MIN} min antes, moeda a ≤ ${FINAL_PREPARE_DIST_PCT}% da linha e chegando (máx ${FINAL_PREPARE_MAX} por rodada, confiança mín. −${FINAL_PREPARE_FOLGA_CONF})\n• 🔜 se a vela fechar sem cruzar mas seguir a ≤ ${FINAL_PROXIMA_DIST_PCT}% da linha e chegando, avisa que a chance passa pra próxima vela\n• ⚡ janela forte de horário no fechamento · placar próprio no /placar (${on(FINAL_PLACAR_ON)})\n• pré-filtro ${FINAL_PREFILTRO_PCT}% da linha · máx ${FINAL_MAX_POR_RODADA} por rodada · confirma ✅/❌ no fechamento\n\n`;
-  m += `🛡️ <b>V29</b>\n• filtro BTC: ${on(BTC_DIR_ON)} (±${BTC_DIR_PCT}%/h pontua) · reversão barrada contra BTC ≥ ±${BTC_BLOQ_REV_PCT}%/h (SHORT com BTC subindo · LONG com BTC caindo)${BTC_BLOQ_REV_PCT > 0 ? "" : " (desligado)"}\n• webhook: ${WEBHOOK_SECRET ? "com secret_token ✅" : "SEM secret_token ⚠️"} · cron: ${CRON_SO_HEADER ? "só por header ✅" : "aceita segredo na URL ⚠️"}\n• anti-repetição salva no Supabase\n\n`;
-  m += `📐 <b>V36 · inclinação e compressão</b>\n• inclinação da faixa (${INCLINA_JAN} velas, em velas típicas por vela): forte ≥ ${INCLINA_FORTE} (−2 contra) · moderada ≥ ${INCLINA_MOD} (−1 contra, +1 a favor) · plana ≤ ${INCLINA_PLANA} · virada com sinais de fundo/topo: penalidade aliviada\n• 1º cruzamento em faixa comprimida sem volume ≥ ${VOL_ACEL_RATIO}×: −1\n• 🗜️ radar de compressão (${on(COMPRESS_ON)}): faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica (muito: ≤ ${Math.round(COMPRESS_REL * 100)}%) · volume ≥ ${COMPRESS_VOL_MIN}× · confiança ≥ ${COMPRESS_CONF_MIN}/10 · rodízio de ${COMPRESS_ROT_N} pares por rodada · cooldown ${COMPRESS_COOLDOWN_MIN} min · máx ${COMPRESS_MAX_POR_RODADA} por rodada · entra no /placar (lado do 1º fechamento fora da faixa, em até ${ENTRADA_MAX_CANDLES * TF_MIN} min)\n• ⭐ repique nos dois lados (SHORT no radar de topo · LONG no radar de fundo): V104 só alerta com ${repRegraTxt()} (o que é barrado fica na 🌑 sombra: /repsombra) · bônus +${REPIQUE_BONUS} pt · confiança mín. ${REPIQUE_CONF_MIN}/10 (topo comum ${TOPO_CONF_MIN}) · cooldown ${REPIQUE_COOLDOWN_MIN} min · até ${REPIQUE_MAX_POR_RODADA} por rodada · placar separado por lado · tipo (oportunidade/reversão) só considera o dia virado fora de ±${REPIQUE_PCT_ZONA}% (zona morta contra ruído perto de 0%)\n• 📋 /oportunidade e /reversao: top ${LISTA_POOL_LADO} que mais subiram + top ${LISTA_POOL_LADO} que mais caíram, classificados pelo LADO da virada (igual ao alerta)\n\n`;
-  m += `🔴 <b>V35 · radar de topo</b> (${on(TOPO_ON)})\n• V97: ${TOPO_ADX_MAX > 0 ? `só alerta com ADX < ${TOPO_ADX_MAX} (TOPO_ADX_MAX; repique fica de fora)` : "corte por ADX desligado (TOPO_ADX_MAX=0)"}\n• alta ≥ ${TOPO_ALTA_MIN}% (em 24h ou desde a mínima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_ALTA} · rejeição na faixa após alta ≥ ${TOPO_TOQUE_VALE_MIN}% pontua · confiança ≥ ${TOPO_CONF_MIN}/10 · pré-filtro ≥ ${TOPO_PRE_MIN} pts · cooldown ${TOPO_COOLDOWN_MIN} min\n\n`;
-  m += `🟢 <b>V28/V34 · radar de fundo</b> (${on(FUNDO_ON)})\n• queda ≥ ${FUNDO_QUEDA_MIN}% (em 24h ou desde a máxima das últimas ${Math.round(FUNDO_JAN_PICO / 4)}h) · pool extra de ${ALERT_POOL_RECUO} moedas que mais recuaram · toque na faixa após recuo ≥ ${FUNDO_TOQUE_PICO_MIN}% pontua · confiança ≥ ${FUNDO_CONF_MIN}/10 · pré-filtro ≥ ${FUNDO_PRE_MIN} pts (velas 15m)\n• V97: ${FUNDO_ADX_MAX > 0 ? `não alerta com ADX ≥ ${FUNDO_ADX_MAX} (FUNDO_ADX_MAX)` : "corte por ADX desligado (FUNDO_ADX_MAX=0)"}\n• V98: modo faca (${FACA_MODO}): fundo com ADX ≥ ${FACA_ADX_MIN} e nota ≥ ${FACA_CONF_MIN}/10 vira candidato SHORT de continuação (FACA_MODO=sombra|alerta|off) · /faca\n• cooldown ${FUNDO_COOLDOWN_MIN} min · máx ${FUNDO_MAX_POR_RODADA} por rodada · BTC ≤ -${FUNDO_BTC_QUEDA_PCT}%/h penaliza\n• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `liberado com sinal de fundo (confiança mín. ${CONF_MIN_FUNDO_LONG}/10)` : "bloqueado"}\n• V63: book (±${BOOK_IMB_MIN_PCT}%) e inclinação da faixa também contam a favor/contra a virada (antes só funding/OI/BTC) · no /analise, /fundo e /topo com inclinação; nas listas em massa só o book\n• V59: no /analise, sem radar aceso e moeda ≥3× ATR esticada a favor do robô, aviso ⚠️ "já esticou" (entrada tardia)\n\n`;
-  m += `🧭 <b>V26</b>\n• squeeze: faixa ≤ ${Math.round(SQUEEZE_REL * 100)}% da típica · volume das velas ≥ ${VOL_ACEL_RATIO}× (seco ≤ ${VOL_SECO_RATIO}×)\n• alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou passar de 2× o prazo\n• confiança: verde ≥ ${CONF_VERDE}/10 · amarelo ≥ ${CONF_AMARELO}/10\n• modo pump (${on(ESTRAT_PUMP)}): mín. confiança oportunidade ${CONF_MIN_OPORT} · reversão ${CONF_MIN_REVERSAO} · serrote ≥ ${SERROTE_MAX} trocas/4h barra · RSI máx LONG ${FILTRO_RSI_MAX_LONG} · limite ${LIMITE_LADO} por lado\n`;
-  m += `\n${MINI_DIVISOR}\n`;
-  m += `🧹 <b>Filtros</b> (${on(ALERT_FILTROS_ON)})\n• volume ≥ ${(FILTRO_VOL_MIN_USDT / 1e6).toFixed(1)}M USDT (antes do corte do pool) · ADX ≥ ${FILTRO_ADX_MIN}${FILTRO_ADX_SUBINDO ? ` e subindo${FILTRO_ADX_SUBINDO_ATE > 0 ? ` (só exige subir abaixo de ${FILTRO_ADX_SUBINDO_ATE})` : ""}` : ""}\n• ${ESTRAT_PUMP ? `RSI (modo pump, um lado só): LONG barrado acima de ${FILTRO_RSI_MAX_LONG} · SHORT barrado abaixo de ${FILTRO_RSI_MIN}` : `RSI entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX}`} · distância ≤ ${FILTRO_DIST_MAX_PCT}% (só nas listas)\n• amplitude mín. ${FILTRO_AMPLITUDE_MIN > 0 ? `${FILTRO_AMPLITUDE_MIN}%` : "desligada"}\n• 🚫 lista negra (${BLACKLIST_MOEDAS.size}): ${BLACKLIST_MOEDAS.size ? [...BLACKLIST_MOEDAS].sort().join(", ") : "nenhuma"}\n\n`;
-  m += `🧬 <b>V60-62 · DI oculto</b> (${on(DI_OCULTO_ON)})\n• +DI/−DI calculado por trás do ADX, nunca aparece em mensagem · gap mínimo pra ter opinião: ${DI_GAP_MIN}\n• continuação com ADX forte mas força do lado oposto: ADX forte vale +1 em vez de +2 · "ADX subindo" vira "ADX subindo, mas puxado pelo lado oposto" (+0) em vez de +1 · reversão não é afetada · env: DI_OCULTO=0 desliga, DI_GAP_MIN\n\n`;
-  m += `🧱 <b>V58 · filtro de mercado lateral</b> (${on(LATERAL_ON)} · modo ${LATERAL_MODO === "visual" ? "visual (sem barrar)" : "bloqueia"})\n• BTC e ETH votam com 3 indicadores 15m: ADX · ER (Efficiency Ratio) · caixa (amplitude de ${LATERAL_JAN / 4}h em ATRs)\n• ${LATERAL_BARRA ? `bloqueia o LIGUE AGORA e os alertas de ENTRADA quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência · libera quando um deles tem ${latQtdLibera()} (${latRegrasTend()}) · depois de liberar espera ${LATERAL_HOLD_MIN} min antes de bloquear de novo` : `modo visual: nada é barrado — todo alerta sai normal, com a nota 🧱 quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência`}\n• PREPARE e radares seguem passando, com aviso 🧱 · 📈 aviso quando um dos 3 sinais (ADX/ER/caixa, BTC ou ETH) sai da lateral (${on(LATERAL_AVISO_ON)}) · 📉 aviso quando os dois ENTRAM em lateral (${on(LATERAL_AVISO_ENTROU_ON)}) — ambos no máx. 1 a cada ${LATERAL_AVISO_MIN} min, contadores separados · alertas de posição aberta seguem normais · env: LATERAL_MODO=visual (só aviso, sem barrar), LATERAL_AVISO=0, LATERAL_AVISO_ENTROU=0, LATERAL_AVISO_MIN, LATERAL_ADX_BLOQ/LIBERA, LATERAL_ER_BLOQ/LIBERA, LATERAL_AMP_BLOQ/LIBERA, LATERAL_JAN, LATERAL_VOTOS, LATERAL_VOTOS_LIBERA, LATERAL_HOLD_MIN, LATERAL_BLOQ=0 desliga\n\n`;
-  m += `🎯 <b>Stop / alvo / trailing</b>\n• stop: faixa + ${STOP_ATR_MULT}×ATR · alvo RR ${ALVO_RR}:1\n• stop de reserva: ${STOP_ATR_RESERVA}×ATR\n• trailing (${on(PROT_LUCRO_ON)}): degrau de ${TRAIL_ATR_MULT}×ATR\n• RSI esticado: ≥ ${ESTICADO_RSI} (long) · ≤ ${100 - ESTICADO_RSI} (short)\n\n`;
-  m += `🚨 <b>Risco</b> (${on(RISCO_ON)}): liquidação &lt; ${RISCO_LIQ_PCT}% (crítico ${RISCO_LIQ_CRITICO_PCT}%) · prejuízo ≥ ${RISCO_PERDA_PCT}% (crítico ${RISCO_PERDA_CRITICA_PCT}%) · reenvio ${RISCO_COOLDOWN_MIN} min\n`;
-  m += `\n${MINI_DIVISOR}\n`;
-  m += `🌙 <b>Silêncio</b> (${on(SILENCIO_ON)}): ${SILENCIO_INI_H}h–${SILENCIO_FIM_H}h, ${SILENCIO_MODO === "mudo" ? "modo MUDO (tudo roda, mensagens sem som; SILENCIO_MODO=pausa volta ao antigo)" : `modo pausa, proteção ${on(SILENCIO_PROTECAO)}`} · fuso ${tz}\n`;
-  m += `🗓️ <b>Resumos</b> (${on(RESUMO_ON)}): manhã ${RESUMO_MANHA_H}h · noite ${RESUMO_NOITE_H}h · V59: "FIM DO RESUMO" se apaga em ${PAINEL_FIM_APAGAR_H > 0 ? `${PAINEL_FIM_APAGAR_H}h` : "nunca (PAINEL_FIM_APAGAR_H=0)"}\n`;
-  m += `⭐ seguidas: ${SEG_MAX} por pessoa\n`;
-  m += `📡 Fallback de dados avisa a partir de ${FONTE_FALLBACK_PCT}% das consultas e normaliza abaixo de ${FONTE_NORMALIZA_PCT}%\n`;
-  m += `⏱ Cron: aviso se parar > ${CRON_AVISO_MIN} min (/status alerta > ${CRON_ALERTA_MIN} min) · trava contra sobreposição ${(CRON_LOCK_TIMEOUT_MS / 1000).toFixed(0)}s\n`;
-  m += `🤖 Modo alerta do motor: ${MOTOR_URL && MOTOR_ALERTA_SECRET ? "alertas de fundo e oportunidade (na vela que cruzou) vão pro motor; ligar, simular, tipos e limites ficam no site" : "não envia (faltam MOTOR_URL e/ou MOTOR_ALERTA_SECRET)"}\n`;
-  m += `🎯 Antecipação: auto-calibração ${on(AUTO_CALIB_ON)} a cada ${AUTO_CALIB_INTERVALO_H}h (janela ${AUTO_CALIB_DIAS}d, mín. ${ANTEC_CALIB_MIN} amostras) · confiabilidade por moeda: mín. ${CONFIAB_MIN_AMOSTRA} em até ${CONFIAB_JANELA_N} últimas previsões\n`;
-  m += `\n${MINI_DIVISOR}\n`;
-  m += `🧠 <b>IA (/pergunta e /veredito)</b>\n• Gemini: ${Deno.env.get("GEMINI_API_KEY") ? "chave configurada ✅" : "SEM chave (GEMINI_API_KEY) ⚠️"}${IA_LIMITE_DIARIO_GEMINI > 0 ? ` · limite ${IA_LIMITE_DIARIO_GEMINI}/dia` : " · sem limite diário"}\n• Claude: ${Deno.env.get("ANTHROPIC_API_KEY") ? "chave configurada ✅" : "SEM chave (ANTHROPIC_API_KEY) ⚠️"}${IA_LIMITE_DIARIO_CLAUDE > 0 ? ` · limite ${IA_LIMITE_DIARIO_CLAUDE}/dia` : " · sem limite diário"}\n• aviso quando faltar ≤ ${IA_AVISO_RESTANTE} consultas · env: IA_LIMITE_DIARIO_GEMINI, IA_LIMITE_DIARIO_CLAUDE (0 = sem limite), IA_AVISO_RESTANTE, GEMINI_MODEL, CLAUDE_MODEL\n\n`;
-  m += `👥 <b>Acesso</b>: ${ALLOWED_CHAT_IDS.length} chat(s) autorizado(s) · ${ALERT_CHAT_IDS.length} recebem alertas${ALERT_EXCLUIR.length ? ` (${ALERT_EXCLUIR.length} excluído(s))` : ""} · ${Object.keys(BLOFIN_USERS).length + (BLOFIN_LEGADO ? 1 : 0)} com chave BloFin\n`;
-  m += `🔑 Admin: <b>${ADMIN_CHAT_ID || "não definido"}</b>\n`;
-  if (!adminFixo) m += `⚠️ <i>Admin vem do 1º ID de ALLOWED_CHAT_IDS. Fixe ADMIN_CHAT_ID nos Secrets para não mudar se você reordenar a lista.</i>\n`;
-  m += `\n<i>Estes valores vêm dos Secrets: pra mudar, edite o Secret e publique de novo. Chaves e tokens nunca aparecem aqui.</i>`;
-  return cortar(m);
+  const hJan = Math.round(FUNDO_JAN_PICO / 4);
+  const fmtMin = (min: number) => (min >= 60 && min % 60 === 0 ? `${min / 60}h` : `${min} min`);
+  let m = `⚙️ <b>CONFIGURAÇÃO</b> · ${BOT_VERSAO}\n`;
+  m += `<i>O que está valendo agora. Pra mudar, edite o Secret no Supabase e publique de novo. Nomes dos Secrets e o que difere do padrão: /config mudou</i>\n${DIVISOR}\n\n`;
+
+  // ── alertas ──
+  m += tit("🔔", "Alertas de cruzamento");
+  m += `• Oportunidade (a favor do dia): moeda com ${ALERT_OPORT_PCT_MIN}%+ em 24h\n`;
+  m += `• Reversão (contra o dia): moeda com ${ALERT_REV_PCT_MIN}%+ em 24h\n`;
+  m += `• Aviso antecipado até ${ANTEC_ETA_MAX_CANDLES * TF_MIN} min antes (${ANTEC_ETA_MAX_CANDLES} velas), com o preço a até ${ANTEC_DIST_MAX_PCT}% da linha\n`;
+  m += `• Alarme falso: cancela se a distância até a linha crescer ${Math.round((ANTEC_CANCELA_RECUO - 1) * 100)}%+ ou o prazo passar do dobro\n`;
+  m += `• Só cruzamento recente: até ${ALERT_FRESCO_CANDLES} velas${ALERT_IDADE_MAX_CANDLES ? ` (idade máxima ${ALERT_IDADE_MAX_CANDLES} velas)` : ""}\n`;
+  m += `• Até ${ALERT_MAX_POR_RODADA} alertas por rodada, entre as ${ALERT_POOL} moedas que mais andaram\n`;
+  m += `• Mesma moeda: espera ${fmtMin(ALERT_COOLDOWN_MIN)} (alerta idêntico: ${fmtMin(ALERT_COOLDOWN_REPETIDO_MIN)})\n`;
+  m += `• Acompanha a moeda por ${WATCH_HORAS}h depois do alerta${WATCH_REPETIR ? ", avisando de novo a cada virada" : ""}\n`;
+  m += `• /oportunidade e /reversao: as ${LISTA_POOL_LADO} que mais subiram + as ${LISTA_POOL_LADO} que mais caíram\n`;
+  m += `• Alertas somem sozinhos: ${ALERTA_AUTOAPAGAR_MIN > 0 ? `depois de ${fmtMin(ALERTA_AUTOAPAGAR_MIN)}` : "não (ficam no chat)"}\n\n`;
+
+  m += tit("⏱", "Minutos finais da vela", FINAL_ON);
+  if (FINAL_ON) {
+    m += `• 🕒 PREPARE: de ${FINAL_PREPARE_MAX_MIN} a ${FINAL_JANELA_MAX_MIN} min antes do fechamento, moeda a até ${FINAL_PREPARE_DIST_PCT}% da linha e chegando (até ${FINAL_PREPARE_MAX} por rodada)\n`;
+    m += `• 🚨 LIGUE AGORA: de ${FINAL_JANELA_MAX_MIN} a ${FINAL_JANELA_MIN_MIN} min antes, com o preço já ${FINAL_ENTRADA_PCT}%+ além da linha\n`;
+    m += `• Só cancela se o preço voltar ${FINAL_CANCELA_PCT}% (ou ${FINAL_CANCELA_ATR}×ATR) pra dentro da linha\n`;
+    m += `• 🔜 Fechou sem cruzar mas segue a até ${FINAL_PROXIMA_DIST_PCT}% da linha: avisa que a chance passa pra próxima vela\n`;
+    m += `• Olha só moedas a até ${FINAL_PREFILTRO_PCT}% da linha · até ${FINAL_MAX_POR_RODADA} por rodada · ✅/❌ no fechamento\n`;
+    m += `• ⚡ marca quando o fechamento cai numa janela forte de horário · placar próprio no /placar: ${FINAL_PLACAR_ON ? "sim" : "não"}\n`;
+  }
+  m += "\n";
+
+  // ── nota ──
+  m += tit("🧮", "Nota de confiança (0 a 10)");
+  m += `• 🟢 verde a partir de ${CONF_VERDE} · 🟡 amarelo a partir de ${CONF_AMARELO}\n`;
+  if (ESTRAT_PUMP) m += `• Modo pump: nota mínima ${CONF_MIN_OPORT} na oportunidade e ${CONF_MIN_REVERSAO} na reversão · até ${LIMITE_LADO} alertas por lado\n`;
+  m += `• LONG em moeda que caiu: ${FUNDO_LIBERA_LONG ? `só com sinal de fundo (nota mínima ${CONF_MIN_FUNDO_LONG})` : "bloqueado"}\n`;
+  m += `• Moeda serrilhando (${SERROTE_MAX}+ trocas de lado em 4h): barrada\n`;
+  m += `• BTC: ${BTC_DIR_ON ? `andar ${BTC_DIR_PCT}%+ em 1h conta ponto` : "não conta"}${BTC_BLOQ_REV_PCT > 0 ? ` · reversão contra um BTC andando ${BTC_BLOQ_REV_PCT}%+ em 1h é barrada (SHORT com BTC subindo, LONG com BTC caindo)` : ""}\n`;
+  m += `• Inclinação da faixa (${INCLINA_JAN} velas): forte (${INCLINA_FORTE}+) tira 2 pontos de quem vai contra · moderada (${INCLINA_MOD}+) tira 1 contra e dá 1 a favor · plana até ${INCLINA_PLANA}. Com sinal de fundo/topo, pesa menos\n`;
+  m += `• 1º cruzamento com a faixa comprimida e sem volume (abaixo de ${VOL_ACEL_RATIO}× a média): −1\n`;
+  m += `• Squeeze: faixa até ${Math.round(SQUEEZE_REL * 100)}% da típica · volume forte ${VOL_ACEL_RATIO}×+ · seco até ${VOL_SECO_RATIO}×\n`;
+  m += `• Book (desequilíbrio de ${BOOK_IMB_MIN_PCT}%+) e inclinação também contam a favor ou contra a virada\n`;
+  m += `• Força escondida (+DI/−DI): ${DI_OCULTO_ON ? `se o ADX está forte mas puxado pelo lado oposto, vale +1 em vez de +2 (diferença mínima ${DI_GAP_MIN}). Não mexe na reversão` : "desligada"}\n\n`;
+
+  // ── radares ──
+  m += tit("🟢", "Radar de fundo", FUNDO_ON);
+  if (FUNDO_ON) {
+    m += `• Moeda que caiu ${FUNDO_QUEDA_MIN}%+ (em 24h ou desde a máxima das últimas ${hJan}h), incluindo as ${ALERT_POOL_RECUO} que mais recuaram\n`;
+    m += `• Toque na faixa depois de recuar ${FUNDO_TOQUE_PICO_MIN}%+ conta ponto · nota mínima ${FUNDO_CONF_MIN} (pré-seleção ${FUNDO_PRE_MIN} pts)\n`;
+    m += `• ADX: ${FUNDO_ADX_MAX > 0 ? `não alerta com ADX ${FUNDO_ADX_MAX}+ (queda forte demais)` : "sem corte"} · BTC caindo ${FUNDO_BTC_QUEDA_PCT}%+ em 1h tira ponto\n`;
+    m += `• Mesma moeda: espera ${fmtMin(FUNDO_COOLDOWN_MIN)} · até ${FUNDO_MAX_POR_RODADA} por rodada\n`;
+    m += `• 🔪 Modo faca: ${FACA_MODO === "off" ? "desligado" : `fundo com ADX ${FACA_ADX_MIN}+ e nota ${FACA_CONF_MIN}+ vira candidato a SHORT de continuação (${FACA_MODO === "alerta" ? "grava e avisa" : "só grava, sem avisar"}) · /faca`}\n`;
+  }
+  m += "\n";
+
+  m += tit("🔴", "Radar de topo", TOPO_ON);
+  if (TOPO_ON) {
+    m += `• Moeda que subiu ${TOPO_ALTA_MIN}%+ (em 24h ou desde a mínima das últimas ${hJan}h), incluindo as ${ALERT_POOL_ALTA} que mais subiram\n`;
+    m += `• Rejeição na faixa depois de subir ${TOPO_TOQUE_VALE_MIN}%+ conta ponto · nota mínima ${TOPO_CONF_MIN} (pré-seleção ${TOPO_PRE_MIN} pts)\n`;
+    m += `• ADX: ${TOPO_ADX_MAX > 0 ? `só alerta com ADX abaixo de ${TOPO_ADX_MAX} (o repique não entra nesse corte)` : "sem corte"} · mesma moeda: espera ${fmtMin(TOPO_COOLDOWN_MIN)}\n`;
+    m += `• 🚀 Modo foguete: ${FOGUETE_MODO === "off" ? "desligado" : `topo com ADX ${FOGUETE_ADX_MIN}+ e nota ${FOGUETE_GRAVA_MIN}+ vira candidato a LONG de continuação (só grava, sem avisar) · /foguete`}\n`;
+  }
+  m += "\n";
+
+  m += tit("⭐", "Repique");
+  m += `• Nos dois lados: SHORT no radar de topo, LONG no de fundo\n`;
+  m += repRegraTxt().startsWith("sem") ? `• Sem corte por ADX/DI\n` : `• Só alerta com ${repRegraTxt()}; o que a regra barra fica gravado na 🌑 sombra (/repsombra)\n`;
+  m += `• +${REPIQUE_BONUS} na nota · nota mínima ${REPIQUE_CONF_MIN} · espera ${fmtMin(REPIQUE_COOLDOWN_MIN)} · até ${REPIQUE_MAX_POR_RODADA} por rodada\n`;
+  m += `• Oportunidade x reversão só conta se o dia andou mais de ±${REPIQUE_PCT_ZONA}% (perto de 0% é ruído)\n\n`;
+
+  m += tit("🗜️", "Compressão", COMPRESS_ON);
+  if (COMPRESS_ON) {
+    m += `• Faixa até ${Math.round(SQUEEZE_REL * 100)}% da típica (muito comprimida: até ${Math.round(COMPRESS_REL * 100)}%) · volume ${COMPRESS_VOL_MIN}×+ · nota mínima ${COMPRESS_CONF_MIN}\n`;
+    m += `• Olha ${COMPRESS_ROT_N} moedas por rodada (em rodízio) · espera ${fmtMin(COMPRESS_COOLDOWN_MIN)} · até ${COMPRESS_MAX_POR_RODADA} por rodada\n`;
+    m += `• Entra no /placar pelo lado da 1ª vela que fechar fora da faixa (em até ${ENTRADA_MAX_CANDLES * TF_MIN} min)\n`;
+  }
+  m += "\n";
+
+  // ── filtros ──
+  m += tit("🧹", "Filtros", ALERT_FILTROS_ON);
+  m += `• Volume de ${(FILTRO_VOL_MIN_USDT / 1e6).toFixed(1)}M USDT+ em 24h\n`;
+  m += `• ADX ${FILTRO_ADX_MIN}+${FILTRO_ADX_SUBINDO ? ` e subindo${FILTRO_ADX_SUBINDO_ATE > 0 ? ` (só exige subir enquanto estiver abaixo de ${FILTRO_ADX_SUBINDO_ATE})` : ""}` : ""}\n`;
+  m += `• RSI: ${ESTRAT_PUMP ? `LONG barrado acima de ${FILTRO_RSI_MAX_LONG} · SHORT barrado abaixo de ${FILTRO_RSI_MIN}` : `entre ${FILTRO_RSI_MIN} e ${FILTRO_RSI_MAX}`}\n`;
+  m += `• Distância até a linha: até ${FILTRO_DIST_MAX_PCT}% (só nas listas)${FILTRO_AMPLITUDE_MIN > 0 ? ` · amplitude mínima ${FILTRO_AMPLITUDE_MIN}%` : ""}\n`;
+  m += `• 🚫 Moedas bloqueadas: ${BLACKLIST_MOEDAS.size ? [...BLACKLIST_MOEDAS].sort().join(", ") : "nenhuma"}\n\n`;
+
+  m += tit("🧱", "Mercado lateral", LATERAL_ON, LATERAL_ON ? ` · ${LATERAL_BARRA ? "bloqueia" : "só avisa"}` : "");
+  if (LATERAL_ON) {
+    m += `• Mede BTC e ETH no 15m com 3 sinais: ADX, eficiência (ER) e caixa (quanto andou em ${LATERAL_JAN / 4}h, em ATRs)\n`;
+    m += LATERAL_BARRA
+      ? `• Bloqueia o LIGUE AGORA e as entradas quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência\n• Libera quando um deles tem ${latQtdLibera()} (${latRegrasTend()}); depois espera ${LATERAL_HOLD_MIN} min antes de bloquear de novo\n• PREPARE e radares continuam saindo, com a nota 🧱\n`
+      : `• Nada é barrado: os alertas ganham a nota 🧱 quando os dois têm ${LATERAL_VOTOS} de 3 sinais de lateral (${latRegras()}) e nenhum de tendência\n`;
+    m += `• Avisos: 📈 saindo da lateral ${LATERAL_AVISO_ON ? "sim" : "não"} · 📉 entrando ${LATERAL_AVISO_ENTROU_ON ? "sim" : "não"} · no máximo 1 a cada ${LATERAL_AVISO_MIN} min\n`;
+  }
+  m += "\n";
+
+  // ── posições ──
+  m += tit("🎯", "Stop, alvo e proteção");
+  m += `• Stop: faixa + ${STOP_ATR_MULT}×ATR (reserva ${STOP_ATR_RESERVA}×ATR) · alvo ${ALVO_RR}R\n`;
+  m += `• Avisos de lucro: ${PROT_LUCRO_ON ? `subir o stop a cada ${TRAIL_ATR_MULT}×ATR de ganho · realizar parte com RSI ${ESTICADO_RSI}+ (LONG) ou até ${100 - ESTICADO_RSI} (SHORT)` : "desligados"}\n`;
+  m += `• 🚨 Risco: ${RISCO_ON ? `liquidação a menos de ${RISCO_LIQ_PCT}% (crítico ${RISCO_LIQ_CRITICO_PCT}%) · prejuízo de ${RISCO_PERDA_PCT}%+ (crítico ${RISCO_PERDA_CRITICA_PCT}%) · repete a cada ${fmtMin(RISCO_COOLDOWN_MIN)}` : "desligado"}\n\n`;
+
+  m += tit("📏", "Placar");
+  m += `• Entrada no fechamento da vela que cruzou: ${est(PLACAR_ENTRADA_ON && _placarTemEntrada)}${PLACAR_ENTRADA_ON && !_placarTemEntrada ? " ⚠️ faltam colunas no Supabase (rode o ALTER TABLE da V30)" : ""}\n`;
+  m += `• O cruzamento vale até ${ENTRADA_MAX_CANDLES * TF_MIN} min (${ENTRADA_MAX_CANDLES} velas) depois do aviso\n`;
+  m += `• Taxa descontada: ${TAXA_IDA_VOLTA_PCT.toFixed(3)}% ida e volta (${TAXA_TAKER_PCT}% por ordem)\n`;
+  m += `• Aviso antecipado se auto-ajusta: ${AUTO_CALIB_ON ? `a cada ${AUTO_CALIB_INTERVALO_H}h, com ${AUTO_CALIB_DIAS} dias de dados (mínimo ${ANTEC_CALIB_MIN} amostras)` : "não"}\n`;
+  m += `• Confiabilidade por moeda: mínimo ${CONFIAB_MIN_AMOSTRA} entre as últimas ${CONFIAB_JANELA_N} previsões\n\n`;
+
+  m += tit("🤖", "Motor · modo alerta");
+  m += MOTOR_URL && MOTOR_ALERTA_SECRET
+    ? `• Alertas de fundo e oportunidades que cruzaram (até ${OPORT_MOTOR_MAX_MIN} min depois) vão pro motor\n• Ligar, simular, tipos, tamanho e limites: no site\n\n`
+    : `• ⚠️ Não envia: faltam os Secrets MOTOR_URL e/ou MOTOR_ALERTA_SECRET\n\n`;
+
+  // ── rotina ──
+  m += tit("🌙", "Horários");
+  m += `• Silêncio: ${SILENCIO_ON ? `das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (${tz}) · ${SILENCIO_MODO === "mudo" ? "modo mudo: tudo continua, só chega sem som" : `modo pausa: alertas param${SILENCIO_PROTECAO ? ", só passa proteção de posição" : ""}`}` : "desligado"}\n`;
+  m += `• Resumos: ${RESUMO_ON ? `manhã ${RESUMO_MANHA_H}h · noite ${RESUMO_NOITE_H}h` : "desligados"} · "FIM DO RESUMO" some ${PAINEL_FIM_APAGAR_H > 0 ? `em ${PAINEL_FIM_APAGAR_H}h` : "nunca"}\n`;
+  m += `• ⭐ Até ${SEG_MAX} moedas seguidas por pessoa\n\n`;
+
+  m += tit("🧠", "IA");
+  const ia = (nome: string, cmds: string, temChave: boolean, lim: number) =>
+    `• ${nome} (${cmds}): ${temChave ? "✅ pronta" : "⚠️ sem chave"} · ${lim > 0 ? `até ${lim}/dia` : "sem limite diário"}\n`;
+  m += ia("Gemini", "/pergunta, /melhor", !!Deno.env.get("GEMINI_API_KEY"), IA_LIMITE_DIARIO_GEMINI);
+  m += ia("Claude", "/veredito", !!Deno.env.get("ANTHROPIC_API_KEY"), IA_LIMITE_DIARIO_CLAUDE);
+  m += `• Avisa quando faltarem ${IA_AVISO_RESTANTE} consultas\n\n`;
+
+  m += tit("🔧", "Sistema");
+  m += `• Cron: avisa se parar por ${CRON_AVISO_MIN}+ min (/status marca a partir de ${CRON_ALERTA_MIN} min) · trava de ${(CRON_LOCK_TIMEOUT_MS / 1000).toFixed(0)}s contra rodada dupla\n`;
+  m += `• Fonte reserva de dados: avisa quando passa de ${FONTE_FALLBACK_PCT}% das consultas, normaliza abaixo de ${FONTE_NORMALIZA_PCT}%\n`;
+  m += `• Segurança: webhook ${WEBHOOK_SECRET ? "protegido ✅" : "sem senha ⚠️"} · cron ${CRON_SO_HEADER ? "só aceita senha no cabeçalho ✅" : "aceita senha na URL ⚠️"}\n\n`;
+
+  m += tit("👥", "Acesso");
+  m += `• ${ALLOWED_CHAT_IDS.length} chat(s) liberado(s) · ${ALERT_CHAT_IDS.length} recebem alertas${ALERT_EXCLUIR.length ? ` (${ALERT_EXCLUIR.length} fora)` : ""} · ${Object.keys(BLOFIN_USERS).length + (BLOFIN_LEGADO ? 1 : 0)} com chave BloFin\n`;
+  m += `• 🔑 Admin: <b>${ADMIN_CHAT_ID || "não definido"}</b>${adminFixo ? "" : " ⚠️ vem do 1º da lista de chats; fixe com o Secret ADMIN_CHAT_ID"}\n`;
+  m += `\n<i>Tokens e chaves nunca aparecem aqui.</i>`;
+  return m;
 }
 Deno.serve(async (req) => {
   try {
