@@ -1,5 +1,6 @@
-// telegram-bot V127 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V128 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V128 (V127 + as mensagens do mão virada não mostram os indicadores nem a regra, só a moeda, o lado e a variação de 24h; MV_DETALHES=1 mostra tudo). Os alertas de antes e o motor não mudam.
 // V127 (V126 + mão virada: só recomenda moeda que andou reto em 3 dias (ER de 72h ≥ 0.15, MV_ER3D) e mostra o ADX do 1h e do 4h). Os alertas de antes e o motor não mudam.
 // V126 (V125 + /juncao carteira: andando reto — trocas6 e ritmo4 (viradas da faixa), adx1h25 e adx4h25 (tendência no 1h/4h), er3d0.3 (andou reto em 3 dias)). Os alertas de antes e o motor não mudam.
 // V125 (V124 + o alerta do mão virada mostra o lado pela faixa do robô, MV_FAIXA, padrão rápida + 144). Os alertas de antes e o motor não mudam.
@@ -11,7 +12,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V127"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V128"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -1750,6 +1751,9 @@ const mvFaixaNome = () => (MV_FAIXA === "rapida144" ? "rápida + 144" : MV_FAIXA
 // V127: andou reto em 3 dias (ER de 72h ≥ MV_ER3D; 0 desliga). No /juncao carteira (28 dias, rápida + 144): com 1 moeda o trade foi de +0.08R pra
 // +0.36R, e ligando todas as que passam foi de −0.06R pra +0.10R.
 const MV_ER3D = Math.max(0, Math.min(1, numEnv("MV_ER3D", "0.15")));
+// V128: as mensagens do mão virada não mostram os indicadores nem a regra (é segredo): só a moeda, o lado e a variação de 24h.
+// MV_DETALHES=1 volta a mostrar tudo (ADX, ATR, reto em 3 dias, ADX do 1h/4h, a faixa e a regra).
+const MV_DETALHES = (Deno.env.get("MV_DETALHES") || "0").trim() === "1";
 const MV_ROW = "_MAO_VIRADA_";
 type MvCen = { pct: number; adx: number; atrP: number; er3d?: number; lado: "long" | "short" | null; passa: boolean };
 type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number; atrP: number; er3d?: number; a1h?: number; a4h?: number; lado: "long" | "short" | null };
@@ -1781,7 +1785,11 @@ async function mvAdxGrandes(inst: string): Promise<{ a1h: number; a4h: number }>
   const [a1h, a4h] = await Promise.all([ultimo("1H"), ultimo("4H")]);
   return { a1h, a4h };
 }
-const mvAdxGTxt = (l: { a1h?: number; a4h?: number }) => (Number.isFinite(l.a1h) || Number.isFinite(l.a4h) ? ` · ADX 1h ${Number.isFinite(l.a1h) ? Math.round(l.a1h!) : "?"} · 4h ${Number.isFinite(l.a4h) ? Math.round(l.a4h!) : "?"}` : "");
+// V128: o que aparece pra quem recebe: só a variação de 24h (sem o nome de nenhum indicador), a não ser com MV_DETALHES=1
+const mvPub = (c: { pct: number; adx: number; atrP: number; er3d?: number | null }) => (MV_DETALHES ? mvCenTxt(c) : `${c.pct >= 0 ? "+" : ""}${c.pct.toFixed(1)}% em 24h`);
+const mvRegraPub = () => (MV_DETALHES ? mvRegraTxt() : `até ${MV_VAGAS} moeda(s) ao mesmo tempo · desligar depois de ${MV_SEGURA_H} h fora do cenário`);
+const mvLadoPub = (lado: "long" | "short" | null) => (MV_DETALHES ? (lado ? ` · faixa ${mvFaixaNome()} em ${lado.toUpperCase()}` : ` · preço dentro da faixa ${mvFaixaNome()}`) : lado ? ` · ${lado.toUpperCase()}` : " · sem lado definido agora");
+const mvAdxGTxt = (l: { a1h?: number; a4h?: number }) => !MV_DETALHES ? "" : (Number.isFinite(l.a1h) || Number.isFinite(l.a4h) ? ` · ADX 1h ${Number.isFinite(l.a1h) ? Math.round(l.a1h!) : "?"} · 4h ${Number.isFinite(l.a4h) ? Math.round(l.a4h!) : "?"}` : "");
 async function mvLer(SB: any): Promise<MvEstado | null> {
   const vazio: MvEstado = { hora: 0, lig: [], cands: [], hist: [] };
   try {
@@ -1817,7 +1825,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
     const c = dados.get(l.i) ?? null;
     if (c?.passa) { ficam.push({ ...l, ultH: hora, pct: c.pct, adx: c.adx, atrP: c.atrP, er3d: c.er3d, lado: await ladoDe(l.i, l.lado) }); continue; }
     if (hora - l.ultH > MV_SEGURA_H) {
-      linhas.push(`⚪ Desligar <b>${mvNome(l.i)}</b>: ${hora - l.ultH} h fora do cenário${c ? ` (agora ${mvCenTxt(c)})` : " (sem dados agora)"} · recomendada desde ${divDH(l.desde)}`);
+      linhas.push(`⚪ Desligar <b>${mvNome(l.i)}</b>: ${hora - l.ultH} h fora do cenário${c ? ` (agora ${mvPub(c)})` : " (sem dados agora)"} · recomendada desde ${divDH(l.desde)}`);
       hist(l.i, "desliga", c);
       console.log(`🔂 mão virada: recomenda desligar ${l.i} (${hora - l.ultH} h fora do cenário)`);
       continue;
@@ -1833,7 +1841,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
     const lado = await ladoDe(x.i, null);
     const ag = await mvAdxGrandes(x.i).catch(() => ({ a1h: NaN, a4h: NaN })); // V127
     ficam.push({ i: x.i, desde: agoraMs, ultH: hora, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP, er3d: x.c.er3d, a1h: ag.a1h, a4h: ag.a4h, lado });
-    linhas.push(`🟢 Ligar <b>${mvNome(x.i)}</b>: de alerta (${mvCenTxt(x.c)})${mvAdxGTxt(ag)}${lado ? ` · faixa ${mvFaixaNome()} em ${lado.toUpperCase()}` : ` · preço dentro da faixa ${mvFaixaNome()}`}`);
+    linhas.push(MV_DETALHES ? `🟢 Ligar <b>${mvNome(x.i)}</b>: de alerta (${mvCenTxt(x.c)})${mvAdxGTxt(ag)}${mvLadoPub(lado)}` : `🟢 Ligar <b>${mvNome(x.i)}</b>${mvLadoPub(lado)} · ${mvPub(x.c)}`);
     hist(x.i, "liga", x.c);
     console.log(`🔂 mão virada: recomenda ligar ${x.i} (${mvCenTxt(x.c)})`);
   }
@@ -1843,7 +1851,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   est.hist = est.hist.slice(-MV_HIST_MAX);
   await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date(agoraMs).toISOString() });
   if (!linhas.length) return [];
-  const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\nRecomendadas agora: ${ficam.length ? ficam.map((l) => mvNome(l.i)).join(", ") : "nenhuma"} (até ${MV_VAGAS})\n<i>Só recomendação: ligar e desligar o robô é com você. Regra: ${mvRegraTxt()}. Detalhes em /maovirada.</i>`;
+  const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\nRecomendadas agora: ${ficam.length ? ficam.map((l) => mvNome(l.i)).join(", ") : "nenhuma"} (até ${MV_VAGAS})\n<i>Só recomendação: ligar e desligar o robô é com você. ${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Detalhes em /maovirada.</i>`;
   for (const ch of ALERT_CHAT_IDS.filter((c) => !silChat(c))) await sendTelegram(ch, msg).catch((e) => console.log("⚠️ mão virada: envio falhou", e));
   return linhas;
 }
@@ -1853,14 +1861,14 @@ async function runMaoVirada(chatId: number | string) {
   if (!SB) { await sendTelegram(chatId, "⚠️ Sem acesso ao banco agora."); return; }
   const est = await mvLer(SB);
   if (!est) { await sendTelegram(chatId, "⚠️ Não consegui ler a recomendação do mão virada agora. Tente de novo em instantes."); return; }
-  let m = `🔂 <b>MÃO VIRADA</b> · recomendação${MV_ON ? "" : " (desligada: MV_ON=0)"}\n<i>Regra: ${mvRegraTxt()}. Conferida a cada hora fechada. Só recomendação: o robô não muda nada sozinho.</i>\n\n`;
+  let m = `🔂 <b>MÃO VIRADA</b> · recomendação${MV_ON ? "" : " (desligada)"}\n<i>${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Conferida a cada hora fechada. Só recomendação: o robô não muda nada sozinho.</i>\n\n`;
   m += `<b>Recomendadas agora</b>${est.hora ? ` (avaliado ${divDH(est.hora * 3600000)})` : ""}\n`;
-  m += est.lig.length ? est.lig.map((l) => `  ${mvNome(l.i)}: desde ${divDH(l.desde)} · ${mvCenTxt(l)}${mvAdxGTxt(l)}${l.lado ? ` · faixa ${mvFaixaNome()} em ${l.lado.toUpperCase()}` : ""}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}\n`).join("") : "  nenhuma\n";
+  m += est.lig.length ? est.lig.map((l) => `  ${mvNome(l.i)}: desde ${divDH(l.desde)} · ${mvPub(l)}${mvAdxGTxt(l)}${l.lado ? (MV_DETALHES ? ` · faixa ${mvFaixaNome()} em ${l.lado.toUpperCase()}` : ` · ${l.lado.toUpperCase()}`) : ""}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}\n`).join("") : "  nenhuma\n";
   const fora = est.cands.filter((c) => !est.lig.some((l) => l.i === c.i));
-  if (fora.length) m += `<b>Também passavam</b> (sem vaga)\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvCenTxt(c)}\n`).join("")}`;
+  if (fora.length) m += `<b>Também passavam</b> (sem vaga)\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvPub(c)}\n`).join("")}`;
   const ult = est.hist.slice(-10).reverse();
-  if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvCenTxt({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN, er3d: h.er3d ?? null })})` : ""}\n`).join("")}`;
-  m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_ON=0 desliga o alerta.</i>`;
+  if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvPub({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN, er3d: h.er3d ?? null })})` : ""}\n`).join("")}`;
+  if (MV_DETALHES) m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_ON=0 desliga o alerta.</i>`;
   await sendTelegram(chatId, m);
 }
 // ===== V107: humor do BTC na hora do alerta (pra separar resultado por regime de mercado) =====
@@ -11834,7 +11842,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   ];
   if (FUNDO_ON) varreduras.push(["🟢 /fundo", "caíram e mostram sinal de fundo", `caíram ${FUNDO_QUEDA_MIN}%+ e já mostram sinal de fundo (possível virada pra LONG). ⭐ Repique vem primeiro: disparou, voltou até a faixa e está segurando`]);
   if (TOPO_ON) varreduras.push(["🔴 /topo", "subiram e mostram sinal de topo", `subiram ${TOPO_ALTA_MIN}%+ e já mostram sinal de topo (possível virada pra SHORT). ⭐ Repique vem primeiro: despencou, voltou até a faixa e foi rejeitada`]);
-  if (MV_ON) varreduras.push(["🔂 /maovirada", "em quais moedas ligar o mão virada", `as moedas recomendadas pro robô mão virada agora (de alerta, com ATR ≥ ${MV_ATR_MIN}%${MV_ER3D > 0 ? " e andando reto em 3 dias" : ""}, até ${MV_VAGAS}), desde quando e o cenário. O bot também avisa sozinho quando recomenda ligar ou desligar (só recomendação)`]); // V124
+  if (MV_ON) varreduras.push(["🔂 /maovirada", "em quais moedas ligar o mão virada", `as moedas recomendadas pro robô mão virada agora (até ${MV_VAGAS}) e desde quando. O bot também avisa sozinho quando recomenda ligar ou desligar (só recomendação)`]); // V124
   sec("📡 Procurar moedas", varreduras);
 
   sec("⭐ Acompanhar", [
