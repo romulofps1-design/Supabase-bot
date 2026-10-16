@@ -1,5 +1,8 @@
-// telegram-bot V123 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V126 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V126 (V125 + /juncao carteira: andando reto — trocas6 e ritmo4 (viradas da faixa), adx1h25 e adx4h25 (tendência no 1h/4h), er3d0.3 (andou reto em 3 dias)). Os alertas de antes e o motor não mudam.
+// V125 (V124 + o alerta do mão virada mostra o lado pela faixa do robô, MV_FAIXA, padrão rápida + 144). Os alertas de antes e o motor não mudam.
+// V124 (V123 + 🔂 MÃO VIRADA: alerta separado do modo alerta que recomenda em quais moedas ligar o robô mão virada e quando desligar — de alerta com ATR ≥ 1%, até 2 moedas, desligar depois de 6 h fora; /maovirada). Os alertas de antes e o motor não mudam.
 // V123 (V122 + /juncao carteira alerta atrp1 segura6: liga a moeda "de alerta" e com ATR mínimo, e só desliga depois de N horas sem passar). Só análises: alertas, bot e motor não mudam.
 // V122 (V121 + /juncao filtros junto: os critérios ao mesmo tempo no robô, cada par, cada trio e os 4 juntos; "alerta" põe o de alerta na conta). Só análises: alertas, bot e motor não mudam.
 // V121 (V120 + /juncao so +us: só as moedas do +, sem as que deram alerta, pra ver uma moeda sozinha no período todo). Só análises: alertas, bot e motor não mudam.
@@ -7,7 +10,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V123"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V126"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -1724,6 +1727,128 @@ async function radarFoguete(SB: any, pool: { instId: string; pct: number; volUsd
     const corte = Date.now() - FOGUETE_DIAS_GUARDA * 86400000;
     await upsertLinha(SB, FOGUETE_ROW, { last_status: JSON.stringify(lista.filter((r) => r.t >= corte).slice(-FACA_MAX)), last_alert_at: new Date().toISOString() });
   }
+}
+// ===== V124: 🔂 MÃO VIRADA — recomendação de em quais moedas ligar (e quando desligar) o robô mão virada =====
+// O motor do robô não muda e não tem filtro: quem escolhe a moeda é a pessoa, e este alerta só recomenda. A regra veio do /juncao carteira (V123):
+// a cada hora fechada, a moeda passa no cenário se está "de alerta" (|24h| ≥ MV_MOV% e ADX ≥ MV_ADX) e com ATR(14) ≥ MV_ATR_MIN% do preço.
+// No máximo MV_VAGAS moedas recomendadas ao mesmo tempo; a vaga livre vai pra que mais andou em 24h (MV_CRITERIO=atr: a de maior ATR). A recomendada
+// que fica MV_SEGURA_H horas fechadas seguidas fora do cenário ganha a recomendação de desligar. No teste (28 dias, rápida, robô no cruzamento):
+// 1 moeda +0.23R por trade (+48R) e 2 moedas +0.12R (+52R), contra −1.321R com o robô ligado sempre em todas.
+const MV_ON = (Deno.env.get("MV_ON") || "1") !== "0";
+const MV_MOV = numEnv("MV_MOV", "8");
+const MV_ADX = numEnv("MV_ADX", "14");
+const MV_ATR_MIN = numEnv("MV_ATR_MIN", "1");
+const MV_VAGAS = Math.max(1, Math.min(10, Math.round(numEnv("MV_VAGAS", "2"))));
+const MV_SEGURA_H = Math.max(0, Math.min(48, Math.round(numEnv("MV_SEGURA_H", "6"))));
+const MV_CRITERIO: "var" | "atr" = (Deno.env.get("MV_CRITERIO") || "var").trim().toLowerCase() === "atr" ? "atr" : "var";
+// V125: a faixa do robô mão virada (o lado LONG/SHORT que sai no alerta). Padrão: rápida + 144, que vira menos que a rápida dos alertas.
+// Use o mesmo valor do J6_MODO do motor do robô. O cenário (de alerta e ATR) não depende da faixa.
+const MV_FAIXA_ENV = (Deno.env.get("MV_FAIXA") || "rapida144").trim().toLowerCase().replace(/[\s+_-]/g, "");
+const MV_FAIXA: "classica" | "rapida" | "rapida144" = MV_FAIXA_ENV === "classica" ? "classica" : MV_FAIXA_ENV === "rapida" ? "rapida" : "rapida144";
+const mvFaixaNome = () => (MV_FAIXA === "rapida144" ? "rápida + 144" : MV_FAIXA === "rapida" ? "rápida" : "clássica");
+const MV_ROW = "_MAO_VIRADA_";
+type MvCen = { pct: number; adx: number; atrP: number; lado: "long" | "short" | null; passa: boolean };
+type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number; atrP: number; lado: "long" | "short" | null };
+type MvHist = { i: string; a: "liga" | "desliga"; t: number; pct: number | null; adx: number | null; atrP: number | null };
+type MvEstado = { hora: number; lig: MvLig[]; cands: { i: string; pct: number; adx: number; atrP: number }[]; hist: MvHist[] };
+const MV_HIST_MAX = 200;
+const mvRegraTxt = () => `de alerta (|24h| ≥ ${MV_MOV}% e ADX ≥ ${MV_ADX}) e ATR ≥ ${MV_ATR_MIN}% do preço · até ${MV_VAGAS} moeda(s), ${MV_CRITERIO === "atr" ? "a de maior ATR" : "a que mais andou em 24h"} primeiro · desligar depois de ${MV_SEGURA_H} h fora do cenário · lado pela faixa ${mvFaixaNome()}`;
+// cenário de uma moeda: variação de 24h do ticker, ADX(14) e ATR(14) da última vela de 15m fechada
+function mvCenario(info: InfoFiltravel, pct: number): MvCen {
+  const atrP = info.preco > 0 && info.atr > 0 ? (info.atr / info.preco) * 100 : NaN;
+  const adx = typeof info.adx === "number" ? info.adx : NaN;
+  const passa = Number.isFinite(pct) && Math.abs(pct) >= MV_MOV && Number.isFinite(adx) && adx >= MV_ADX && Number.isFinite(atrP) && atrP >= MV_ATR_MIN;
+  return { pct, adx, atrP, lado: ladoAtual(info), passa };
+}
+const mvNome = (inst: string) => inst.replace(/-USDT$/, "");
+// V125: o lado da faixa do robô (MV_FAIXA) na última vela fechada; se for a mesma faixa do bot (J6_MODO), usa a conta que o alerta já fez
+async function mvLado(inst: string, info: InfoFiltravel): Promise<"long" | "short" | null> {
+  if (MV_FAIXA === (J6_R144 ? "rapida144" : J6_RAPIDA ? "rapida" : "classica")) return ladoAtual(info);
+  const d = await xCandles(inst, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
+  if (!d || d.c.length < 200) return null;
+  const lin = linhasDeBanda(bandaModo(d.c, MV_FAIXA)), k = d.c.length - 1;
+  return d.c[k] > lin.topo[k] ? "long" : d.c[k] < lin.fundo[k] ? "short" : null;
+}
+const mvCenTxt = (c: { pct: number; adx: number; atrP: number }) => `${c.pct >= 0 ? "+" : ""}${c.pct.toFixed(1)}% em 24h, ADX ${Number.isFinite(c.adx) ? Math.round(c.adx) : "?"}, ATR ${Number.isFinite(c.atrP) ? c.atrP.toFixed(1) : "?"}%`;
+async function mvLer(SB: any): Promise<MvEstado | null> {
+  const vazio: MvEstado = { hora: 0, lig: [], cands: [], hist: [] };
+  try {
+    const { data, error } = await SB.from(TAB).select("last_status").eq("instid", MV_ROW).maybeSingle();
+    if (error) { console.log("⚠️ mão virada: leitura falhou, pulo a rodada", error.message ?? error); return null; }
+    if (!data?.last_status) return vazio;
+    const j = JSON.parse(data.last_status);
+    return { hora: Number(j.hora) || 0, lig: Array.isArray(j.lig) ? j.lig : [], cands: Array.isArray(j.cands) ? j.cands : [], hist: Array.isArray(j.hist) ? j.hist : [] };
+  } catch (e) { console.log("⚠️ mão virada: leitura falhou", e); return null; }
+}
+// Roda uma vez por hora fechada (a 1ª rodada do cron depois da virada da hora), com o pool e os indicadores que o alerta já calculou.
+// Devolve as linhas da recomendação (vazio = nada mudou); o envio é aqui mesmo, pros chats fora de silêncio/pausa.
+async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: string; pct: number }[], indicadores: (InfoFiltravel | null)[], agoraMs = Date.now()): Promise<string[]> {
+  if (!MV_ON) return [];
+  const hora = Math.floor(agoraMs / 3600000);
+  const est = await mvLer(SB);
+  if (!est || est.hora === hora) return [];
+  const dados = new Map<string, MvCen>(), infos = new Map<string, InfoFiltravel>();
+  indicadores.forEach((info, i) => { if (info && pool[i]) { dados.set(info.instId, mvCenario(info, pool[i].pct)); infos.set(info.instId, info); } });
+  // as recomendadas que saíram do pool (deixaram de estar entre as que mais andaram): busca o indicador delas
+  for (const l of est.lig) {
+    if (dados.has(l.i)) continue;
+    const v = variacoes.find((x) => x.instId === l.i);
+    const info = await calcIndicadorFiltro(l.i).catch(() => null);
+    if (info && v) { dados.set(l.i, mvCenario(info, v.pct)); infos.set(l.i, info); }
+  }
+  // V125: o lado pela faixa do robô (MV_FAIXA), só das moedas que vão aparecer (as recomendadas)
+  const ladoDe = async (inst: string, padrao: "long" | "short" | null) => { const info = infos.get(inst); return info ? await mvLado(inst, info).catch(() => padrao) : padrao; };
+  const linhas: string[] = [];
+  const hist = (i: string, a: "liga" | "desliga", c: MvCen | null) => est.hist.push({ i, a, t: agoraMs, pct: c ? c.pct : null, adx: c && Number.isFinite(c.adx) ? c.adx : null, atrP: c && Number.isFinite(c.atrP) ? c.atrP : null });
+  const ficam: MvLig[] = [];
+  for (const l of est.lig) {
+    const c = dados.get(l.i) ?? null;
+    if (c?.passa) { ficam.push({ ...l, ultH: hora, pct: c.pct, adx: c.adx, atrP: c.atrP, lado: await ladoDe(l.i, l.lado) }); continue; }
+    if (hora - l.ultH > MV_SEGURA_H) {
+      linhas.push(`⚪ Desligar <b>${mvNome(l.i)}</b>: ${hora - l.ultH} h fora do cenário${c ? ` (agora ${mvCenTxt(c)})` : " (sem dados agora)"} · recomendada desde ${divDH(l.desde)}`);
+      hist(l.i, "desliga", c);
+      console.log(`🔂 mão virada: recomenda desligar ${l.i} (${hora - l.ultH} h fora do cenário)`);
+      continue;
+    }
+    ficam.push(l);
+  }
+  const passam = [...dados.entries()].filter(([, c]) => c.passa).map(([i, c]) => ({ i, c }));
+  const nota = (x: { c: MvCen }) => (MV_CRITERIO === "atr" ? x.c.atrP : Math.abs(x.c.pct));
+  passam.sort((a, b) => nota(b) - nota(a) || (a.i < b.i ? -1 : 1));
+  for (const x of passam) {
+    if (ficam.length >= MV_VAGAS) break;
+    if (ficam.some((l) => l.i === x.i)) continue;
+    const lado = await ladoDe(x.i, null);
+    ficam.push({ i: x.i, desde: agoraMs, ultH: hora, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP, lado });
+    linhas.push(`🟢 Ligar <b>${mvNome(x.i)}</b>: de alerta (${mvCenTxt(x.c)})${lado ? ` · faixa ${mvFaixaNome()} em ${lado.toUpperCase()}` : ` · preço dentro da faixa ${mvFaixaNome()}`}`);
+    hist(x.i, "liga", x.c);
+    console.log(`🔂 mão virada: recomenda ligar ${x.i} (${mvCenTxt(x.c)})`);
+  }
+  est.lig = ficam;
+  est.hora = hora;
+  est.cands = passam.slice(0, 8).map((x) => ({ i: x.i, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP }));
+  est.hist = est.hist.slice(-MV_HIST_MAX);
+  await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date(agoraMs).toISOString() });
+  if (!linhas.length) return [];
+  const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\nRecomendadas agora: ${ficam.length ? ficam.map((l) => mvNome(l.i)).join(", ") : "nenhuma"} (até ${MV_VAGAS})\n<i>Só recomendação: ligar e desligar o robô é com você. Regra: ${mvRegraTxt()}. Detalhes em /maovirada.</i>`;
+  for (const ch of ALERT_CHAT_IDS.filter((c) => !silChat(c))) await sendTelegram(ch, msg).catch((e) => console.log("⚠️ mão virada: envio falhou", e));
+  return linhas;
+}
+// /maovirada — as recomendadas agora, as que passavam na última hora avaliada e as últimas recomendações
+async function runMaoVirada(chatId: number | string) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Sem acesso ao banco agora."); return; }
+  const est = await mvLer(SB);
+  if (!est) { await sendTelegram(chatId, "⚠️ Não consegui ler a recomendação do mão virada agora. Tente de novo em instantes."); return; }
+  let m = `🔂 <b>MÃO VIRADA</b> · recomendação${MV_ON ? "" : " (desligada: MV_ON=0)"}\n<i>Regra: ${mvRegraTxt()}. Conferida a cada hora fechada. Só recomendação: o robô não muda nada sozinho.</i>\n\n`;
+  m += `<b>Recomendadas agora</b>${est.hora ? ` (avaliado ${divDH(est.hora * 3600000)})` : ""}\n`;
+  m += est.lig.length ? est.lig.map((l) => `  ${mvNome(l.i)}: desde ${divDH(l.desde)} · ${mvCenTxt(l)}${l.lado ? ` · faixa ${mvFaixaNome()} em ${l.lado.toUpperCase()}` : ""}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}\n`).join("") : "  nenhuma\n";
+  const fora = est.cands.filter((c) => !est.lig.some((l) => l.i === c.i));
+  if (fora.length) m += `<b>Também passavam</b> (sem vaga)\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvCenTxt(c)}\n`).join("")}`;
+  const ult = est.hist.slice(-10).reverse();
+  if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvCenTxt({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN })})` : ""}\n`).join("")}`;
+  m += `\n<i>Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_ON=0 desliga o alerta.</i>`;
+  await sendTelegram(chatId, m);
 }
 // ===== V107: humor do BTC na hora do alerta (pra separar resultado por regime de mercado) =====
 // Variação do BTC nas 24h até a vela ANTERIOR à do alerta (sem olhar o futuro). ≥ +REGIME_BTC_PCT = subindo · ≤ −REGIME_BTC_PCT = caindo · resto = de lado.
@@ -3442,6 +3567,7 @@ async function runAlertaProativo() {
   if (FOGUETE_MODO !== "off" && noPrazo("foguete (sombra)")) await radarFoguete(SB, pool, indicadores).catch((e) => console.log("❌ erro modo foguete", e)); // V107 // V98 (V106: em modo sombra, só dentro do prazo)
   if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
   if (noPrazo("sombra de volume")) await volSombraRodar(SB, variacoes, perfilAlerta).catch((e) => console.log("❌ erro sombra de volume", e)); // V106
+  if (MV_ON && noPrazo("mão virada")) await radarMaoVirada(SB, variacoes, pool, indicadores).catch((e) => console.log("❌ erro mão virada", e)); // V124
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   // V74: sem .catch, um erro aqui pulava checarAntecipacoes, salvarEstado e processarAutoApagar da rodada
@@ -6761,7 +6887,7 @@ function juncaoFiltrosDeArgs(args: string[]): FiltroJ[] | null {
     if (decimalVirgula) s = s.replace(/(^|[;,])0,(\d)/g, "$10.$2"); // "er0,3" = 0.3
     return [...new Set(s.split(/[;,]/).filter((x) => x !== "").map((x) => Number(x)).filter((v) => Number.isFinite(v) && (min0 ? v >= 0 : v > 0) && v <= max))].slice(0, 3);
   };
-  const adx = lista(/^adx/, 60), chop = lista(/^chop/, 100), er = lista(/^er(?!dia)/, 1, true);
+  const adx = lista(/^adx(?!\d+h)/, 60), chop = lista(/^chop/, 100), er = lista(/^er(?!dia|\d+d)/, 1, true); // V126: adx1h25, adx4h25 e er3d0.3 são da carteira
   const trocas = lista(/^trocas/, 20, false, true).map((v) => Math.round(v)), erdia = lista(/^erdia/, 1, true); // V111
   const ritmo = lista(/^ritmo/, 30), embalo = args.some((x) => x === "embalo") ? [0] : lista(/^embalo/, 50, false, true); // V112
   const atrp = lista(/^atrp/, 5, true); // V113: atrp0.5,0.8 (ou atrp0,5)
@@ -6934,7 +7060,9 @@ function simPernaLigada(d: XVelas, kIni: number, lado: HipLado, entrada: number,
 // V118: /juncao ... carteira [vagas1,2,4] — no máximo N moedas ligadas ao mesmo tempo, enquanto passam nas condições (top, vol, unid, pd do comando)
 // V123: alerta = a moeda só liga "de alerta" (|24h| ≥ SAIDA_MOV_PADRAO% e ADX ≥ SAIDA_ADX_PADRAO na hora fechada); segura6 = a moeda ligada só
 // desliga depois de 6 horas fechadas seguidas sem passar (pra não ligar e desligar toda hora). O ATR mínimo vem do atrp do comando (ex.: atrp1).
-type CarteiraJ = { vagas: number[]; alerta?: boolean; segura?: number };
+// V126: adx1h25 / adx4h25 = ADX(14) das velas de 1h / 4h (montadas das de 15m) ≥ 25 na hora fechada; er3d0.3 = o preço andou reto em 3 dias
+// (|variação de 72h| ÷ caminho percorrido ≥ 0.3). As viradas da faixa vêm do trocas (≤ N nas 24h antes) e do ritmo (≤ N por dia nos 3 dias antes).
+type CarteiraJ = { vagas: number[]; alerta?: boolean; segura?: number; adx1h?: number; adx4h?: number; er3d?: number };
 function juncaoCarteiraDeArgs(args: string[]): CarteiraJ | null {
   if (!args.some((a) => /^carteira$/.test(a))) return null;
   const a = args.find((x) => /^vagas?\d/.test(x));
@@ -6943,6 +7071,11 @@ function juncaoCarteiraDeArgs(args: string[]): CarteiraJ | null {
   if (args.includes("alerta")) out.alerta = true;
   const mS = args.map((x) => /^segura(\d{1,2})h?$/.exec(x)).find((x) => !!x);
   if (mS && Number(mS[1]) >= 1) out.segura = Math.min(48, Number(mS[1]));
+  const numDe = (re: RegExp, max: number) => { const m = args.map((x) => re.exec(x)).find((x) => !!x); const v = m ? Number(m[1].replace(",", ".")) : NaN; return Number.isFinite(v) && v > 0 && v <= max ? v : undefined; };
+  const a1 = numDe(/^adx1h(\d+(?:[.,]\d+)?)$/, 100), a4 = numDe(/^adx4h(\d+(?:[.,]\d+)?)$/, 100), e3 = numDe(/^er3d(\d*(?:[.,]\d+)?)$/, 1);
+  if (a1 !== undefined) out.adx1h = a1;
+  if (a4 !== undefined) out.adx4h = a4;
+  if (e3 !== undefined) out.er3d = e3;
   return out;
 }
 async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false, novos: NovoJ[] = [], filtros: FiltroJ[] | null = null, reteste: number | null = null, semanas = false, retesteEmAtr = false, porMoeda = false, extraMoedas: string[] = [], retesteModo: "perto" | "toque" = "perto", rodizio: number | null = null, volume = false, amostra = false, extras: { saidas?: SaidaPctJ[]; soModos?: string[]; carteira?: CarteiraJ; so?: boolean } = {}) {
@@ -6976,7 +7109,8 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   const cfVol = filtrosJ.find((f) => f.tipo === "vol"), cfUnid = filtrosJ.find((f) => f.tipo === "unid");
   const cfPd = filtrosJ.find((f) => f.tipo === "pd" && f.v2 === undefined && f.v3 === undefined && f.v4 === undefined);
   const cfAtrp = filtrosJ.find((f) => f.tipo === "atrp"); // V123: ATR mínimo da carteira
-  const cartSemCond = !!cart && !cfTop && !cfVol && !cfUnid && !cfPd && !cart.alerta && !cfAtrp;
+  const cfTrocas = filtrosJ.find((f) => f.tipo === "trocas"), cfRitmo = filtrosJ.find((f) => f.tipo === "ritmo"); // V126: viradas da faixa na carteira
+  const cartSemCond = !!cart && !cfTop && !cfVol && !cfUnid && !cfPd && !cart.alerta && !cfAtrp && !cfTrocas && !cfRitmo && cart.adx1h === undefined && cart.adx4h === undefined && cart.er3d === undefined;
   const cartTop = cart ? (cfTop ? cfTop.v : cartSemCond ? 20 : undefined) : undefined;
   const SB = getSupabase();
   if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
@@ -7104,6 +7238,10 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   const cartT0 = Math.ceil(desdeMs / H_MS) * H_MS;
   const cartVol = cfVol?.v, cartUnid = cfUnid ? (cfUnid.v > 0 ? cfUnid.v : corteUnid) : undefined, cartPd = cfPd?.v;
   const cartAtrp = cart ? cfAtrp?.v : undefined, cartAlerta = !!cart?.alerta, cartSegura = cart?.segura ?? 0; // V123
+  // V126: viradas da faixa (na faixa do 1º modo da rodada), ADX do 1h/4h e ER de 3 dias
+  const cartModoV = modosAtivos.find((k) => k === "classica" || k === "rapida" || k === "rapida144") as Exclude<ModoJ6, "custom"> | undefined;
+  const cartTrocas = cart && cartModoV ? cfTrocas?.v : undefined, cartRitmo = cart && cartModoV ? cfRitmo?.v : undefined;
+  const cartAdx1h = cart?.adx1h, cartAdx4h = cart?.adx4h, cartEr3d = cart?.er3d;
   let cartNH = 0;
   type CartSel = { chave: string; crit: CritC | null; vagas: number; on: Map<string, Uint8Array>; trocas: number; horasOn: Map<string, number>; ocup: number };
   const cartSels: CartSel[] = [];
@@ -7121,6 +7259,32 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
       d.t.forEach((t, k) => idxT.set(t, k));
       const atrC = atrSerie(d.h, d.l, d.c, 14);
       const adxC = cartAlerta ? xAdxSerie(d.h, d.l, d.c, 14) : null; // V123
+      // V126: viradas da faixa antes da vela k (igual ao filtro trocas/ritmo do motor)
+      let cruzC: Int32Array | null = null;
+      if (cartTrocas !== undefined || cartRitmo !== undefined) {
+        const lin = linhasDeBanda(bandaModo(d.c, cartModoV!));
+        cruzC = new Int32Array(d.c.length + 1);
+        let ult = 0, n = 0;
+        for (let k = 0; k < d.c.length; k++) {
+          if (k >= 300) { const l = d.c[k] > lin.topo[k] ? 1 : d.c[k] < lin.fundo[k] ? -1 : 0; if (l) { if (ult && l !== ult) n++; ult = l; } }
+          cruzC[k + 1] = n;
+        }
+      }
+      // V126: ADX(14) das velas de 1h e 4h montadas das de 15m (só velas completas); o valor da hora fechada é o da última vela grande que fechou até ela
+      const adxGrande = (horas: number) => {
+        const P = horas * H_MS, por = (horas * 60) / TF_MIN;
+        const ini: number[] = [], hh: number[] = [], ll: number[] = [], cc: number[] = [];
+        for (let k = 0; k < d.c.length; ) {
+          const t0 = Math.floor(d.t[k] / P) * P; let j = k, mx = -Infinity, mn = Infinity;
+          while (j < d.c.length && Math.floor(d.t[j] / P) * P === t0) { mx = Math.max(mx, d.h[j]); mn = Math.min(mn, d.l[j]); j++; }
+          if (j - k === por) { ini.push(t0); hh.push(mx); ll.push(mn); cc.push(d.c[j - 1]); }
+          k = j;
+        }
+        const serie = xAdxSerie(hh, ll, cc, 14), idx = new Map<number, number>();
+        ini.forEach((t, i) => idx.set(t, i));
+        return (tFech: number) => { const i = idx.get(Math.floor(tFech / P) * P - P); return i === undefined ? NaN : adxNaVela(serie, i); };
+      };
+      const adx1hEm = cartAdx1h !== undefined ? adxGrande(1) : null, adx4hEm = cartAdx4h !== undefined ? adxGrande(4) : null;
       let bloqC: Uint8Array | null = null;
       if (cartPd !== undefined) { bloqC = new Uint8Array(d.c.length); for (const kc of pdEventos(d, cartPd)) bloqC.fill(1, kc, Math.min(d.c.length, kc + PD_BLOQ_DIAS * n24)); }
       const elig = new Uint8Array(cartNH);
@@ -7134,7 +7298,13 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
         // V123: de alerta (|24h| e ADX na vela da hora fechada) e ATR mínimo em % do preço
         const alertaOk = !cartAlerta || (Math.abs(p24) >= SAIDA_MOV_PADRAO && (() => { const a = adxNaVela(adxC, k); return Number.isFinite(a) && a >= SAIDA_ADX_PADRAO; })());
         const atrOk = cartAtrp === undefined || (atrC[k] > 0 && d.c[k] > 0 && (atrC[k] / d.c[k]) * 100 >= cartAtrp);
-        elig[j] = (cartTop === undefined || naTopV(p24, jT, poolOk, cartTop)) && (cartVol === undefined || (!!vq24 && vq24[k] >= cartVol)) && (cartUnid === undefined || (!!vm24 && vm24[k] >= cartUnid)) && !(bloqC && bloqC[k]) && alertaOk && atrOk ? 1 : 0;
+        // V126: andando reto — poucas viradas da faixa, tendência no 1h/4h e ER de 3 dias
+        const tFech = cartT0 + j * H_MS;
+        const viradasOk = (cartTrocas === undefined || (!!cruzC && cruzC[k] - cruzC[Math.max(0, k - n24)] <= cartTrocas)) && (cartRitmo === undefined || (!!cruzC && (cruzC[k] - cruzC[Math.max(0, k - n3d)]) / 3 <= cartRitmo));
+        const adxGOk = (!adx1hEm || adx1hEm(tFech) >= cartAdx1h!) && (!adx4hEm || adx4hEm(tFech) >= cartAdx4h!);
+        let er3Ok = true;
+        if (cartEr3d !== undefined) { if (k < n3d) er3Ok = false; else { let cam = 0; for (let i = k - n3d + 1; i <= k; i++) cam += Math.abs(d.c[i] - d.c[i - 1]); er3Ok = cam > 0 && Math.abs(d.c[k] - d.c[k - n3d]) / cam >= cartEr3d; } }
+        elig[j] = (cartTop === undefined || naTopV(p24, jT, poolOk, cartTop)) && (cartVol === undefined || (!!vq24 && vq24[k] >= cartVol)) && (cartUnid === undefined || (!!vm24 && vm24[k] >= cartUnid)) && !(bloqC && bloqC[k]) && alertaOk && atrOk && viradasOk && adxGOk && er3Ok ? 1 : 0;
         val.var[j] = Math.abs(p24);
         val.unid[j] = vm24 ? vm24[k] : NaN;
         val.usdt[j] = vq24 ? vq24[k] : NaN;
@@ -7442,7 +7612,10 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     const somaTxt = (rs: number[]) => { const s = rs.reduce((t, x) => t + x, 0); return `${s >= 0 ? "+" : ""}${s.toFixed(0)}R`; };
     const nomeCrit: Record<CritC, string> = { var: "📈 variação", unid: "🪙 unidades", usdt: "💵 USDT", atr: "🌊 ATR", er: "📏 tendência" };
     const rotSel = (s: CartSel) => (s.crit ? `${s.vagas} vaga${s.vagas > 1 ? "s" : ""} · ${nomeCrit[s.crit]}` : "todas que passam");
-    const condTxt = [cartTop !== undefined ? `no top ${cartTop} de alta ou de queda em 24h${cartSemCond ? " (o padrão, porque o comando não trouxe condição)" : ""}` : "", cartVol !== undefined ? `≥ ${fmtVol(cartVol)} USDT em 24h` : "", cartUnid !== undefined ? `≥ ${fmtVol(cartUnid)} unidades em 24h` : "", cartPd !== undefined ? `sem ${pdVela ? `vela de 15m de ±${cartPd}% ou mais` : `pump e dump ≥ ${cartPd}%`} (fora ${PD_BLOQ_DIAS} dias depois)` : "", cartAlerta ? `de alerta (|24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO})` : "", cartAtrp !== undefined ? `ATR(14) ≥ ${cartAtrp}% do preço` : ""].filter(Boolean).join(" · ");
+    const faixaNomeV = cartModoV === "rapida144" ? "rápida + 144" : cartModoV === "rapida" ? "rápida" : "clássica"; // V126
+    const condTxt = [cartTop !== undefined ? `no top ${cartTop} de alta ou de queda em 24h${cartSemCond ? " (o padrão, porque o comando não trouxe condição)" : ""}` : "", cartVol !== undefined ? `≥ ${fmtVol(cartVol)} USDT em 24h` : "", cartUnid !== undefined ? `≥ ${fmtVol(cartUnid)} unidades em 24h` : "", cartPd !== undefined ? `sem ${pdVela ? `vela de 15m de ±${cartPd}% ou mais` : `pump e dump ≥ ${cartPd}%`} (fora ${PD_BLOQ_DIAS} dias depois)` : "", cartAlerta ? `de alerta (|24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO})` : "", cartAtrp !== undefined ? `ATR(14) ≥ ${cartAtrp}% do preço` : "",
+      cartTrocas !== undefined ? `até ${cartTrocas} virada(s) da faixa (${faixaNomeV}) nas 24h antes` : "", cartRitmo !== undefined ? `a faixa (${faixaNomeV}) virou até ${cartRitmo} vez(es) por dia nos 3 dias antes` : "",
+      cartAdx1h !== undefined ? `ADX(14) do 1h ≥ ${cartAdx1h}` : "", cartAdx4h !== undefined ? `ADX(14) do 4h ≥ ${cartAdx4h}` : "", cartEr3d !== undefined ? `andou reto em 3 dias (ER de 72h ≥ ${cartEr3d})` : ""].filter(Boolean).join(" · ");
     m += `<b>🧺 CARTEIRA</b> (no máximo ${cart.vagas.join(", ")} moeda(s) ligada(s) ao mesmo tempo)\n<i>Condições, conferidas a cada hora fechada: ${condTxt}. ${cartSegura > 0 ? `A moeda só liga quando passa, e a ligada só é desligada depois de ${cartSegura} hora(s) fechada(s) seguidas sem passar (a posição dela fecha na hora)` : "A moeda ligada que deixa de passar é desligada e a posição dela fecha na hora"}; a vaga vai pra próxima que passa, na ordem de cada critério: 📈 maior variação de 24h (alta ou queda) · 🪙 mais volume em unidades · 💵 mais volume em USDT · 🌊 maior ATR (% do preço) · 📏 tendência mais limpa (ER de 24h). Ligada, o robô espera o próximo cruzamento (ou ${retNome}) pra entrar. 🔂 = mão virada no cruzamento (o motor, com stop de ${SAIDA_STOP_ATR} ATR); ${retIco} = mão virada só no ${retNome} (sai no cruzamento contrário ou no stop). "sem carteira" = o robô ligado o tempo todo em todas as moedas; "todas que passam" = sem limite de vagas. "trocas" = quantas vezes uma moeda foi ligada; "ocupação" = média de moedas ligadas por hora.${topTxt}${pdTxt}</i>\n\n`;
     for (const modo of modosAtivos) {
       m += `${MINI_DIVISOR}\n<b>${nome[modo]}</b>\n`;
@@ -7496,7 +7669,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
         }
       }
     }
-    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%; so +us = só essa moeda; alerta = só "de alerta" · atrp1 = ATR ≥ 1% · segura6 = só desliga depois de 6 h sem passar) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
+    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%; so +us = só essa moeda; alerta = só "de alerta" · atrp1 = ATR ≥ 1% · segura6 = só desliga depois de 6 h sem passar · trocas6 = até 6 viradas da faixa em 24h · ritmo4 = até 4 por dia em 3 dias · adx1h25, adx4h25 = tendência no 1h/4h · er3d0.3 = andou reto em 3 dias) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
     await enviarEmPartes(chatId, m);
     return;
   }
@@ -7987,7 +8160,7 @@ async function runVelasExport(chatId: number | string, dias: number, maxMoedas: 
 // nada acontece (o cron só tenta ler e segue).
 // Tabela: id (identity), criado_em, comando, status (pendente | rodando | feito | erro), iniciado_em, terminado_em, segundos, versao, resultado.
 const PEDIDOS_TABELA = "analises_pedidos";
-const PEDIDOS_CMDS = ["/juncao", "/saida", "/radarsim", "/radarconf", "/radarhist", "/radar", "/facasim", "/faca", "/foguete", "/placar", "/15min", "/reversaoconf", "/repsombra", "/volconf", "/compressao", "/sombras"];
+const PEDIDOS_CMDS = ["/juncao", "/saida", "/radarsim", "/radarconf", "/radarhist", "/radar", "/facasim", "/faca", "/foguete", "/placar", "/15min", "/reversaoconf", "/repsombra", "/volconf", "/compressao", "/sombras", "/maovirada"]; // V124: /maovirada (só leitura)
 const PEDIDOS_TRAVADO_MIN = 15;
 const PEDIDOS_PAUSA_MS = 5000; // V111: pausa entre um pedido e outro (pedidos seguidos esbarravam no limite da BloFin e vinham com menos moedas)
 const FUNCAO_NOME = (Deno.env.get("FUNCAO_NOME") || "telegram-bot").trim(); // nome (slug) desta function, pra ela chamar a si mesma
@@ -11639,6 +11812,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   ];
   if (FUNDO_ON) varreduras.push(["🟢 /fundo", "caíram e mostram sinal de fundo", `caíram ${FUNDO_QUEDA_MIN}%+ e já mostram sinal de fundo (possível virada pra LONG). ⭐ Repique vem primeiro: disparou, voltou até a faixa e está segurando`]);
   if (TOPO_ON) varreduras.push(["🔴 /topo", "subiram e mostram sinal de topo", `subiram ${TOPO_ALTA_MIN}%+ e já mostram sinal de topo (possível virada pra SHORT). ⭐ Repique vem primeiro: despencou, voltou até a faixa e foi rejeitada`]);
+  if (MV_ON) varreduras.push(["🔂 /maovirada", "em quais moedas ligar o mão virada", `as moedas recomendadas pro robô mão virada agora (de alerta e com ATR ≥ ${MV_ATR_MIN}%, até ${MV_VAGAS}), desde quando e o cenário. O bot também avisa sozinho quando recomenda ligar ou desligar (só recomendação)`]); // V124
   sec("📡 Procurar moedas", varreduras);
 
   sec("⭐ Acompanhar", [
@@ -12233,6 +12407,11 @@ async function tratarRequisicao(req: Request): Promise<Response> {
       const gravarH = argsH.some((a) => /^grav/i.test(a));
       const dH = Number(argsH.find((a) => /^\d+$/.test(a)) || 30);
       await comAguarde("📚 Lendo o histórico dos radares, aguarde...", () => runRadarHist(chatId, dH, gravarH));
+      return new Response("ok");
+    }
+    if (text === "/maovirada" || text.startsWith("/maovirada ") || text.startsWith("/maovirada@") || text === "/mv") {
+      // V124: /maovirada — em quais moedas o robô mão virada está recomendado agora
+      await runMaoVirada(chatId);
       return new Response("ok");
     }
     if (text === "/foguete" || text.startsWith("/foguete ") || text.startsWith("/foguete@")) {
