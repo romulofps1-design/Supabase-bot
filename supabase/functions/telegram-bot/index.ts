@@ -4260,9 +4260,11 @@ const OPORT_MOTOR_MAX_MIN = numEnv("OPORT_MOTOR_MAX_MIN", "15"); // oportunidade
 // a mesma que o site usa) vai como Authorization. Ela não dá acesso a nada no motor: quem autoriza é a chave de leitura / do modo alerta.
 const MOTOR_ANON_KEY = (Deno.env.get("MOTOR_ANON_KEY") || "").trim();
 const motorHeaders = (extra: Record<string, string>): Record<string, string> => ({ "Content-Type": "application/json", ...(MOTOR_ANON_KEY ? { Authorization: `Bearer ${MOTOR_ANON_KEY}`, apikey: MOTOR_ANON_KEY } : {}), ...extra });
-async function enviarAlertaMotor(o: { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null }) {
-  if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) return;
-  if (!(o.preco > 0) || !(o.atr > 0)) { console.log(`⚠️ modo alerta: ${o.inst} sem preço/ATR válido, não mandei pro motor`); return; }
+// V130: devolve o que aconteceu: "ok" (o motor gravou), "recusou" (o motor ou a conferência daqui recusaram: não adianta mandar de novo),
+// "falhou" (rede/timeout/erro 5xx: dá pra tentar de novo) ou "sem" (faltam os Secrets do motor).
+async function enviarAlertaMotor(o: { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null }): Promise<"ok" | "recusou" | "falhou" | "sem"> {
+  if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) return "sem";
+  if (!(o.preco > 0) || !(o.atr > 0)) { console.log(`⚠️ modo alerta: ${o.inst} sem preço/ATR válido, não mandei pro motor`); return "recusou"; }
   try {
     const r = await fetch(MOTOR_URL, {
       method: "POST", headers: motorHeaders({ "x-alerta-secret": MOTOR_ALERTA_SECRET }),
@@ -4271,7 +4273,108 @@ async function enviarAlertaMotor(o: { inst: string; side: "long" | "short"; tipo
     });
     const j: any = await r.json().catch(() => null);
     console.log(r.ok && j?.ok ? `📨 modo alerta: ${o.inst} ${o.tipo} enviado ao motor (${j.gravados ?? 0} pendente(s)${j.msg ? ` · ${j.msg}` : ""})` : `⚠️ modo alerta: o motor recusou ${o.inst} (HTTP ${r.status}${j?.error ? `: ${String(j.error).slice(0, 160)}` : ""})`);
-  } catch (e) { console.log(`⚠️ modo alerta: falha ao mandar ${o.inst} pro motor (${e})`); }
+    return r.ok && j?.ok ? "ok" : r.status >= 400 && r.status < 500 ? "recusou" : "falhou";
+  } catch (e) { console.log(`⚠️ modo alerta: falha ao mandar ${o.inst} pro motor (${e})`); return "falhou"; }
+}
+// ===== V130: OPORTUNIDADE NO RETESTE pro modo alerta do motor (no lugar do cruzamento) =====
+// No /juncao (28 dias, faixa rápida, stop 1 ATR, alvo 2R, prazo 2h), a oportunidade (cruzamento a favor do dia: 24h ≥ 8% no lado da entrada) deu
+// +0.04R por operação entrando no cruzamento e +0.15R entrando no reteste (positivo em 3 das 4 semanas); na rápida + 144 o reteste ficou em zero.
+// Reteste (o mesmo do /juncao reteste1): depois do cruzamento, uma vela fecha OPORT_RETESTE_PCT% (1) ou mais além da faixa e depois outra volta a fechar
+// a menos disso, ainda do mesmo lado, entre a OPORT_RET_MIN-ésima (3) e a OPORT_RET_MAX-ésima (16, ALERT_RETESTE_MAX_CANDLES) vela depois do
+// cruzamento. Vale só a PRIMEIRA vela assim (uma entrada por cruzamento) e, nela, a variação de 24h a favor do lado tem que ser ≥ ALERT_OPORT_PCT_MIN (8).
+// Quando a última vela fechada é esse reteste, o bot manda a oportunidade pro motor (preço = fechamento dela, ATR dela, nota do alerta) e o motor decide
+// pela configuração do site, como sempre. OPORT_MOTOR_ENTRADA = reteste (padrão) · cruzamento (o jeito da V107: no fechamento da vela que cruzou) · off.
+const OPORT_MOTOR_ENTRADA: "reteste" | "cruzamento" | "off" = (() => {
+  const v = String(Deno.env.get("OPORT_MOTOR_ENTRADA") || "reteste").trim().toLowerCase();
+  return /^cruz/.test(v) ? "cruzamento" : /^(off|0|nao|não|deslig)/.test(v) ? "off" : "reteste";
+})();
+const OPORT_RETESTE_PCT = Math.max(0.1, numEnv("OPORT_RETESTE_PCT", "1"));
+const OPORT_RET_MIN = Math.max(1, ALERT_FRESCO_CANDLES + 1);
+const OPORT_RET_MAX = Math.max(OPORT_RET_MIN, ALERT_RETESTE_MAX_CANDLES > 0 ? ALERT_RETESTE_MAX_CANDLES : 16);
+const OPORT_RET_ROW = "_OPORT_RETESTE_";
+const _oportRetEnviado = new Set<string>();
+type OportRet = { lado: HipLado; k0: number; k: number; preco: number; atr: number; mov24: number; dist: number };
+// O reteste da oportunidade na ÚLTIMA vela (d = só velas fechadas), ou null. Mesma conta do /juncao: a faixa do bot (J6_MODO), o cruzamento é a vela em
+// que o lado muda (vela dentro da faixa não muda o lado), a distância é o quanto a vela fecha além da faixa, em % da linha.
+function oportRetesteNaUltima(d: XVelas, distPct: number = OPORT_RETESTE_PCT, movMin: number = ALERT_OPORT_PCT_MIN): OportRet | null {
+  const n = d.c.length, k = n - 1, n24 = Math.round(1440 / TF_MIN);
+  if (n < 100 || k - n24 < 0) return null;
+  const jd = superV2(d.c, PESO_SUPREMA);
+  const topo = (i: number) => Math.max(jd[i].suprema, jd[i].j6), fundo = (i: number) => Math.min(jd[i].suprema, jd[i].j6);
+  const ladoEm = (i: number): HipLado | null => (d.c[i] > topo(i) ? "long" : d.c[i] < fundo(i) ? "short" : null);
+  let ult: HipLado | null = null, k0 = -1;
+  for (let i = 0; i <= k; i++) { const l = ladoEm(i); if (!l) continue; if (ult && l !== ult) k0 = i; ult = l; }
+  if (k0 < 0 || !ult || k - k0 < OPORT_RET_MIN || k - k0 > OPORT_RET_MAX) return null;
+  const lado: HipLado = ult;
+  const distLado = (i: number) => (lado === "long" ? (d.c[i] - topo(i)) / topo(i) : (fundo(i) - d.c[i]) / fundo(i)) * 100;
+  let afastou = false, kE = -1;
+  for (let i = k0; i <= k; i++) {
+    const alem = ladoEm(i) === lado, dist = alem ? distLado(i) : -1;
+    if (i - k0 >= OPORT_RET_MIN && alem && afastou && dist < distPct) { kE = i; break; }
+    if (alem && dist >= distPct) afastou = true;
+  }
+  if (kE !== k) return null; // ainda não voltou, ou a primeira volta já passou (uma entrada por cruzamento)
+  const mov24 = d.c[k - n24] > 0 ? (d.c[k] / d.c[k - n24] - 1) * 100 * (lado === "long" ? 1 : -1) : NaN;
+  if (!(mov24 >= movMin)) return null;
+  const atr = atrSerie(d.h, d.l, d.c, 14)[k];
+  if (!(atr > 0)) return null;
+  return { lado, k0, k, preco: d.c[k], atr, mov24, dist: distLado(k) };
+}
+type OportRetReg = { i: string; c: number; t: number; l: HipLado; p: number; r: "ok" | "recusou" };
+async function oportRetLer(SB: any): Promise<OportRetReg[] | null> {
+  try {
+    const { data, error } = await SB.from(TAB).select("last_status").eq("instid", OPORT_RET_ROW).maybeSingle();
+    if (error) { console.log("⚠️ oportunidade no reteste: leitura falhou, pulo a rodada", error.message ?? error); return null; }
+    if (!data?.last_status) return [];
+    try { const j = JSON.parse(data.last_status); return Array.isArray(j) ? j : []; } catch { return []; }
+  } catch (e) { console.log("⚠️ oportunidade no reteste: leitura falhou", e); return null; }
+}
+// Candidatas (sem buscar vela): do outro lado da faixa no lado do dia, a menos de OPORT_RETESTE_PCT% dela, com o cruzamento recente. A conta de
+// verdade é com as velas (oportRetesteNaUltima). Devolve as oportunidades mandadas pro motor nesta rodada (inst e lado).
+async function oportRetesteMotor(SB: any, pool: { instId: string; pct: number; volUsdt: number }[], indicadores: (InfoFiltravel | null)[], perfil: XPerfil | null): Promise<string[]> {
+  if (OPORT_MOTOR_ENTRADA !== "reteste" || !MOTOR_URL || !MOTOR_ALERTA_SECRET) return [];
+  const cands: { info: InfoFiltravel; p: { instId: string; pct: number; volUsdt: number } }[] = [];
+  indicadores.forEach((info, i) => {
+    const p = pool[i];
+    if (!info || !p || info.instId !== p.instId) return;
+    const lado = ladoAtual(info);
+    if (!lado) return;
+    const aFavor = lado === "long" ? p.pct : -p.pct;
+    if (!(aFavor >= ALERT_OPORT_PCT_MIN - 2)) return; // folga de 2 pontos: o ticker e as velas medem o dia um pouco diferente
+    if (!(info.distAbs < OPORT_RETESTE_PCT)) return;
+    if (info.idadeCandles !== null && info.idadeCandles > OPORT_RET_MAX) return;
+    cands.push({ info, p });
+  });
+  if (!cands.length) return [];
+  const lista = await oportRetLer(SB);
+  if (!lista) return []; // sem o histórico não manda: evita mandar o mesmo reteste duas vezes
+  const enviados: string[] = [];
+  const agora = Date.now();
+  for (const { info, p } of cands.slice(0, 12)) {
+    const inst = info.instId;
+    const d = await xCandles(inst, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
+    if (!d || d.c.length < 100) continue;
+    const ev = oportRetesteNaUltima(d);
+    if (!ev) continue;
+    const fechou = d.t[ev.k] + TF_MIN * 60000;
+    if (agora - fechou > 2 * TF_MIN * 60000) continue; // vela velha (a corretora atrasou): o preço de agora já não é o do reteste
+    const chave = `${inst}|${d.t[ev.k0]}`;
+    if (_oportRetEnviado.has(chave) || lista.some((x) => x.i === inst && x.c === d.t[ev.k0])) continue;
+    const setup: Setup = { info, pct: p.pct, lado: ev.lado, tipo: "oportunidade", status: statusIndicador(info.distAbs), fresco: false, aprox: null };
+    const conf = await calcConfiancaAlerta(setup, p.volUsdt, perfil).catch(() => null);
+    const res = await enviarAlertaMotor({ inst, side: ev.lado, tipo: "oportunidade", preco: ev.preco, atr: ev.atr, nota: conf ? conf.conf : null, vol: p.volUsdt });
+    console.log(`🔁 oportunidade no reteste: ${inst} ${ev.lado.toUpperCase()} a ${fmtPrice(ev.preco)} (${ev.k - ev.k0} velas depois do cruzamento, ${ev.dist.toFixed(2)}% da faixa, 24h ${ev.mov24 >= 0 ? "+" : ""}${ev.mov24.toFixed(1)}% a favor) → motor: ${res}`);
+    if (res === "ok" || res === "recusou") {
+      _oportRetEnviado.add(chave);
+      lista.push({ i: inst, c: d.t[ev.k0], t: agora, l: ev.lado, p: ev.preco, r: res });
+      if (res === "ok") enviados.push(`${inst} ${ev.lado}`);
+    }
+  }
+  if (lista.length) {
+    const corte = agora - 3 * 86400000;
+    await upsertLinha(SB, OPORT_RET_ROW, { last_status: JSON.stringify(lista.filter((x) => x.t >= corte).slice(-300)), last_alert_at: new Date().toISOString() }).catch((e: unknown) => console.log("⚠️ oportunidade no reteste: não gravei o histórico", e));
+  }
+  return enviados;
 }
 type TradeMotor = { inst_id: string; side: string; action: "open" | "close"; size: number | null; price: number | null; cost_usdt: number | null; pnl_usdt: number | null; motivo: string | null; created_at: string };
 function resumoTrades(rows: TradeMotor[], dias: number): string {
