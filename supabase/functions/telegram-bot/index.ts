@@ -1,5 +1,6 @@
-// telegram-bot V126 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V127 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V127 (V126 + mão virada: só recomenda moeda que andou reto em 3 dias (ER de 72h ≥ 0.15, MV_ER3D) e mostra o ADX do 1h e do 4h). Os alertas de antes e o motor não mudam.
 // V126 (V125 + /juncao carteira: andando reto — trocas6 e ritmo4 (viradas da faixa), adx1h25 e adx4h25 (tendência no 1h/4h), er3d0.3 (andou reto em 3 dias)). Os alertas de antes e o motor não mudam.
 // V125 (V124 + o alerta do mão virada mostra o lado pela faixa do robô, MV_FAIXA, padrão rápida + 144). Os alertas de antes e o motor não mudam.
 // V124 (V123 + 🔂 MÃO VIRADA: alerta separado do modo alerta que recomenda em quais moedas ligar o robô mão virada e quando desligar — de alerta com ATR ≥ 1%, até 2 moedas, desligar depois de 6 h fora; /maovirada). Os alertas de antes e o motor não mudam.
@@ -10,7 +11,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V126"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V127"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -1376,7 +1377,7 @@ function calcRSI(closes: number[], period = 14): number {
   if (mediaPerda === 0) return mediaGanho === 0 ? 50 : 100;
   return 100 - 100 / (1 + mediaGanho / mediaPerda);
 }
-type InfoFiltravel = IndicadorInfo & { diDom?: "long" | "short" | null; ddPico?: number; altaVale?: number; top?: FundoRes | null; adx: number; rsi: number; atr: number; adxAntes?: number; volRatio?: number | null; trocas?: number; bottom?: FundoRes | null; rangeRel?: number };
+type InfoFiltravel = IndicadorInfo & { diDom?: "long" | "short" | null; ddPico?: number; altaVale?: number; top?: FundoRes | null; adx: number; rsi: number; atr: number; adxAntes?: number; volRatio?: number | null; trocas?: number; bottom?: FundoRes | null; rangeRel?: number; er3d?: number };
 // V36: tamanho das últimas 6 velas em relação ao típico da moeda (≤ 0.7 = velas minúsculas)
 function rangeRelDe(h: number[], l: number[], c: number[]): number | undefined {
   const n = c.length;
@@ -1746,19 +1747,23 @@ const MV_CRITERIO: "var" | "atr" = (Deno.env.get("MV_CRITERIO") || "var").trim()
 const MV_FAIXA_ENV = (Deno.env.get("MV_FAIXA") || "rapida144").trim().toLowerCase().replace(/[\s+_-]/g, "");
 const MV_FAIXA: "classica" | "rapida" | "rapida144" = MV_FAIXA_ENV === "classica" ? "classica" : MV_FAIXA_ENV === "rapida" ? "rapida" : "rapida144";
 const mvFaixaNome = () => (MV_FAIXA === "rapida144" ? "rápida + 144" : MV_FAIXA === "rapida" ? "rápida" : "clássica");
+// V127: andou reto em 3 dias (ER de 72h ≥ MV_ER3D; 0 desliga). No /juncao carteira (28 dias, rápida + 144): com 1 moeda o trade foi de +0.08R pra
+// +0.36R, e ligando todas as que passam foi de −0.06R pra +0.10R.
+const MV_ER3D = Math.max(0, Math.min(1, numEnv("MV_ER3D", "0.15")));
 const MV_ROW = "_MAO_VIRADA_";
-type MvCen = { pct: number; adx: number; atrP: number; lado: "long" | "short" | null; passa: boolean };
-type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number; atrP: number; lado: "long" | "short" | null };
-type MvHist = { i: string; a: "liga" | "desliga"; t: number; pct: number | null; adx: number | null; atrP: number | null };
-type MvEstado = { hora: number; lig: MvLig[]; cands: { i: string; pct: number; adx: number; atrP: number }[]; hist: MvHist[] };
+type MvCen = { pct: number; adx: number; atrP: number; er3d?: number; lado: "long" | "short" | null; passa: boolean };
+type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number; atrP: number; er3d?: number; a1h?: number; a4h?: number; lado: "long" | "short" | null };
+type MvHist = { i: string; a: "liga" | "desliga"; t: number; pct: number | null; adx: number | null; atrP: number | null; er3d?: number | null };
+type MvEstado = { hora: number; lig: MvLig[]; cands: { i: string; pct: number; adx: number; atrP: number; er3d?: number }[]; hist: MvHist[] };
 const MV_HIST_MAX = 200;
-const mvRegraTxt = () => `de alerta (|24h| ≥ ${MV_MOV}% e ADX ≥ ${MV_ADX}) e ATR ≥ ${MV_ATR_MIN}% do preço · até ${MV_VAGAS} moeda(s), ${MV_CRITERIO === "atr" ? "a de maior ATR" : "a que mais andou em 24h"} primeiro · desligar depois de ${MV_SEGURA_H} h fora do cenário · lado pela faixa ${mvFaixaNome()}`;
+const mvRegraTxt = () => `de alerta (|24h| ≥ ${MV_MOV}% e ADX ≥ ${MV_ADX}) e ATR ≥ ${MV_ATR_MIN}% do preço${MV_ER3D > 0 ? ` e andou reto em 3 dias (≥ ${MV_ER3D})` : ""} · até ${MV_VAGAS} moeda(s), ${MV_CRITERIO === "atr" ? "a de maior ATR" : "a que mais andou em 24h"} primeiro · desligar depois de ${MV_SEGURA_H} h fora do cenário · lado pela faixa ${mvFaixaNome()}`;
 // cenário de uma moeda: variação de 24h do ticker, ADX(14) e ATR(14) da última vela de 15m fechada
 function mvCenario(info: InfoFiltravel, pct: number): MvCen {
   const atrP = info.preco > 0 && info.atr > 0 ? (info.atr / info.preco) * 100 : NaN;
   const adx = typeof info.adx === "number" ? info.adx : NaN;
-  const passa = Number.isFinite(pct) && Math.abs(pct) >= MV_MOV && Number.isFinite(adx) && adx >= MV_ADX && Number.isFinite(atrP) && atrP >= MV_ATR_MIN;
-  return { pct, adx, atrP, lado: ladoAtual(info), passa };
+  const er3d = typeof info.er3d === "number" ? info.er3d : NaN; // V127
+  const passa = Number.isFinite(pct) && Math.abs(pct) >= MV_MOV && Number.isFinite(adx) && adx >= MV_ADX && Number.isFinite(atrP) && atrP >= MV_ATR_MIN && (MV_ER3D <= 0 || (Number.isFinite(er3d) && er3d >= MV_ER3D));
+  return { pct, adx, atrP, er3d, lado: ladoAtual(info), passa };
 }
 const mvNome = (inst: string) => inst.replace(/-USDT$/, "");
 // V125: o lado da faixa do robô (MV_FAIXA) na última vela fechada; se for a mesma faixa do bot (J6_MODO), usa a conta que o alerta já fez
@@ -1769,7 +1774,14 @@ async function mvLado(inst: string, info: InfoFiltravel): Promise<"long" | "shor
   const lin = linhasDeBanda(bandaModo(d.c, MV_FAIXA)), k = d.c.length - 1;
   return d.c[k] > lin.topo[k] ? "long" : d.c[k] < lin.fundo[k] ? "short" : null;
 }
-const mvCenTxt = (c: { pct: number; adx: number; atrP: number }) => `${c.pct >= 0 ? "+" : ""}${c.pct.toFixed(1)}% em 24h, ADX ${Number.isFinite(c.adx) ? Math.round(c.adx) : "?"}, ATR ${Number.isFinite(c.atrP) ? c.atrP.toFixed(1) : "?"}%`;
+const mvCenTxt = (c: { pct: number; adx: number; atrP: number; er3d?: number | null }) => `${c.pct >= 0 ? "+" : ""}${c.pct.toFixed(1)}% em 24h, ADX ${Number.isFinite(c.adx) ? Math.round(c.adx) : "?"}, ATR ${Number.isFinite(c.atrP) ? c.atrP.toFixed(1) : "?"}%${typeof c.er3d === "number" && Number.isFinite(c.er3d) ? `, reto em 3 dias ${c.er3d.toFixed(2)}` : ""}`;
+// V127: ADX(14) das velas de 1h e de 4h (como a tabela do indicador no TradingView), só das moedas recomendadas — informativo
+async function mvAdxGrandes(inst: string): Promise<{ a1h: number; a4h: number }> {
+  const ultimo = async (bar: string) => { const d = await xCandles(inst, bar, 200).catch(() => null); if (!d || d.c.length < 30) return NaN; const s = xAdxSerie(d.h, d.l, d.c, 14); return s.length ? s[s.length - 1] : NaN; };
+  const [a1h, a4h] = await Promise.all([ultimo("1H"), ultimo("4H")]);
+  return { a1h, a4h };
+}
+const mvAdxGTxt = (l: { a1h?: number; a4h?: number }) => (Number.isFinite(l.a1h) || Number.isFinite(l.a4h) ? ` · ADX 1h ${Number.isFinite(l.a1h) ? Math.round(l.a1h!) : "?"} · 4h ${Number.isFinite(l.a4h) ? Math.round(l.a4h!) : "?"}` : "");
 async function mvLer(SB: any): Promise<MvEstado | null> {
   const vazio: MvEstado = { hora: 0, lig: [], cands: [], hist: [] };
   try {
@@ -1799,11 +1811,11 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   // V125: o lado pela faixa do robô (MV_FAIXA), só das moedas que vão aparecer (as recomendadas)
   const ladoDe = async (inst: string, padrao: "long" | "short" | null) => { const info = infos.get(inst); return info ? await mvLado(inst, info).catch(() => padrao) : padrao; };
   const linhas: string[] = [];
-  const hist = (i: string, a: "liga" | "desliga", c: MvCen | null) => est.hist.push({ i, a, t: agoraMs, pct: c ? c.pct : null, adx: c && Number.isFinite(c.adx) ? c.adx : null, atrP: c && Number.isFinite(c.atrP) ? c.atrP : null });
+  const hist = (i: string, a: "liga" | "desliga", c: MvCen | null) => est.hist.push({ i, a, t: agoraMs, pct: c ? c.pct : null, adx: c && Number.isFinite(c.adx) ? c.adx : null, atrP: c && Number.isFinite(c.atrP) ? c.atrP : null, er3d: c && Number.isFinite(c.er3d) ? c.er3d! : null });
   const ficam: MvLig[] = [];
   for (const l of est.lig) {
     const c = dados.get(l.i) ?? null;
-    if (c?.passa) { ficam.push({ ...l, ultH: hora, pct: c.pct, adx: c.adx, atrP: c.atrP, lado: await ladoDe(l.i, l.lado) }); continue; }
+    if (c?.passa) { ficam.push({ ...l, ultH: hora, pct: c.pct, adx: c.adx, atrP: c.atrP, er3d: c.er3d, lado: await ladoDe(l.i, l.lado) }); continue; }
     if (hora - l.ultH > MV_SEGURA_H) {
       linhas.push(`⚪ Desligar <b>${mvNome(l.i)}</b>: ${hora - l.ultH} h fora do cenário${c ? ` (agora ${mvCenTxt(c)})` : " (sem dados agora)"} · recomendada desde ${divDH(l.desde)}`);
       hist(l.i, "desliga", c);
@@ -1819,14 +1831,15 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
     if (ficam.length >= MV_VAGAS) break;
     if (ficam.some((l) => l.i === x.i)) continue;
     const lado = await ladoDe(x.i, null);
-    ficam.push({ i: x.i, desde: agoraMs, ultH: hora, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP, lado });
-    linhas.push(`🟢 Ligar <b>${mvNome(x.i)}</b>: de alerta (${mvCenTxt(x.c)})${lado ? ` · faixa ${mvFaixaNome()} em ${lado.toUpperCase()}` : ` · preço dentro da faixa ${mvFaixaNome()}`}`);
+    const ag = await mvAdxGrandes(x.i).catch(() => ({ a1h: NaN, a4h: NaN })); // V127
+    ficam.push({ i: x.i, desde: agoraMs, ultH: hora, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP, er3d: x.c.er3d, a1h: ag.a1h, a4h: ag.a4h, lado });
+    linhas.push(`🟢 Ligar <b>${mvNome(x.i)}</b>: de alerta (${mvCenTxt(x.c)})${mvAdxGTxt(ag)}${lado ? ` · faixa ${mvFaixaNome()} em ${lado.toUpperCase()}` : ` · preço dentro da faixa ${mvFaixaNome()}`}`);
     hist(x.i, "liga", x.c);
     console.log(`🔂 mão virada: recomenda ligar ${x.i} (${mvCenTxt(x.c)})`);
   }
   est.lig = ficam;
   est.hora = hora;
-  est.cands = passam.slice(0, 8).map((x) => ({ i: x.i, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP }));
+  est.cands = passam.slice(0, 8).map((x) => ({ i: x.i, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP, er3d: x.c.er3d }));
   est.hist = est.hist.slice(-MV_HIST_MAX);
   await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date(agoraMs).toISOString() });
   if (!linhas.length) return [];
@@ -1842,12 +1855,12 @@ async function runMaoVirada(chatId: number | string) {
   if (!est) { await sendTelegram(chatId, "⚠️ Não consegui ler a recomendação do mão virada agora. Tente de novo em instantes."); return; }
   let m = `🔂 <b>MÃO VIRADA</b> · recomendação${MV_ON ? "" : " (desligada: MV_ON=0)"}\n<i>Regra: ${mvRegraTxt()}. Conferida a cada hora fechada. Só recomendação: o robô não muda nada sozinho.</i>\n\n`;
   m += `<b>Recomendadas agora</b>${est.hora ? ` (avaliado ${divDH(est.hora * 3600000)})` : ""}\n`;
-  m += est.lig.length ? est.lig.map((l) => `  ${mvNome(l.i)}: desde ${divDH(l.desde)} · ${mvCenTxt(l)}${l.lado ? ` · faixa ${mvFaixaNome()} em ${l.lado.toUpperCase()}` : ""}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}\n`).join("") : "  nenhuma\n";
+  m += est.lig.length ? est.lig.map((l) => `  ${mvNome(l.i)}: desde ${divDH(l.desde)} · ${mvCenTxt(l)}${mvAdxGTxt(l)}${l.lado ? ` · faixa ${mvFaixaNome()} em ${l.lado.toUpperCase()}` : ""}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}\n`).join("") : "  nenhuma\n";
   const fora = est.cands.filter((c) => !est.lig.some((l) => l.i === c.i));
   if (fora.length) m += `<b>Também passavam</b> (sem vaga)\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvCenTxt(c)}\n`).join("")}`;
   const ult = est.hist.slice(-10).reverse();
-  if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvCenTxt({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN })})` : ""}\n`).join("")}`;
-  m += `\n<i>Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_ON=0 desliga o alerta.</i>`;
+  if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvCenTxt({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN, er3d: h.er3d ?? null })})` : ""}\n`).join("")}`;
+  m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_ON=0 desliga o alerta.</i>`;
   await sendTelegram(chatId, m);
 }
 // ===== V107: humor do BTC na hora do alerta (pra separar resultado por regime de mercado) =====
@@ -2461,7 +2474,16 @@ async function calcIndicadorFiltro(instId: string): Promise<InfoFiltravel | null
   if (FUNDO_ON) { try { bottom = calcFundoPre(d, info, atr, adx, adxAntes); } catch (e) { console.log("⚠️ calcFundoPre falhou", instId, e); } }
   let top: FundoRes | null = null;
   if (TOPO_ON) { try { top = calcTopoPre(d, info, atr, adx, adxAntes); } catch (e) { console.log("⚠️ calcTopoPre falhou", instId, e); } }
-  return { ...info, adx, adxAntes, diDom: xDiDominante(d.h, d.l, d.c, 14), rsi: calcRSI(d.c, 14), atr, volRatio: volAcel(d.v), trocas: contarTrocas(d.c), bottom, ddPico: ddDoPico(d.h, info.preco), altaVale: altaDoVale(d.l, info.preco), top, rangeRel: rangeRelDe(d.h, d.l, d.c) };
+  return { ...info, adx, adxAntes, diDom: xDiDominante(d.h, d.l, d.c, 14), rsi: calcRSI(d.c, 14), atr, volRatio: volAcel(d.v), trocas: contarTrocas(d.c), bottom, ddPico: ddDoPico(d.h, info.preco), altaVale: altaDoVale(d.l, info.preco), top, rangeRel: rangeRelDe(d.h, d.l, d.c), er3d: er3dDe(d.c) };
+}
+// V127: o quanto o preço andou reto nos últimos 3 dias (72h de velas fechadas): |variação| ÷ caminho percorrido (0 = foi e voltou, 1 = linha reta).
+// É o "andou reto em 3 dias" do /juncao carteira (er3d) e do alerta do mão virada.
+function er3dDe(c: number[]): number {
+  const n = 3 * Math.round(1440 / TF_MIN), k = c.length - 1;
+  if (k - n < 0) return NaN;
+  let cam = 0;
+  for (let i = k - n + 1; i <= k; i++) cam += Math.abs(c[i] - c[i - 1]);
+  return cam > 0 ? Math.abs(c[k] - c[k - n]) / cam : 0;
 }
 type MotivoDescarte = "volume" | "adx" | "rsi" | "dist" | "serrote";
 function motivoDescarte(x: InfoFiltravel, volUsdt: number, checaDist: boolean, lado?: "long" | "short"): MotivoDescarte | null {
@@ -11812,7 +11834,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
   ];
   if (FUNDO_ON) varreduras.push(["🟢 /fundo", "caíram e mostram sinal de fundo", `caíram ${FUNDO_QUEDA_MIN}%+ e já mostram sinal de fundo (possível virada pra LONG). ⭐ Repique vem primeiro: disparou, voltou até a faixa e está segurando`]);
   if (TOPO_ON) varreduras.push(["🔴 /topo", "subiram e mostram sinal de topo", `subiram ${TOPO_ALTA_MIN}%+ e já mostram sinal de topo (possível virada pra SHORT). ⭐ Repique vem primeiro: despencou, voltou até a faixa e foi rejeitada`]);
-  if (MV_ON) varreduras.push(["🔂 /maovirada", "em quais moedas ligar o mão virada", `as moedas recomendadas pro robô mão virada agora (de alerta e com ATR ≥ ${MV_ATR_MIN}%, até ${MV_VAGAS}), desde quando e o cenário. O bot também avisa sozinho quando recomenda ligar ou desligar (só recomendação)`]); // V124
+  if (MV_ON) varreduras.push(["🔂 /maovirada", "em quais moedas ligar o mão virada", `as moedas recomendadas pro robô mão virada agora (de alerta, com ATR ≥ ${MV_ATR_MIN}%${MV_ER3D > 0 ? " e andando reto em 3 dias" : ""}, até ${MV_VAGAS}), desde quando e o cenário. O bot também avisa sozinho quando recomenda ligar ou desligar (só recomendação)`]); // V124
   sec("📡 Procurar moedas", varreduras);
 
   sec("⭐ Acompanhar", [
