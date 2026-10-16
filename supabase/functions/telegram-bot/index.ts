@@ -1,5 +1,6 @@
-// telegram-bot V128 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V129 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V129 (V128 + faca e foguete só no sentido do dia: a faca só pega moeda que caiu ≥ 10% em 24h e o foguete só a que subiu ≥ 10%, com o DI a favor; /faca e /foguete mostram como foram os que a regra tira). O resto não muda.
 // V128 (V127 + as mensagens do mão virada não mostram os indicadores nem a regra, só a moeda, o lado e a variação de 24h; MV_DETALHES=1 mostra tudo). Os alertas de antes e o motor não mudam.
 // V127 (V126 + mão virada: só recomenda moeda que andou reto em 3 dias (ER de 72h ≥ 0.15, MV_ER3D) e mostra o ADX do 1h e do 4h). Os alertas de antes e o motor não mudam.
 // V126 (V125 + /juncao carteira: andando reto — trocas6 e ritmo4 (viradas da faixa), adx1h25 e adx4h25 (tendência no 1h/4h), er3d0.3 (andou reto em 3 dias)). Os alertas de antes e o motor não mudam.
@@ -12,7 +13,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V128"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V129"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -414,6 +415,12 @@ const FACA_MAX_POR_RODADA = numEnv("FACA_MAX_POR_RODADA", "2");
 const FACA_DIAS_GUARDA = numEnv("FACA_DIAS_GUARDA", "14");
 const FACA_ROW = "_FACA_SOMBRA_";
 const FACA_MAX = 600;
+// V129: a faca só pega moeda que CAIU no dia. Antes valia a queda efetiva (24h ou recuo desde a máxima recente) com o ADX sem direção, e o recuo de
+// moeda que tinha subido muito virava SHORT (ZEREBRO +80% no dia, recuo de 17% com o ADX 37 da própria alta). Agora precisa cair pelo menos
+// FACA_DIA_MIN% em 24h (padrão = FUNDO_QUEDA_MIN, 10) e, com FACA_DI_OBRIGA=1 (padrão), o DI de baixa na frente (−DI > +DI: a força do ADX é de queda;
+// DI neutro não passa, como no repique). FACA_DI_OBRIGA=0 tira só a exigência do DI.
+const FACA_DIA_MIN = numEnv("FACA_DIA_MIN", String(FUNDO_QUEDA_MIN));
+const FACA_DI_OBRIGA = (Deno.env.get("FACA_DI_OBRIGA") ?? "1") !== "0";
 const FUNDO_MAX_POR_RODADA = numEnv("FUNDO_MAX_POR_RODADA", "2");
 const FUNDO_BTC_QUEDA_PCT = numEnv("FUNDO_BTC_QUEDA_PCT", "1.5");
 // V42: FUNDO_PTS_MAX é o teto real de pontos somando o pré-filtro (calcFundoPre/calcTopoPre, até 13) +
@@ -1617,9 +1624,18 @@ async function facaSalvar(SB: any, lista: FacaReg[]) {
   const corte = Date.now() - FACA_DIAS_GUARDA * 86400000;
   await upsertLinha(SB, FACA_ROW, { last_status: JSON.stringify(lista.filter((r) => r.t >= corte).slice(-FACA_MAX)), last_alert_at: new Date().toISOString() });
 }
-function msgFaca(info: InfoFiltravel, queda: number, conf: number, vivo: number | null): string {
+// V129: o candidato da faca (ou do foguete) está no sentido do dia? dia = quanto andou em 24h A FAVOR (faca: a queda, positiva; foguete: a alta),
+// di = o lado que domina pelo DI. "dia" = andou menos que o mínimo (ou contra), "di" = DI contra ou neutro (com a exigência ligada), "ok" = passa.
+function facaNoSentido(foguete: boolean, dia: number, di: "long" | "short" | null | undefined): "ok" | "dia" | "di" {
+  if (!(dia >= (foguete ? FOGUETE_DIA_MIN : FACA_DIA_MIN))) return "dia";
+  if ((foguete ? FOGUETE_DI_OBRIGA : FACA_DI_OBRIGA) && di !== (foguete ? "long" : "short")) return "di";
+  return "ok";
+}
+const facaRegraTxt = (foguete: boolean) => `${foguete ? "subiu" : "caiu"} ≥ ${foguete ? FOGUETE_DIA_MIN : FACA_DIA_MIN}% em 24h${(foguete ? FOGUETE_DI_OBRIGA : FACA_DI_OBRIGA) ? " e DI a favor" : ""}`;
+function msgFaca(info: InfoFiltravel, pct: number, queda: number, conf: number, vivo: number | null): string {
+  const extra = queda > -pct + 1 ? ` (${queda.toFixed(1)}% desde a máxima recente)` : "";
   return `🔪 <b>FACA CAINDO — ${info.instId}</b> (experimental)\n${DIVISOR}\n\n` +
-    `Caiu ${queda.toFixed(1)}% e o ADX está em ${Math.round(info.adx ?? 0)} (queda com força). O radar de fundo leria isso como reversão (nota ${conf}/10), mas com ADX alto o histórico dos radares mostra que a queda costuma CONTINUAR.\n\n` +
+    `Caiu ${(-pct).toFixed(1)}% em 24h${extra} e o ADX está em ${Math.round(info.adx ?? 0)} (queda com força). O radar de fundo leria isso como reversão (nota ${conf}/10), mas com ADX alto o histórico dos radares mostra que a queda costuma CONTINUAR.\n\n` +
     `Preço: ${fmtPrice(vivo ?? info.preco)}\n` +
     `Ideia em teste: SHORT só se romper a MÍNIMA da vela do alerta, stop na máxima, alvo ${RUP_ALVO_R}R. Não é entrada pronta.\n` +
     `Resultado acumulado: /faca`;
@@ -1628,16 +1644,17 @@ async function radarFaca(SB: any, pool: { instId: string; pct: number; volUsdt: 
   if (FACA_MODO === "off" || !FUNDO_ON || !(FACA_ADX_MIN > 0)) return;
   const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
   for (const [k, v] of _facaAvaliado) if (v !== ckVela) _facaAvaliado.delete(k);
-  const cands: { info: InfoFiltravel; queda: number }[] = [];
+  const cands: { info: InfoFiltravel; queda: number; pct: number }[] = [];
   indicadores.forEach((info, i) => {
     const p = pool[i];
     if (!info || !info.bottom || !p || info.bottom.repique) return;
     if (!(typeof info.adx === "number" && isFinite(info.adx) && info.adx >= FACA_ADX_MIN)) return;
     const queda = quedaEfetiva(p.pct, Math.max(p.dd ?? 0, info.ddPico ?? 0));
     if (queda < FUNDO_QUEDA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
+    if (facaNoSentido(false, -p.pct, info.diDom) !== "ok") return; // V129: só moeda que caiu no dia, com a força de queda
     if (ladoAtual(info) === "long") return; // mesma população do radar de fundo
     if (info.bottom.pts < FUNDO_PRE_MIN) return;
-    cands.push({ info, queda });
+    cands.push({ info, queda, pct: p.pct });
   });
   if (!cands.length) return;
   cands.sort((a, b) => b.info.bottom!.pts - a.info.bottom!.pts);
@@ -1659,10 +1676,10 @@ async function radarFaca(SB: any, pool: { instId: string; pct: number; volUsdt: 
     const vf = volDe(inst);
     lista.push({ i: inst, t: agora, p: Number(c.info.preco), a: r1(c.info.adx), c: fin.conf, q: r1(c.queda), u: vf ? Math.round(vf.u) : null, m: vf ? vf.m : null, v: BOT_VERSAO });
     gravou++;
-    console.log(`🔪 faca (${FACA_MODO}): ${inst} nota ${fin.conf}/10 · ADX ${c.info.adx.toFixed(0)} · queda ${c.queda.toFixed(1)}%`);
+    console.log(`🔪 faca (${FACA_MODO}): ${inst} nota ${fin.conf}/10 · ADX ${c.info.adx.toFixed(0)} · 24h ${c.pct.toFixed(1)}% · queda ${c.queda.toFixed(1)}%`);
     if (FACA_MODO === "alerta" && ativos.length && fin.conf >= FACA_CONF_MIN) { // avisa só nota >= FACA_CONF_MIN
       const vivo = await precoAoVivo(inst).catch(() => null);
-      const msg = msgFaca(c.info, c.queda, fin.conf, vivo);
+      const msg = msgFaca(c.info, c.pct, c.queda, fin.conf, vivo);
       await Promise.all(ativos.map((ch) => enviarAlertaMoeda(SB, ch, `FACA_${inst}`, cortar(msg), botaoAnalisar(inst)).catch(() => null)));
     }
   }
@@ -1681,6 +1698,10 @@ const FOGUETE_COOLDOWN_MIN = numEnv("FOGUETE_COOLDOWN_MIN", "240");
 const FOGUETE_MAX_POR_RODADA = numEnv("FOGUETE_MAX_POR_RODADA", "2");
 const FOGUETE_DIAS_GUARDA = numEnv("FOGUETE_DIAS_GUARDA", "14");
 const FOGUETE_ROW = "_FOGUETE_SOMBRA_";
+// V129: espelho da faca: só moeda que SUBIU pelo menos FOGUETE_DIA_MIN% em 24h (padrão = TOPO_ALTA_MIN, 10), com o DI de alta na frente
+// (FOGUETE_DI_OBRIGA, padrão = o da faca). Antes o repique de moeda que caiu virava LONG (CASHCAT −16% no dia, +22% desde a mínima).
+const FOGUETE_DIA_MIN = numEnv("FOGUETE_DIA_MIN", String(TOPO_ALTA_MIN));
+const FOGUETE_DI_OBRIGA = (Deno.env.get("FOGUETE_DI_OBRIGA") ?? (FACA_DI_OBRIGA ? "1" : "0")) !== "0";
 const _fogueteAvaliado = new Map<string, number>();
 async function fogueteLer(SB: any): Promise<FacaReg[] | null> {
   try {
@@ -1694,16 +1715,17 @@ async function radarFoguete(SB: any, pool: { instId: string; pct: number; volUsd
   if (FOGUETE_MODO === "off" || !TOPO_ON || !(FOGUETE_ADX_MIN > 0)) return;
   const ckVela = Math.floor(Date.now() / (TF_MIN * 60000));
   for (const [k, v] of _fogueteAvaliado) if (v !== ckVela) _fogueteAvaliado.delete(k);
-  const cands: { info: InfoFiltravel; alta: number }[] = [];
+  const cands: { info: InfoFiltravel; alta: number; pct: number }[] = [];
   indicadores.forEach((info, i) => {
     const p = pool[i];
     if (!info || !info.top || !p || info.top.repique) return;
     if (!(typeof info.adx === "number" && isFinite(info.adx) && info.adx >= FOGUETE_ADX_MIN)) return;
     const alta = altaEfetiva(p.pct, Math.max(p.up ?? 0, info.altaVale ?? 0));
     if (alta < TOPO_ALTA_MIN || p.volUsdt < FILTRO_VOL_MIN_USDT) return;
+    if (facaNoSentido(true, p.pct, info.diDom) !== "ok") return; // V129: só moeda que subiu no dia, com a força de alta
     if (ladoAtual(info) === "short") return; // mesma população do radar de topo
     if (info.top.pts < TOPO_PRE_MIN) return;
-    cands.push({ info, alta });
+    cands.push({ info, alta, pct: p.pct });
   });
   if (!cands.length) return;
   cands.sort((a, b) => b.info.top!.pts - a.info.top!.pts);
@@ -1723,7 +1745,7 @@ async function radarFoguete(SB: any, pool: { instId: string; pct: number; volUsd
     const r1 = (v: number) => Math.round(v * 10) / 10, vf = volDe(inst);
     lista.push({ i: inst, t: agora, p: Number(c.info.preco), a: r1(c.info.adx), c: fin.conf, q: r1(c.alta), u: vf ? Math.round(vf.u) : null, m: vf ? vf.m : null, v: BOT_VERSAO });
     gravou++;
-    console.log(`🚀 foguete (sombra): ${inst} nota de topo ${fin.conf}/10 · ADX ${c.info.adx.toFixed(0)} · alta ${c.alta.toFixed(1)}%`);
+    console.log(`🚀 foguete (sombra): ${inst} nota de topo ${fin.conf}/10 · ADX ${c.info.adx.toFixed(0)} · 24h +${c.pct.toFixed(1)}% · alta ${c.alta.toFixed(1)}%`);
   }
   if (gravou) {
     const corte = Date.now() - FOGUETE_DIAS_GUARDA * 86400000;
@@ -4488,6 +4510,31 @@ function hipLinhasFatias(g: HipFatiaItem[]): string {
   }
   return t;
 }
+// V129: o /faca e o /foguete separam os candidatos pela regra nova (no sentido do dia e DI a favor), refeita com as velas de cada um: mostra como foram
+// os que a regra deixa de fora (os gravados antes dela) contra os que passam. O "dia" é a variação de 24h até o alerta pelas velas (pode diferir um pouco
+// do ticker que o bot usou na hora) e o DI sai das mesmas velas fechadas que o bot leu.
+type FacaRegraItem = { res: HipRes; ext: number | null; di: "long" | "short" | null; rA: RupSim; rV: VirSim; rD: RupSim };
+function facaRegraLinhas(foguete: boolean, g: FacaRegraItem[]): string {
+  const com = g.filter((x) => x.ext !== null && isFinite(x.ext));
+  if (!com.length) return "";
+  const sg = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
+  const mediaR = (xs: { r: number }[]) => (xs.length ? `${sg(xs.reduce((t, x) => t + x.r, 0) / xs.length)}R` : "—");
+  const fechou = (r: RupRes) => r === "alvo" || r === "stop" || r === "tempo";
+  const linha = (rot: string, x: FacaRegraItem[]): string => {
+    if (!x.length) return "";
+    const inv = x.filter((i) => i.res === "invalida").length, fun = x.filter((i) => i.res === "funcionou").length;
+    const a = x.map((i) => i.rA).filter((r) => fechou(r.res)), v = x.map((i) => i.rV).filter((r) => r.res === "ok"), d = x.map((i) => i.rD).filter((r) => fechou(r.res));
+    return `  ${rot} (n=${x.length}): invalidou ${Math.round((inv / x.length) * 100)}% · funcionou ${Math.round((fun / x.length) * 100)}%${pmTxt(fun, x.length)} · rompimento ${mediaR(a)} (n=${a.length}) · virada ${mediaR(v)} · direto ${mediaR(d)}${x.length < 8 ? " ⚠️" : ""}\n`;
+  };
+  const st = (x: FacaRegraItem) => facaNoSentido(foguete, x.ext as number, x.di);
+  const ok = com.filter((x) => st(x) === "ok"), fora = com.filter((x) => st(x) !== "ok");
+  let t = `  <i>regra da V129 (só moeda que ${facaRegraTxt(foguete)}), refeita com as velas:</i>\n`;
+  t += linha("✅ passa", ok);
+  t += linha(`❌ ${foguete ? "caiu" : "subiu"} no dia`, fora.filter((x) => (x.ext as number) < 0));
+  t += linha(`❌ ${foguete ? "subiu" : "caiu"} menos de ${foguete ? FOGUETE_DIA_MIN : FACA_DIA_MIN}% em 24h`, fora.filter((x) => (x.ext as number) >= 0 && st(x) === "dia"));
+  t += linha("❌ DI contra ou neutro", fora.filter((x) => (x.ext as number) >= 0 && st(x) === "di"));
+  return t;
+}
 // ===== V77: /radar simula "operar só no ROMPIMENTO da vela do alerta" =====
 // Regra A (a que o usuário descreveu): topo (short) só entra quando uma vela seguinte ROMPE A MÍNIMA da vela do alerta; fundo (long) só quando ROMPE A MÁXIMA.
 // Stop no extremo OPOSTO da vela do alerta (topo: máxima; fundo: mínima). Se o stop for tocado ANTES do rompimento, a ideia é cancelada (não entra).
@@ -4655,12 +4702,12 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
     if (error) { await sendTelegram(chatId, `⚠️ Não consegui ler os alertas de radar: ${String(error.message || error).slice(0, 120)}`); return; }
     rows = aplicarDesde(chatId, ((data || []) as any[]).filter((r) => Number(r.preco) > 0 && r.criado_em)); // V107
   }
-  if (!rows.length && opt?.fonte === "foguete") { await sendTelegram(chatId, `🚀 <b>MODO FOGUETE</b> (${FOGUETE_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Topo com ADX ≥ ${FOGUETE_ADX_MIN} e nota de topo ≥ ${FOGUETE_GRAVA_MIN}/10 vira candidato LONG de continuação, gravado em silêncio a cada rodada do cron (começa a partir do deploy da V107).`); return; }
-  if (!rows.length) { await sendTelegram(chatId, opt?.fonte === "faca" ? `🔪 <b>MODO FACA</b> (${FACA_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Modo atual: ${FACA_MODO} · ADX ≥ ${FACA_ADX_MIN} · grava nota ≥ ${FACA_GRAVA_MIN}/10 · avisa nota ≥ ${FACA_CONF_MIN}/10. Ele grava sozinho a cada rodada do cron.` : `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
+  if (!rows.length && opt?.fonte === "foguete") { await sendTelegram(chatId, `🚀 <b>MODO FOGUETE</b> (${FOGUETE_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Moeda que ${facaRegraTxt(true)}, num topo com ADX ≥ ${FOGUETE_ADX_MIN} e nota de topo ≥ ${FOGUETE_GRAVA_MIN}/10, vira candidato LONG de continuação, gravado em silêncio a cada rodada do cron.`); return; }
+  if (!rows.length) { await sendTelegram(chatId, opt?.fonte === "faca" ? `🔪 <b>MODO FACA</b> (${FACA_MODO})\n\nNenhum candidato gravado nos últimos ${dd} dia(s). Modo atual: ${FACA_MODO} · ${facaRegraTxt(false)} · ADX ≥ ${FACA_ADX_MIN} · grava nota ≥ ${FACA_GRAVA_MIN}/10 · avisa nota ≥ ${FACA_CONF_MIN}/10. Ele grava sozinho a cada rodada do cron.` : `📡 <b>RADARES</b>\n\nNenhum alerta de topo ou fundo nos últimos ${dd} dia(s).`); return; }
   const porMoeda = new Map<string, any[]>();
   for (const r of rows) { const a = porMoeda.get(r.instid) || []; a.push(r); porMoeda.set(r.instid, a); }
   const TFMS = TF_MIN * 60000;
-  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number; conf: number | null; ext: number | null; efe: number | null; adx: number | null; rA: RupSim; rB: RupSim; rD: RupSim; rV: VirSim; btc: RegimeBtc | null };
+  type Item = { tipo: HipTipo; inst: string; lado: HipLado; emMs: number; preco: number; res: HipRes; barras: number; mfe: number; mae: number; conf: number | null; ext: number | null; efe: number | null; adx: number | null; rA: RupSim; rB: RupSim; rD: RupSim; rV: VirSim; btc: RegimeBtc | null; di: "long" | "short" | null };
   const itens: Item[] = [];
   const regimeBtc = await btcRegimeFn(); // V107: humor do BTC na hora de cada alerta
   await emLotes([...porMoeda.keys()], 5, async (id) => {
@@ -4683,14 +4730,16 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
       const efeV = tipo === "faca" || tipo === "foguete" ? (r.efe == null ? null : Number(r.efe)) : efeRetro; // faca: a queda efetiva já vem gravada
       const efe = efeV === null || !isFinite(efeV) ? null : Math.round(efeV * 10) / 10;
       const adxA = adxNaVela(adxS, k0 - 1), adxAlerta = Number.isFinite(adxA) ? adxA : null; // V109: alinhado à vela (antes lia 27 velas à frente)
+      // V129: DI dominante no alerta (faca/foguete), com as mesmas velas fechadas que o bot usou na hora (as CANDLES_LIMIT_PRECISO antes da vela do alerta)
+      const jDi = Math.max(0, k0 - CANDLES_LIMIT_PRECISO), diA = tipo === "faca" || tipo === "foguete" ? xDiDominante(d.h.slice(jDi, k0), d.l.slice(jDi, k0), d.c.slice(jDi, k0), 14) : null;
       const opostoLado: HipLado = lado === "long" ? "short" : "long", maxB = Math.max(1, Math.round((HIP_HORAS * 60) / TF_MIN)); // V77: simulação do rompimento da vela do alerta
       itens.push({ tipo, inst: id, lado, emMs, preco: preco0, conf: r.conf == null ? null : Number(r.conf), ext, efe, adx: adxAlerta, ...hipAvaliar(d, k0, lado, preco0, isFinite(atr) ? atr : 0, TF_MIN),
-        rA: rupRompimento(d, k0, lado, RUP_ESPERA, alvoR, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, alvoR, maxB), rD: rupDireto(d, k0, lado, preco0, alvoR, maxB), rV: rupVirada(d, k0, RUP_ESPERA, alvoR, maxB, pernasMax), btc: regimeBtc(emMs) });
+        rA: rupRompimento(d, k0, lado, RUP_ESPERA, alvoR, maxB), rB: rupRompimento(d, k0, opostoLado, RUP_ESPERA, alvoR, maxB), rD: rupDireto(d, k0, lado, preco0, alvoR, maxB), rV: rupVirada(d, k0, RUP_ESPERA, alvoR, maxB, pernasMax), btc: regimeBtc(emMs), di: diA });
     }
   });
   const fm = (ms: number) => { const iso = new Date(ms + X_TZ_OFFSET_H * 3600000).toISOString(); return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}`; };
   const sg = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
-  let m = `${opt?.fonte === "foguete" ? `🚀 <b>MODO FOGUETE (${FOGUETE_MODO}) — o que aconteceu depois do candidato</b> · LONG de continuação em topo com ADX ≥ ${FOGUETE_ADX_MIN}` : opt?.fonte === "faca" ? `🔪 <b>MODO FACA (${FACA_MODO}) — o que aconteceu depois do candidato</b> · SHORT de continuação em fundo com ADX ≥ ${FACA_ADX_MIN}` : "📡 <b>RADARES — o que aconteceu depois do alerta</b>"} · ${dd} dia(s)${opt?.pernas || opt?.alvo ? ` · 🚪 teste: ${pernasMax} ${pernasMax === 1 ? "perna" : "pernas"} · alvo ${alvoR}R` : ""}\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
+  let m = `${opt?.fonte === "foguete" ? `🚀 <b>MODO FOGUETE (${FOGUETE_MODO}) — o que aconteceu depois do candidato</b> · LONG de continuação em topo com ADX ≥ ${FOGUETE_ADX_MIN} · desde a V129, só moeda que ${facaRegraTxt(true)}` : opt?.fonte === "faca" ? `🔪 <b>MODO FACA (${FACA_MODO}) — o que aconteceu depois do candidato</b> · SHORT de continuação em fundo com ADX ≥ ${FACA_ADX_MIN} · desde a V129, só moeda que ${facaRegraTxt(false)}` : "📡 <b>RADARES — o que aconteceu depois do alerta</b>"} · ${dd} dia(s)${opt?.pernas || opt?.alvo ? ` · 🚪 teste: ${pernasMax} ${pernasMax === 1 ? "perna" : "pernas"} · alvo ${alvoR}R` : ""}\n${DIVISOR}\n<i>Invalidado = o preço andou ≥ max(${HIP_INV_ATR} ATR, ${HIP_INV_PCT}%) contra a ideia · funcionou = o mesmo a favor · prazo ${HIP_HORAS}h. Se os dois cabem na mesma vela, conta invalidado (pior caso).</i>\n\n`;
   for (const tipo of (opt?.fonte === "faca" ? ["faca"] : opt?.fonte === "foguete" ? ["foguete"] : ["topo", "fundo", "repique"]) as HipTipo[]) {
     const g = itens.filter((x) => x.tipo === tipo);
     if (!g.length) continue;
@@ -4709,6 +4758,7 @@ async function runRadarStats(chatId: number | string, dias: number, opt?: { pern
         m += hipLeituraFatia("com o BTC caindo", com.filter((x) => x.btc === "cai"), com.filter((x) => x.btc !== "cai"));
       }
     }
+    if (tipo === "faca" || tipo === "foguete") m += facaRegraLinhas(tipo === "foguete", g); // V129
     m += hipLinhasCortes(g.map((x) => ({ res: x.res, f: x.mfe, a: x.mae, v: x.efe })), tipo === "topo" ? "alta efetiva" : tipo === "fundo" || tipo === "faca" ? "queda efetiva" : tipo === "foguete" ? "alta efetiva" : "movimento efetivo (alta p/ SHORT, queda p/ LONG)"); // V105
     m += hipLinhasBanda(g); // V74: por nota de confiança do alerta
     { // V77: operar só no rompimento da vela do alerta
@@ -11869,8 +11919,8 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["💧 /volconf 7", "resultado por volume", "como os alertas se saem por faixa de volume (em USDT e em unidades da moeda), incluindo os que ficaram abaixo do filtro (🌑 sombra). Até 9 dias"],
     ["🌑 /sombras 7", "o que as regras barraram x o que alertou", "num lugar só (reversão, repique e volume): o que alertou x o que a regra barrou e se a regra está ajudando, atrapalhando ou se ainda é cedo pra dizer. Chega sozinho uma vez por semana"],
     ["📚 /radarhist 30", "histórico longo dos radares", "o mesmo do /radar, guardado dia a dia (passa dos 9 dias de velas). Grava sozinho às 21h; /radarhist gravar força agora"],
-    ["🔪 /faca 7", "fundos com ADX alto (SHORT)", "fundos com ADX alto que podem continuar caindo, gravados em silêncio: o que aconteceu depois. Fica fora do /placar"],
-    ["🚀 /foguete 7", "topos com ADX alto (LONG)", "espelho da faca: topos com ADX alto que podem continuar subindo. A nota mede o quanto parece topo, então nota alta não é LONG melhor"],
+    ["🔪 /faca 7", "moedas caindo no dia, com ADX alto (SHORT)", "moedas que caíram no dia, num fundo com ADX alto, que podem continuar caindo: o que aconteceu depois. Fica fora do /placar"],
+    ["🚀 /foguete 7", "moedas subindo no dia, com ADX alto (LONG)", "espelho da faca: moedas que subiram no dia, num topo com ADX alto, que podem continuar subindo. A nota mede o quanto parece topo, então nota alta não é LONG melhor"],
     ["🔎 ... desde V107", "só depois de uma versão ou data", "coloque \"desde V107\" ou \"desde 05/10\" no fim de qualquer comando desta lista pra julgar uma regra só com dados depois dela. Ex.: /radarconf 90 desde V104"],
   ], c ? "o número é a quantidade de dias" : "O número é a quantidade de dias. O ± nas porcentagens é a margem de erro: se as faixas de duas fatias se cruzam, a diferença ainda pode ser sorte.");
 
@@ -12003,7 +12053,7 @@ function montarConfig(): string {
     m += `• Toque na faixa depois de recuar ${FUNDO_TOQUE_PICO_MIN}%+ conta ponto · nota mínima ${FUNDO_CONF_MIN} (pré-seleção ${FUNDO_PRE_MIN} pts)\n`;
     m += `• ADX: ${FUNDO_ADX_MAX > 0 ? `não alerta com ADX ${FUNDO_ADX_MAX}+ (queda forte demais)` : "sem corte"} · BTC caindo ${FUNDO_BTC_QUEDA_PCT}%+ em 1h tira ponto\n`;
     m += `• Mesma moeda: espera ${fmtMin(FUNDO_COOLDOWN_MIN)} · até ${FUNDO_MAX_POR_RODADA} por rodada\n`;
-    m += `• 🔪 Modo faca: ${FACA_MODO === "off" ? "desligado" : `fundo com ADX ${FACA_ADX_MIN}+ e nota ${FACA_CONF_MIN}+ vira candidato a SHORT de continuação (${FACA_MODO === "alerta" ? "grava e avisa" : "só grava, sem avisar"}) · /faca`}\n`;
+    m += `• 🔪 Modo faca: ${FACA_MODO === "off" ? "desligado" : `moeda que ${facaRegraTxt(false)}, num fundo com ADX ${FACA_ADX_MIN}+ e nota ${FACA_CONF_MIN}+, vira candidato a SHORT de continuação (${FACA_MODO === "alerta" ? "grava e avisa" : "só grava, sem avisar"}) · /faca`}\n`;
   }
   m += "\n";
 
@@ -12012,7 +12062,7 @@ function montarConfig(): string {
     m += `• Moeda que subiu ${TOPO_ALTA_MIN}%+ (em 24h ou desde a mínima das últimas ${hJan}h), incluindo as ${ALERT_POOL_ALTA} que mais subiram\n`;
     m += `• Rejeição na faixa depois de subir ${TOPO_TOQUE_VALE_MIN}%+ conta ponto · nota mínima ${TOPO_CONF_MIN} (pré-seleção ${TOPO_PRE_MIN} pts)\n`;
     m += `• ADX: ${TOPO_ADX_MAX > 0 ? `só alerta com ADX abaixo de ${TOPO_ADX_MAX} (o repique não entra nesse corte)` : "sem corte"} · mesma moeda: espera ${fmtMin(TOPO_COOLDOWN_MIN)}\n`;
-    m += `• 🚀 Modo foguete: ${FOGUETE_MODO === "off" ? "desligado" : `topo com ADX ${FOGUETE_ADX_MIN}+ e nota ${FOGUETE_GRAVA_MIN}+ vira candidato a LONG de continuação (só grava, sem avisar) · /foguete`}\n`;
+    m += `• 🚀 Modo foguete: ${FOGUETE_MODO === "off" ? "desligado" : `moeda que ${facaRegraTxt(true)}, num topo com ADX ${FOGUETE_ADX_MIN}+ e nota ${FOGUETE_GRAVA_MIN}+, vira candidato a LONG de continuação (só grava, sem avisar) · /foguete`}\n`;
   }
   m += "\n";
 
