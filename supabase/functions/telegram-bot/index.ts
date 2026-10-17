@@ -1,5 +1,8 @@
-// telegram-bot V129 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V132 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V132 (V131 + /juncao carteira escada com prazo: a mesma escada também com prazo de 6, 8 e 10 horas, saindo no fechamento da vela em que o prazo acaba se o stop não pegou; prazo6,8,10 escolhe). Só análise: alertas, bot e motor não mudam.
+// V131 (V130 + /juncao carteira escada: testa entrar sozinho no alerta do mão virada com a moeda a 4–6% da faixa, stop 2% além da faixa e stop no lucro em degraus). Só análise: alertas, bot e motor não mudam.
+// V130 (V129 + modo alerta do motor: a oportunidade vai no RETESTE, não mais no cruzamento — no /juncao de 28 dias, +0.15R contra +0.04R por operação; OPORT_MOTOR_ENTRADA=cruzamento volta o jeito antigo). O resto não muda.
 // V129 (V128 + faca e foguete só no sentido do dia: a faca só pega moeda que caiu ≥ 10% em 24h e o foguete só a que subiu ≥ 10%, com o DI a favor; /faca e /foguete mostram como foram os que a regra tira). O resto não muda.
 // V128 (V127 + as mensagens do mão virada não mostram os indicadores nem a regra, só a moeda, o lado e a variação de 24h; MV_DETALHES=1 mostra tudo). Os alertas de antes e o motor não mudam.
 // V127 (V126 + mão virada: só recomenda moeda que andou reto em 3 dias (ER de 72h ≥ 0.15, MV_ER3D) e mostra o ADX do 1h e do 4h). Os alertas de antes e o motor não mudam.
@@ -13,7 +16,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V129"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V132"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -3606,6 +3609,7 @@ async function runAlertaProativo() {
   // Agora roda logo depois do laço principal, antes de tudo isso.
   const lastMap = new Map(variacoes.map((v) => [v.instId, v.last] as [string, number]));
   await checarAlertaFinal(SB, pool, indicadores, lastMap, posMap, perfilAlerta, lat).catch((e) => console.log("❌ erro alerta final", e));
+  if (OPORT_MOTOR_ENTRADA === "reteste") await oportRetesteMotor(SB, pool, indicadores, perfilAlerta).catch((e) => console.log("❌ erro oportunidade no reteste", e)); // V130: logo depois do alerta final (a vela do reteste vale até a próxima)
   if (lat.sujo) await lateralSalvar(SB, lat).catch((e) => console.log("⚠️ erro salvando contador lateral", e));
   console.log(`🏁 alerta proativo em ${((Date.now() - inicio) / 1000).toFixed(1)}s - ${setups.length} setups, ${enviados} alertas enviados, ${confBarrados} barrados por confiança${lat.bloq ? `, ${barradosLat} barrados por mercado lateral` : ""}`);
   ultimoHb = `setups ${setups.length} | enviados ${enviados}`;
@@ -4350,6 +4354,7 @@ async function oportRetesteMotor(SB: any, pool: { instId: string; pct: number; v
   if (!lista) return []; // sem o histórico não manda: evita mandar o mesmo reteste duas vezes
   const enviados: string[] = [];
   const agora = Date.now();
+  let mudou = false;
   for (const { info, p } of cands.slice(0, 12)) {
     const inst = info.instId;
     const d = await xCandles(inst, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
@@ -4367,10 +4372,11 @@ async function oportRetesteMotor(SB: any, pool: { instId: string; pct: number; v
     if (res === "ok" || res === "recusou") {
       _oportRetEnviado.add(chave);
       lista.push({ i: inst, c: d.t[ev.k0], t: agora, l: ev.lado, p: ev.preco, r: res });
+      mudou = true;
       if (res === "ok") enviados.push(`${inst} ${ev.lado}`);
     }
   }
-  if (lista.length) {
+  if (mudou) {
     const corte = agora - 3 * 86400000;
     await upsertLinha(SB, OPORT_RET_ROW, { last_status: JSON.stringify(lista.filter((x) => x.t >= corte).slice(-300)), last_alert_at: new Date().toISOString() }).catch((e: unknown) => console.log("⚠️ oportunidade no reteste: não gravei o histórico", e));
   }
@@ -5543,7 +5549,8 @@ async function conferirPlacar(SB: any) {
         if (e.lado) { upd.lado = e.lado; r.lado = e.lado; }
         // V107: modo alerta do motor - OPORTUNIDADE entra no fechamento da vela que cruzou (a mesma entrada do /radarsim cruz). Só se o cruzamento
         // é recente (OPORT_MOTOR_MAX_MIN, 15 min); o motor ainda recusa se o preço já andou mais de 0,5 ATR desde esse fechamento.
-        if (r.tipo === "oportunidade" && agora - e.emMs <= OPORT_MOTOR_MAX_MIN * 60000 && MOTOR_URL && MOTOR_ALERTA_SECRET) {
+        // V130: só com OPORT_MOTOR_ENTRADA=cruzamento; o padrão agora é entrar no reteste (oportRetesteMotor, na rodada do alerta)
+        if (r.tipo === "oportunidade" && OPORT_MOTOR_ENTRADA === "cruzamento" && agora - e.emMs <= OPORT_MOTOR_MAX_MIN * 60000 && MOTOR_URL && MOTOR_ALERTA_SECRET) {
           const kE = d.t.findIndex((t) => t + TF_MIN * 60000 === e.emMs);
           const atrE = kE >= 14 ? calcATR(d.h.slice(0, kE + 1), d.l.slice(0, kE + 1), d.c.slice(0, kE + 1), 14) : 0;
           _bgTarefas.push(enviarAlertaMotor({ inst: r.instid, side: (e.lado ?? r.lado) === "short" ? "short" : "long", tipo: "oportunidade", preco: e.preco, atr: atrE, nota: r.conf != null ? Number(r.conf) : null, vol: r.vol_usdt != null ? Number(r.vol_usdt) : null }).catch((x) => console.log("⚠️ modo alerta (oportunidade) falhou", x)));
@@ -7245,7 +7252,11 @@ function simPernaLigada(d: XVelas, kIni: number, lado: HipLado, entrada: number,
 // desliga depois de 6 horas fechadas seguidas sem passar (pra não ligar e desligar toda hora). O ATR mínimo vem do atrp do comando (ex.: atrp1).
 // V126: adx1h25 / adx4h25 = ADX(14) das velas de 1h / 4h (montadas das de 15m) ≥ 25 na hora fechada; er3d0.3 = o preço andou reto em 3 dias
 // (|variação de 72h| ÷ caminho percorrido ≥ 0.3). As viradas da faixa vêm do trocas (≤ N nas 24h antes) e do ritmo (≤ N por dia nos 3 dias antes).
-type CarteiraJ = { vagas: number[]; alerta?: boolean; segura?: number; adx1h?: number; adx4h?: number; er3d?: number };
+type CarteiraJ = { vagas: number[]; alerta?: boolean; segura?: number; adx1h?: number; adx4h?: number; er3d?: number; escada?: EscadaJ };
+// V131: "escada" = entrar sozinho no alerta do mão virada (a moeda que liga na carteira), com stop além da faixa e stop no lucro em degraus (ver simEscada)
+// V132: prazos = além do "sem prazo" (sai só no stop), a mesma escada com prazo de N horas (padrão 6, 8 e 10)
+type EscadaJ = { distMin: number; distMax: number; stopFaixa: number; prazos: number[] };
+const ESCADA_PRAZOS_PADRAO = [6, 8, 10];
 function juncaoCarteiraDeArgs(args: string[]): CarteiraJ | null {
   if (!args.some((a) => /^carteira$/.test(a))) return null;
   const a = args.find((x) => /^vagas?\d/.test(x));
@@ -7259,6 +7270,75 @@ function juncaoCarteiraDeArgs(args: string[]): CarteiraJ | null {
   if (a1 !== undefined) out.adx1h = a1;
   if (a4 !== undefined) out.adx4h = a4;
   if (e3 !== undefined) out.er3d = e3;
+  // V131: escada [dist4-6] [alemfaixa2] — entrada no alerta com a moeda a distMin–distMax % da faixa, stop stopFaixa % além da faixa e escada de stop no lucro
+  // (o stop além da faixa é "alemfaixa", não "stop...": o stopX do /juncao é outra coisa e pegaria o primeiro token que começa com stop)
+  if (args.includes("escada")) {
+    const md = args.map((x) => /^dist(\d+(?:[.,]\d+)?)-(\d+(?:[.,]\d+)?)$/.exec(x)).find((x) => !!x);
+    const a0 = md ? Number(md[1].replace(",", ".")) : 4, a1 = md ? Number(md[2].replace(",", ".")) : 6;
+    const sf = numDe(/^alemfaixa(\d+(?:[.,]\d+)?)$/, 20);
+    // V132: prazo6,8,10 (o padrão) = também com prazo de 6, 8 e 10 horas; até 4 prazos, de 0,25 a 72 h; prazo0 = só sem prazo
+    const mp = args.map((x) => /^prazos?(\d[\d.;,]*)h?$/.exec(x)).find((x) => !!x);
+    const prazos = mp ? [...new Set(mp[1].split(/[;,]/).map(Number).filter((v) => Number.isFinite(v) && v >= 0.25 && v <= 72))].sort((x, y) => x - y).slice(0, 4) : ESCADA_PRAZOS_PADRAO;
+    out.escada = { distMin: Math.max(0, Math.min(a0, a1)), distMax: Math.max(a0, a1, 0.01), stopFaixa: sf ?? 2, prazos };
+  }
+  return out;
+}
+// V131: a operação da escada. Entra no fechamento da vela k; stop inicial stopFaixa % além da faixa (LONG: abaixo da linha de baixo; SHORT: acima da
+// de cima). Stop no lucro em degraus, pelo quanto o preço andou a favor desde a entrada (máxima no LONG, mínima no SHORT): +5% → stop em +1%;
+// +10% → +5%; e depois, a cada +5%, o stop sobe mais 5% (+15% → +10%, +20% → +15%...). Nunca volta. Sem alvo; sem prazo, sai só no stop.
+// Pior caso dentro da vela: o stop que vale é o das velas anteriores (a vela que bate o stop não conta pra subir o degrau); abriu além do stop =
+// sai na abertura. Resultado em % do preço (sem alavancagem), já com a taxa de ida e volta; R = resultado ÷ risco inicial (entrada até o stop).
+// V132: prazoH > 0 = prazo em horas, contado do fechamento da vela da entrada: se o stop não pegou até lá, sai no fechamento da vela em que o prazo
+// acaba (a 1ª que fecha no prazo ou depois; sem buraco nas velas, k + 4 × horas). Nessa vela o stop é conferido antes (pior caso). noPrazo = saiu assim.
+type EscTr = { id: string; t: number; pct: number; r: number; aberta: boolean; trava: number; barras: number; risco: number; kSai: number; noPrazo: boolean };
+function simEscada(d: XVelas, k: number, lado: HipLado, topo: number, fundo: number, stopFaixa: number, prazoH = 0): Omit<EscTr, "id"> | null {
+  const ent = d.c[k], long = lado === "long";
+  if (!(ent > 0) || !(topo > 0) || !(fundo > 0)) return null;
+  const stop0 = long ? fundo * (1 - stopFaixa / 100) : topo * (1 + stopFaixa / 100);
+  if (long ? !(stop0 < ent) : !(stop0 > ent)) return null;
+  const risco = (Math.abs(ent - stop0) / ent) * 100;
+  const tPrazo = prazoH > 0 ? d.t[k] + prazoH * 3600000 : Infinity;
+  let stop = stop0, melhor = 0, trava = 0;
+  const sai = (i: number, px: number, aberta: boolean, noPrazo: boolean): Omit<EscTr, "id"> => {
+    const pct = (long ? px / ent - 1 : 1 - px / ent) * 100 - TAXA_IDA_VOLTA_PCT;
+    return { t: d.t[k], pct, r: pct / risco, aberta, trava, barras: i - k, risco, kSai: i, noPrazo };
+  };
+  for (let i = k + 1; i < d.c.length; i++) {
+    if (long ? d.l[i] <= stop : d.h[i] >= stop) return sai(i, long ? Math.min(stop, d.o[i]) : Math.max(stop, d.o[i]), false, false);
+    if (d.t[i] >= tPrazo) return sai(i, d.c[i], false, true);
+    const g = (long ? d.h[i] / ent - 1 : 1 - d.l[i] / ent) * 100;
+    if (g > melhor) {
+      melhor = g;
+      const nova = melhor >= 10 ? Math.floor(melhor / 5) * 5 - 5 : melhor >= 5 ? 1 : 0;
+      if (nova > trava) { trava = nova; stop = long ? ent * (1 + trava / 100) : ent * (1 - trava / 100); }
+    }
+  }
+  return sai(d.c.length - 1, d.c[d.c.length - 1], true, false);
+}
+// V131: as operações da escada de uma moeda. lig[k] = 1 nas velas em que a moeda está ligada (recomendada) na carteira. Cada trecho ligado é um alerta
+// (saiu no fechamento da vela antes do trecho). Entra na 1ª vela, da do alerta até o fim do trecho, que fecha do outro lado da faixa (janela: a
+// distMin–distMax % dela); uma tentativa por alerta e uma posição por moeda (alerta com a anterior ainda aberta só entra depois que ela sai).
+// V132: prazoH = o prazo da escada em horas (0 = sem prazo). Com prazo a posição sai antes e o alerta seguinte da moeda pode entrar mais cedo.
+function escadaOperacoes(d: XVelas, lig: Uint8Array, lin: LinhasJ, desdeMs: number, ce: EscadaJ, janela: boolean, prazoH = 0): Omit<EscTr, "id">[] {
+  const out: Omit<EscTr, "id">[] = [];
+  const ladoEm = (k: number): HipLado | null => (d.c[k] > lin.topo[k] ? "long" : d.c[k] < lin.fundo[k] ? "short" : null);
+  let livre = -1;
+  for (let k = 1; k < d.c.length; k++) {
+    if (!lig[k] || lig[k - 1]) continue;
+    let fimT = k;
+    while (fimT + 1 < d.c.length && lig[fimT + 1]) fimT++;
+    for (let kk = k - 1; kk <= fimT; kk++) {
+      if (kk <= livre || d.t[kk] < desdeMs) continue;
+      const lado = ladoEm(kk);
+      if (!lado) continue;
+      const dist = lado === "long" ? ((d.c[kk] - lin.topo[kk]) / lin.topo[kk]) * 100 : ((lin.fundo[kk] - d.c[kk]) / lin.fundo[kk]) * 100;
+      if (janela && !(dist >= ce.distMin && dist <= ce.distMax)) continue;
+      const tr = simEscada(d, kk, lado, lin.topo[kk], lin.fundo[kk], ce.stopFaixa, prazoH);
+      if (tr) { out.push(tr); livre = tr.kSai; }
+      break;
+    }
+    k = fimT;
+  }
   return out;
 }
 async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false, novos: NovoJ[] = [], filtros: FiltroJ[] | null = null, reteste: number | null = null, semanas = false, retesteEmAtr = false, porMoeda = false, extraMoedas: string[] = [], retesteModo: "perto" | "toque" = "perto", rodizio: number | null = null, volume = false, amostra = false, extras: { saidas?: SaidaPctJ[]; soModos?: string[]; carteira?: CarteiraJ; so?: boolean } = {}) {
@@ -7428,7 +7508,9 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   let cartNH = 0;
   type CartSel = { chave: string; crit: CritC | null; vagas: number; on: Map<string, Uint8Array>; trocas: number; horasOn: Map<string, number>; ocup: number };
   const cartSels: CartSel[] = [];
-  const cartRes: Record<string, Map<string, { cruz: (TrCart & { id: string })[]; ret: { r: number; t: number; id: string }[] }>> = {};
+  // V132: esc/escAl = uma lista por prazo da escada, na ordem de escVars (0 = sem prazo, depois os prazos do comando)
+  const cartRes: Record<string, Map<string, { cruz: (TrCart & { id: string })[]; ret: { r: number; t: number; id: string }[]; esc: EscTr[][]; escAl: EscTr[][] }>> = {};
+  const escVars: number[] = cart?.escada ? [0, ...cart.escada.prazos] : [];
   if (cart) {
     let tFim = 0;
     for (const d of velasJ.values()) tFim = Math.max(tFim, d.t[d.t.length - 1] + TF_MIN * 60000);
@@ -7521,7 +7603,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     };
     for (const v of cart.vagas) for (const c of CRITS_C) cartSels.push(seleciona(c, v));
     cartSels.push(seleciona(null, Infinity));
-    for (const modo of modosAtivos) cartRes[modo] = new Map(cartSels.map((s) => [s.chave, { cruz: [] as (TrCart & { id: string })[], ret: [] as { r: number; t: number; id: string }[] }]));
+    for (const modo of modosAtivos) cartRes[modo] = new Map(cartSels.map((s) => [s.chave, { cruz: [] as (TrCart & { id: string })[], ret: [] as { r: number; t: number; id: string }[], esc: escVars.map(() => [] as EscTr[]), escAl: escVars.map(() => [] as EscTr[]) }]));
   }
   const processaMoeda = (id: string, d: XVelas) => {
     if (d.t[0] > desdeMs - VELAS_AQUEC * TF_MIN * 60000) moedasCurtas++; // não cobre o período inteiro com aquecimento
@@ -7724,6 +7806,17 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
             const r = simPernaLigada(d, e.k + 1, e.lado, d.c[e.k], e.atr, SAIDA_STOP_ATR, (kk) => ladoEm(kk) === op, lig);
             if (r !== null) res.ret.push({ r, t: d.t[e.k], id });
           }
+          // V131: escada — cada vez que a moeda liga (o alerta do mão virada) é um gatilho. A entrada pode ser já na vela da hora do alerta ou em qualquer
+          // vela enquanto ela segue ligada: a 1ª vela que fecha do outro lado da faixa a distMin–distMax % dela (🪜) ou a 1ª do outro lado, a qualquer
+          // distância (🔔, pra comparar). Uma posição por moeda: enquanto a anterior não sai, o alerta seguinte não entra. Sai só no stop.
+          // V132: e de novo com cada prazo (sai no fim do prazo se o stop não pegou). Só nas carteiras que aparecem (📈 variação e todas que passam).
+          const ce = cart.escada;
+          if (ce && (s.crit === "var" || !s.crit)) {
+            escVars.forEach((ph, vi) => {
+              for (const tr of escadaOperacoes(d, lig, lin, desdeMs, ce, true, ph)) res.esc[vi].push({ ...tr, id });
+              for (const tr of escadaOperacoes(d, lig, lin, desdeMs, ce, false, ph)) res.escAl[vi].push({ ...tr, id });
+            });
+          }
         }
       }
       if (!cart) filtrosJ.forEach((f, fi) => { for (const t of simMotor(d, lin, 300, desdeMs, SAIDA_STOP_ATR, atrS, filtroEm, movEm, adxOkEm, (k) => passa(f, k, ctxF))) motorFil[modo][fi].push(t); }); // V118: a carteira não usa
@@ -7793,12 +7886,30 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     // V118: /juncao 28 carteira [top20 vol500k unid30m pd30] [vagas1,2,4] [semanas] — no máximo N moedas ligadas ao mesmo tempo, enquanto passam
     const nnC = (x: number | null): x is number => x !== null;
     const somaTxt = (rs: number[]) => { const s = rs.reduce((t, x) => t + x, 0); return `${s >= 0 ? "+" : ""}${s.toFixed(0)}R`; };
+    // V131: a escada em % do preço (sem alavancagem, já com a taxa): as que saíram no stop e, à parte, as que ainda estão abertas no fim das velas
+    const sg1E = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+    // V132: com prazo, mostra também quantas saíram no prazo (o stop não pegou até lá)
+    const escTxt = (trs: EscTr[], prazoH = 0): string => {
+      const f = trs.filter((x) => !x.aberta), ab = trs.filter((x) => x.aberta);
+      if (!f.length && !ab.length) return "nenhuma entrada";
+      let t = "";
+      if (f.length) {
+        const ps = f.map((x) => x.pct), soma = ps.reduce((a, b) => a + b, 0), ac = f.filter((x) => x.pct > 0).length, rMed = f.reduce((a, x) => a + x.r, 0) / f.length;
+        const sem3 = f.length > 5 ? [...ps].sort((a, b) => b - a).slice(3) : null;
+        const trav = f.filter((x) => x.trava >= 1).length, trav5 = f.filter((x) => x.trava >= 5).length;
+        t += `n=${f.length} · acerto ${Math.round((ac / f.length) * 100)}%${pmTxt(ac, f.length)} · média ${sg1E(soma / f.length)}% (${rMed >= 0 ? "+" : ""}${rMed.toFixed(2)}R) · soma ${sg1E(soma)}%${sem3 ? ` · sem os 3 melhores ${sg1E(sem3.reduce((a, b) => a + b, 0) / sem3.length)}%` : ""} · risco ${(f.reduce((a, x) => a + x.risco, 0) / f.length).toFixed(1)}% · travou lucro ${trav} (+5% ou mais: ${trav5})${prazoH > 0 ? ` · saiu no prazo ${f.filter((x) => x.noPrazo).length}` : ""} · ~${Math.round((_med(f.map((x) => x.barras)) * TF_MIN) / 60)}h${f.length < 15 ? " ⚠️" : ""}`;
+      }
+      if (ab.length) t += `${t ? " · " : ""}${ab.length} aberta(s) (${sg1E(ab.reduce((a, x) => a + x.pct, 0))}% agora)`;
+      return t;
+    };
+    const prazoRot = (ph: number) => (ph > 0 ? `prazo ${String(ph).replace(".", ",")}h` : "sem prazo"); // V132
     const nomeCrit: Record<CritC, string> = { var: "📈 variação", unid: "🪙 unidades", usdt: "💵 USDT", atr: "🌊 ATR", er: "📏 tendência" };
     const rotSel = (s: CartSel) => (s.crit ? `${s.vagas} vaga${s.vagas > 1 ? "s" : ""} · ${nomeCrit[s.crit]}` : "todas que passam");
     const faixaNomeV = cartModoV === "rapida144" ? "rápida + 144" : cartModoV === "rapida" ? "rápida" : "clássica"; // V126
     const condTxt = [cartTop !== undefined ? `no top ${cartTop} de alta ou de queda em 24h${cartSemCond ? " (o padrão, porque o comando não trouxe condição)" : ""}` : "", cartVol !== undefined ? `≥ ${fmtVol(cartVol)} USDT em 24h` : "", cartUnid !== undefined ? `≥ ${fmtVol(cartUnid)} unidades em 24h` : "", cartPd !== undefined ? `sem ${pdVela ? `vela de 15m de ±${cartPd}% ou mais` : `pump e dump ≥ ${cartPd}%`} (fora ${PD_BLOQ_DIAS} dias depois)` : "", cartAlerta ? `de alerta (|24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO})` : "", cartAtrp !== undefined ? `ATR(14) ≥ ${cartAtrp}% do preço` : "",
       cartTrocas !== undefined ? `até ${cartTrocas} virada(s) da faixa (${faixaNomeV}) nas 24h antes` : "", cartRitmo !== undefined ? `a faixa (${faixaNomeV}) virou até ${cartRitmo} vez(es) por dia nos 3 dias antes` : "",
       cartAdx1h !== undefined ? `ADX(14) do 1h ≥ ${cartAdx1h}` : "", cartAdx4h !== undefined ? `ADX(14) do 4h ≥ ${cartAdx4h}` : "", cartEr3d !== undefined ? `andou reto em 3 dias (ER de 72h ≥ ${cartEr3d})` : ""].filter(Boolean).join(" · ");
+    if (cart.escada) m += `<i>🪜 Escada (V131, com prazo na V132): cada vez que a moeda liga (o alerta do mão virada) é um gatilho. Entra no fechamento da 1ª vela de 15m, da hora do alerta até ela desligar, que fecha do outro lado da faixa a ${String(cart.escada.distMin).replace(".", ",")}–${String(cart.escada.distMax).replace(".", ",")}% dela (🔔 = a 1ª do outro lado, a qualquer distância). Stop inicial ${String(cart.escada.stopFaixa).replace(".", ",")}% além da faixa (LONG: abaixo da linha de baixo · SHORT: acima da de cima). Stop no lucro pelo quanto o preço andou a favor desde a entrada: +5% → stop em +1% · +10% → +5% · depois, a cada +5%, o stop anda mais 5%. Sem alvo. "sem prazo" = sai só no stop, mesmo depois de a moeda desligar${cart.escada.prazos.length ? `; "prazo ${cart.escada.prazos.map((x) => `${String(x).replace(".", ",")}h`).join("/")}" = se o stop não pegou até lá (contando da entrada), sai no fechamento da vela de 15m em que o prazo acaba ("saiu no prazo" = quantas saíram assim)` : ""}. Uma posição por moeda${cart.escada.prazos.length ? " (com prazo ela sai antes, e o alerta seguinte da moeda pode entrar mais cedo)" : ""}. Resultado em % do preço (sem alavancagem), com a taxa; R = resultado ÷ distância até o stop inicial (o "risco"). Pior caso na vela: o stop que vale é o das velas anteriores.</i>\n\n`;
     m += `<b>🧺 CARTEIRA</b> (no máximo ${cart.vagas.join(", ")} moeda(s) ligada(s) ao mesmo tempo)\n<i>Condições, conferidas a cada hora fechada: ${condTxt}. ${cartSegura > 0 ? `A moeda só liga quando passa, e a ligada só é desligada depois de ${cartSegura} hora(s) fechada(s) seguidas sem passar (a posição dela fecha na hora)` : "A moeda ligada que deixa de passar é desligada e a posição dela fecha na hora"}; a vaga vai pra próxima que passa, na ordem de cada critério: 📈 maior variação de 24h (alta ou queda) · 🪙 mais volume em unidades · 💵 mais volume em USDT · 🌊 maior ATR (% do preço) · 📏 tendência mais limpa (ER de 24h). Ligada, o robô espera o próximo cruzamento (ou ${retNome}) pra entrar. 🔂 = mão virada no cruzamento (o motor, com stop de ${SAIDA_STOP_ATR} ATR); ${retIco} = mão virada só no ${retNome} (sai no cruzamento contrário ou no stop). "sem carteira" = o robô ligado o tempo todo em todas as moedas; "todas que passam" = sem limite de vagas. "trocas" = quantas vezes uma moeda foi ligada; "ocupação" = média de moedas ligadas por hora.${topTxt}${pdTxt}</i>\n\n`;
     for (const modo of modosAtivos) {
       m += `${MINI_DIVISOR}\n<b>${nome[modo]}</b>\n`;
@@ -7809,6 +7920,17 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
         for (const s of cartSels) {
           const rs = cartRes[modo].get(s.chave)![campo].map((x) => x.r);
           m += `  ${rotSel(s)}: ${fmtR(rs)}${rs.length ? ` · soma ${somaTxt(rs)}` : ""} · ${s.trocas} trocas · ocupação ${s.ocup.toFixed(1)}\n`;
+        }
+      }
+      if (cart.escada) { // V131: entrada no alerta com escada de stop (só o critério do alerta, 📈 maior variação, e "todas que passam")
+        const ce = cart.escada;
+        for (const [rotE, campo] of [[`🪜 Entrada no alerta a ${String(ce.distMin).replace(".", ",")}–${String(ce.distMax).replace(".", ",")}% da faixa, com a escada de stop`, "esc"], ["🔔 Entrada no alerta a qualquer distância, com a mesma escada (pra comparar)", "escAl"]] as [string, "esc" | "escAl"][]) {
+          m += `<b>${rotE}</b>\n`;
+          // V132: cada carteira com o sem prazo e cada prazo embaixo, pra comparar lado a lado
+          for (const sel of cartSels.filter((x) => x.crit === "var" || !x.crit)) {
+            m += `  ${rotSel(sel)}\n`;
+            escVars.forEach((ph, vi) => { m += `    ${prazoRot(ph)}: ${escTxt(cartRes[modo].get(sel.chave)![campo][vi], ph)}\n`; });
+          }
         }
       }
       m += "\n";
@@ -7850,9 +7972,22 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
           m += linhaS(`${ico} sem carteira`, campo === "cruz" ? motorTr[modo].map((x) => ({ r: x.r, t: x.t })) : retestes[modo].filter((e) => e.robo !== null).map((e) => ({ r: e.robo!, t: e.t })));
           for (const s of cartSels) m += linhaS(`${ico} ${rotSel(s)}`, cartRes[modo].get(s.chave)![campo]);
         }
+        if (cart.escada) { // V131: a escada semana a semana, em % do preço (só as que já saíram; a semana é a da entrada). V132: uma linha por prazo
+          for (const sel of cartSels.filter((x) => x.crit === "var" || !x.crit)) {
+            for (const [ico, campo] of [["🪜", "esc"], ["🔔", "escAl"]] as [string, "esc" | "escAl"][]) {
+              escVars.forEach((ph, vi) => {
+                const porSem: number[][] = Array.from({ length: nSem }, () => []);
+                const fe = cartRes[modo].get(sel.chave)![campo][vi].filter((x) => !x.aberta);
+                for (const x of fe) porSem[semDe(x.t)].push(x.pct);
+                const cel = (ps: number[]) => (ps.length ? `${sg1E(ps.reduce((a, b) => a + b, 0))}% (${ps.length})` : "—");
+                m += `  ${ico} ${rotSel(sel)} · ${prazoRot(ph)}: ${porSem.map((ps, i) => `s${i + 1} ${cel(ps)}`).join(" · ")} · <b>total ${cel(fe.map((x) => x.pct))}</b>\n`;
+              });
+            }
+          }
+        }
       }
     }
-    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%; so +us = só essa moeda; alerta = só "de alerta" · atrp1 = ATR ≥ 1% · segura6 = só desliga depois de 6 h sem passar · trocas6 = até 6 viradas da faixa em 24h · ritmo4 = até 4 por dia em 3 dias · adx1h25, adx4h25 = tendência no 1h/4h · er3d0.3 = andou reto em 3 dias) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
+    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%; so +us = só essa moeda; alerta = só "de alerta" · atrp1 = ATR ≥ 1% · segura6 = só desliga depois de 6 h sem passar · trocas6 = até 6 viradas da faixa em 24h · ritmo4 = até 4 por dia em 3 dias · adx1h25, adx4h25 = tendência no 1h/4h · er3d0.3 = andou reto em 3 dias · escada = entrar sozinho no alerta com stop além da faixa e stop no lucro em degraus, dist4-6, alemfaixa2 e prazo6,8,10 por padrão, além do sem prazo; prazo0 = só sem prazo) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
     await enviarEmPartes(chatId, m);
     return;
   }
@@ -12031,7 +12166,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🚪 /saida 7", "o robô virando a cada cruzamento", "simula o robô ligado nos alertas, virando a cada cruzamento e com o trailing do motor. Já filtra do seu jeito (moeda 8%+ no dia e ADX 14+ subindo). Extras: tudo (sem filtro), mov15, comp/oport/rev/fundo/topo, ou uma moeda (/saida QNT)"],
     ["🧪 /radarsim 9", "operar os alertas com stop, alvo e prazo", "entra nos alertas de topo, fundo e repique e sai no stop, no alvo ou no prazo. Extras: romp (entra no rompimento da vela), regra, btc, mov. Com cruz usa os alertas de cruzamento: entra junto com o robô e segue com stop, sem virar (viradas 0,1,3 compara deixar virar até N vezes)"],
     ["🔪 /facasim 7", "faca: onde entrar no SHORT", "compara entrar direto, no rompimento da vela ou no rompimento do último fundo, com várias saídas (stop apertado, normal e solto, alvo curto, zero a zero, stop móvel). /facasim 7 foguete faz o mesmo pro LONG"],
-    ["🔀 /juncao 7", "compara as junções da faixa", "recalcula a faixa nas versões clássica, rápida e rápida + 144 (e nas suas, com medias 9,20,21,30) e compara serrote, robô virando e rotina com stop e alvo. Com pura, cada J6 também sozinha, sem a SUPREMA (/juncao 7 pura). Com mov no fim, separa pelo quanto a moeda andou no dia. Com novos, compara a faixa do bot com SuperTrend, faixa com folga, Chandelier e Donchian (/juncao 7 novos). Com filtros, roda o motor com ADX, Choppiness e ER (/juncao 7 novos filtros). Com reteste, compara entrar quando o preço volta perto da faixa com entrar no cruzamento (/juncao 7 reteste). Vai até 30 dias; com semanas, separa cada linha por semana (/juncao 28 semanas). Com moedas, mostra as moedas que mais ganharam e perderam; +us põe uma moeda no teste. Com toque, entra quando o pavio encosta na faixa e volta (/juncao 28 toque). Com rodizio, escolhe as moedas a cada 7 dias olhando só a semana anterior e mede a seguinte (/juncao 28 rodizio). Com atrp0.5, o robô só abre com ATR ≥ 0,5% do preço (/juncao 28 filtros atrp0.5). Com volume, separa o motor pelo volume de 24h em USDT e em unidades da moeda e roda com o filtro de volume (/juncao 28 volume); amostra troca as moedas do alerta por moedas espalhadas pelo volume da BloFin (/juncao 28 volume amostra). Com reteste e cortes de volume, separa o mão virada no reteste por volume (/juncao 28 reteste1 vol100k unid10m,20m,30m,40m). Com top, só conta a moeda que está entre as que mais subiram ou caíram em 24h, como no pool do alerta (/juncao 28 reteste1 top vol100k unid30m)"],
+    ["🔀 /juncao 7", "compara as junções da faixa", "recalcula a faixa nas versões clássica, rápida e rápida + 144 (e nas suas, com medias 9,20,21,30) e compara serrote, robô virando e rotina com stop e alvo. Com pura, cada J6 também sozinha, sem a SUPREMA (/juncao 7 pura). Com mov no fim, separa pelo quanto a moeda andou no dia. Com novos, compara a faixa do bot com SuperTrend, faixa com folga, Chandelier e Donchian (/juncao 7 novos). Com filtros, roda o motor com ADX, Choppiness e ER (/juncao 7 novos filtros). Com reteste, compara entrar quando o preço volta perto da faixa com entrar no cruzamento (/juncao 7 reteste). Vai até 30 dias; com semanas, separa cada linha por semana (/juncao 28 semanas). Com moedas, mostra as moedas que mais ganharam e perderam; +us põe uma moeda no teste. Com toque, entra quando o pavio encosta na faixa e volta (/juncao 28 toque). Com rodizio, escolhe as moedas a cada 7 dias olhando só a semana anterior e mede a seguinte (/juncao 28 rodizio). Com atrp0.5, o robô só abre com ATR ≥ 0,5% do preço (/juncao 28 filtros atrp0.5). Com volume, separa o motor pelo volume de 24h em USDT e em unidades da moeda e roda com o filtro de volume (/juncao 28 volume); amostra troca as moedas do alerta por moedas espalhadas pelo volume da BloFin (/juncao 28 volume amostra). Com reteste e cortes de volume, separa o mão virada no reteste por volume (/juncao 28 reteste1 vol100k unid10m,20m,30m,40m). Com top, só conta a moeda que está entre as que mais subiram ou caíram em 24h, como no pool do alerta (/juncao 28 reteste1 top vol100k unid30m). Com carteira e escada, testa entrar sozinho no alerta do mão virada com a moeda a 4–6% da faixa, stop 2% além da faixa e stop no lucro em degraus: +5% trava +1%, +10% trava +5% e depois a cada 5% (/juncao 28 carteira alerta atrp1 segura6 er3d0.15 escada rapida; dist3-7 muda a distância, alemfaixa1.5 o stop e prazo6,8,10 os prazos, que saem no fim do prazo se o stop não pegou)"],
     ["🕯️ /velas 30", "as velas num arquivo", "manda as velas de 15m das moedas do /juncao num arquivo CSV (até 60 dias; moedas60 escolhe quantas moedas), pra testar combinações fora do bot"],
   ], c ? "stop1 · alvo2 · horas 1,2,4 · trail1 · arma1 · be1 · stop0/alvo0 = sem · listas comparam tudo" : "Opções: stop1 = stop a 1 ATR do 15m · alvo2 = alvo em 2R · horas 1,2,4 = prazo · trail1 = stop móvel a 1 ATR · arma1 = o stop móvel só começa depois de +1 ATR · be1 = zero a zero depois de +1 ATR · stop0/alvo0 = sem. Com listas (stop1,1.5) compara todas as combinações. 2 a 3 ATR do 15m ≈ 1 ATR do 1h.");
 
@@ -12216,7 +12351,7 @@ function montarConfig(): string {
 
   m += tit("🤖", "Motor · modo alerta");
   m += MOTOR_URL && MOTOR_ALERTA_SECRET
-    ? `• Alertas de fundo e oportunidades que cruzaram (até ${OPORT_MOTOR_MAX_MIN} min depois) vão pro motor\n• Ligar, simular, tipos, tamanho e limites: no site\n\n`
+    ? `• Alertas de fundo vão pro motor${OPORT_MOTOR_ENTRADA === "reteste" ? ` · oportunidade no reteste (depois do cruzamento a favor do dia, o preço se afasta ${OPORT_RETESTE_PCT}% da faixa e volta pra menos disso, entre a ${OPORT_RET_MIN}ª e a ${OPORT_RET_MAX}ª vela)` : OPORT_MOTOR_ENTRADA === "cruzamento" ? ` · oportunidade no cruzamento (até ${OPORT_MOTOR_MAX_MIN} min depois)` : " · oportunidade não vai (OPORT_MOTOR_ENTRADA=off)"}\n• Ligar, simular, tipos, tamanho e limites: no site\n\n`
     : `• ⚠️ Não envia: faltam os Secrets MOTOR_URL e/ou MOTOR_ALERTA_SECRET\n\n`;
 
   // ── rotina ──
