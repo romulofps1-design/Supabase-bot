@@ -1,6 +1,7 @@
-// telegram-bot V137 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V138 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V137 (V136 + /juncao carteira escada como o modo automático do mão virada: o prazo conta do alerta; entradacruz = entra só no próximo cruzamento; virar = vira a mão nos cruzamentos dentro do prazo; stopjuncao = o stop de 2% acompanha a junção; lista3 = as operações dos últimos 3 dias). Só análise: alertas, bot e motor não mudam.
+// V138 (V137 + o "ligar" do 🔂 mão virada também vai pro motor, pra MÃO DE ALERTA do site (motor V61): entra como no /juncao — na 1ª vela de 15m fechada com o preço fora da faixa do robô, da do alerta em diante, uma vez por "ligar" —, com a junção dessa vela pro stop; MV_MOTOR=0 desliga. O "modo alerta" do motor passa a se chamar modo conservador nas mensagens). Os alertas e o resto do bot não mudam.
+// V137 (V136 + /juncao carteira escada como o modo automático do mão virada: o prazo conta do alerta; entradacruz = entra só no próximo cruzamento; virar = vira a mão nos cruzamentos dentro do prazo; stopjuncao = o stop de 2% acompanha a junção; lista3 = as operações dos últimos 3 dias; sempadrao/soalvo = só os jeitos e alvos pedidos; /juncao reais = o mesmo teste nos alertas de verdade do /maovirada). Só análise: alertas, bot e motor não mudam.
 // V136 (V135 + /juncao carteira escada: reentrada24 = se a moeda continua na lista do mão virada depois que a operação fecha, pode entrar de novo a partir de 24h depois do alerta, e depois a cada 24h). Só análise: alertas, bot e motor não mudam.
 // V135 (V134 + /juncao carteira escada: escada5em5 = mais um jeito de stop, o stop fixo com a escada de 5 em 5 — começa em +10% travando +5%, e depois a cada +5% o stop sobe mais 5%, sem o degrau de +5% → +1%). Só análise: alertas, bot e motor não mudam.
 // V134 (V133 + /juncao carteira escada: a entrada na janela de distância da faixa — dist0-6 = só com o preço a até 6% da faixa — ganha as mesmas variantes de prazo, jeito de stop e alvo da entrada a qualquer distância, pra comparar as duas). Só análise: alertas, bot e motor não mudam.
@@ -21,7 +22,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V137"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V138"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -1784,9 +1785,17 @@ const MV_ER3D = Math.max(0, Math.min(1, numEnv("MV_ER3D", "0.15")));
 // V128: as mensagens do mão virada não mostram os indicadores nem a regra (é segredo): só a moeda, o lado e a variação de 24h.
 // MV_DETALHES=1 volta a mostrar tudo (ADX, ATR, reto em 3 dias, ADX do 1h/4h, a faixa e a regra).
 const MV_DETALHES = (Deno.env.get("MV_DETALHES") || "0").trim() === "1";
+// V138: o "ligar" também vai pro motor (MÃO DE ALERTA do site, motor V61), que entra sozinho com stop X% além da junção, alvo e prazo da configuração
+// de lá. A entrada é a do /juncao (entrada no alerta, a qualquer distância): a 1ª vela de 15m fechada, da do alerta em diante, com o preço fora da faixa
+// do robô (MV_FAIXA), enquanto a moeda segue recomendada; uma vez por "ligar" (sem reentrada). Vai com o topo e o fundo da faixa nessa vela (a junção
+// do stop). Precisa de MOTOR_URL e MOTOR_ALERTA_SECRET (os mesmos do modo conservador). MV_MOTOR=0 desliga o envio.
+const MV_MOTOR = (Deno.env.get("MV_MOTOR") || "1").trim() !== "0";
 const MV_ROW = "_MAO_VIRADA_";
 type MvCen = { pct: number; adx: number; atrP: number; er3d?: number; lado: "long" | "short" | null; passa: boolean };
-type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number; atrP: number; er3d?: number; a1h?: number; a4h?: number; lado: "long" | "short" | null };
+type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number; atrP: number; er3d?: number; a1h?: number; a4h?: number; lado: "long" | "short" | null;
+  // V138: a entrada da mão de alerta. mot = quando foi decidida (enviada ou não: uma vez por "ligar"); motT = abertura da última vela conferida;
+  // motRes = ok · naogravou (o motor respondeu sem gravar) · recusou · falhou · perdida (a entrada era numa vela que passou sem conferir); motLado; motMsg
+  mot?: number; motT?: number; motRes?: "ok" | "naogravou" | "recusou" | "falhou" | "perdida"; motLado?: "long" | "short"; motMsg?: string; motFalhas?: number };
 type MvHist = { i: string; a: "liga" | "desliga"; t: number; pct: number | null; adx: number | null; atrP: number | null; er3d?: number | null };
 type MvEstado = { hora: number; lig: MvLig[]; cands: { i: string; pct: number; adx: number; atrP: number; er3d?: number }[]; hist: MvHist[] };
 const MV_HIST_MAX = 200;
@@ -1885,6 +1894,56 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   for (const ch of ALERT_CHAT_IDS.filter((c) => !silChat(c))) await sendTelegram(ch, msg).catch((e) => console.log("⚠️ mão virada: envio falhou", e));
   return linhas;
 }
+// V138: manda pro motor a entrada da MÃO DE ALERTA das moedas recomendadas que ainda não foram (uma vez por "ligar"). Confere cada vela de 15m nova:
+// acha a 1ª vela, da do alerta em diante, que fechou fora da faixa do robô (MV_FAIXA). Sendo a última fechada (ou a anterior, com a última ainda do
+// mesmo lado: até uma vela de atraso), manda o lado, o preço de agora, o ATR(14) e a junção (topo e fundo da faixa) dessa última vela; mais atrasada que
+// isso, não manda (a entrada do teste já passou). Falha de rede tenta de novo na rodada seguinte (até 3 vezes). Roda dentro da trava do cron.
+async function mvMotorEntradas(SB: any, agoraMs = Date.now()): Promise<number> {
+  if (!MV_ON || !MV_MOTOR || !MOTOR_URL || !MOTOR_ALERTA_SECRET) return 0;
+  const est = await mvLer(SB);
+  if (!est || !est.lig.some((l) => !l.mot)) return 0;
+  const TFMS = TF_MIN * 60000, ultFechada = Math.floor(agoraMs / TFMS) * TFMS - TFMS;
+  let mudou = false, enviados = 0;
+  for (const l of est.lig) {
+    if (l.mot || (l.motT ?? 0) >= ultFechada) continue; // já decidida, ou a última vela já foi conferida
+    const d = await xCandles(l.i, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
+    if (!d || d.c.length < 200) continue; // sem velas agora: tenta na próxima rodada
+    const k = d.c.length - 1, velaAlerta = Math.floor(l.desde / TFMS) * TFMS - TFMS;
+    if (d.t[k] < velaAlerta || (l.motT ?? 0) >= d.t[k]) continue; // a fonte ainda não publicou a vela nova
+    const lin = linhasDeBanda(bandaModo(d.c, MV_FAIXA));
+    const ladoEm = (i: number): "long" | "short" | null => (d.c[i] > lin.topo[i] ? "long" : d.c[i] < lin.fundo[i] ? "short" : null);
+    const iA = Math.max(1, d.t.findIndex((t) => t >= velaAlerta));
+    let f = -1;
+    for (let i = iA; i <= k; i++) if (ladoEm(i)) { f = i; break; }
+    l.motT = d.t[k]; mudou = true;
+    if (f < 0) continue; // dentro da faixa desde o alerta: espera a próxima vela
+    const lado = ladoEm(k);
+    if (f < k - 1 || lado !== ladoEm(f)) {
+      l.mot = agoraMs; l.motRes = "perdida";
+      console.log(`🔂 mão de alerta: ${l.i} - a entrada era na vela de ${new Date(d.t[f]).toISOString()} e passou; não mando atrasado`);
+      continue;
+    }
+    const topo = lin.topo[k], fundo = lin.fundo[k], atr = atrSerie(d.h, d.l, d.c, 14)[k];
+    const vivo = await precoAoVivo(l.i).catch(() => null);
+    const r = await enviarAlertaMotorDet({ inst: l.i, side: lado!, tipo: "maovirada", preco: vivo ?? d.c[k], atr, nota: null, vol: volDe(l.i)?.u ?? null, juncao: { topo, fundo } });
+    if (r.st === "falhou" && (l.motFalhas ?? 0) < 2) { l.motFalhas = (l.motFalhas ?? 0) + 1; l.motT = d.t[k] - 1; continue; } // tenta de novo na próxima rodada
+    l.mot = agoraMs; l.motLado = lado!; l.motRes = r.st === "ok" ? (r.gravados ? "ok" : "naogravou") : r.st === "sem" ? "falhou" : r.st; l.motMsg = r.msg;
+    if (l.motRes === "ok") enviados++;
+    console.log(`🔂 mão de alerta: ${l.i} ${lado} -> motor: ${l.motRes}${r.msg ? ` (${r.msg})` : ""} | vela ${new Date(d.t[k]).toISOString()} | junção ${fundo} a ${topo}`);
+  }
+  if (mudou) await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est) });
+  return enviados;
+}
+const mvMotorTxt = (l: MvLig): string => {
+  if (!MV_MOTOR || !MOTOR_URL || !MOTOR_ALERTA_SECRET) return "";
+  if (!l.mot) return " · mão de alerta: esperando a entrada";
+  const lado = l.motLado ? ` ${l.motLado.toUpperCase()}` : "";
+  return l.motRes === "ok" ? ` · mão de alerta: enviada${lado} ${divDH(l.mot)}`
+    : l.motRes === "naogravou" ? ` · mão de alerta: o motor não gravou${l.motMsg ? ` (${l.motMsg.replace(/</g, "&lt;")})` : ""}`
+    : l.motRes === "recusou" ? " · mão de alerta: o motor recusou"
+    : l.motRes === "perdida" ? " · mão de alerta: a entrada passou sem envio"
+    : " · mão de alerta: não chegou ao motor";
+};
 // /maovirada — as recomendadas agora, as que passavam na última hora avaliada e as últimas recomendações
 async function runMaoVirada(chatId: number | string) {
   const SB = getSupabase();
@@ -1893,12 +1952,12 @@ async function runMaoVirada(chatId: number | string) {
   if (!est) { await sendTelegram(chatId, "⚠️ Não consegui ler a recomendação do mão virada agora. Tente de novo em instantes."); return; }
   let m = `🔂 <b>MÃO VIRADA</b> · recomendação${MV_ON ? "" : " (desligada)"}\n<i>${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Conferida a cada hora fechada. Só recomendação: o robô não muda nada sozinho.</i>\n\n`;
   m += `<b>Recomendadas agora</b>${est.hora ? ` (avaliado ${divDH(est.hora * 3600000)})` : ""}\n`;
-  m += est.lig.length ? est.lig.map((l) => `  ${mvNome(l.i)}: desde ${divDH(l.desde)} · ${mvPub(l)}${mvAdxGTxt(l)}${l.lado ? (MV_DETALHES ? ` · faixa ${mvFaixaNome()} em ${l.lado.toUpperCase()}` : ` · ${l.lado.toUpperCase()}`) : ""}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}\n`).join("") : "  nenhuma\n";
+  m += est.lig.length ? est.lig.map((l) => `  ${mvNome(l.i)}: desde ${divDH(l.desde)} · ${mvPub(l)}${mvAdxGTxt(l)}${l.lado ? (MV_DETALHES ? ` · faixa ${mvFaixaNome()} em ${l.lado.toUpperCase()}` : ` · ${l.lado.toUpperCase()}`) : ""}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}${mvMotorTxt(l)}\n`).join("") : "  nenhuma\n";
   const fora = est.cands.filter((c) => !est.lig.some((l) => l.i === c.i));
   if (fora.length) m += `<b>Também passavam</b> (sem vaga)\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvPub(c)}\n`).join("")}`;
   const ult = est.hist.slice(-10).reverse();
   if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvPub({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN, er3d: h.er3d ?? null })})` : ""}\n`).join("")}`;
-  if (MV_DETALHES) m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_ON=0 desliga o alerta.</i>`;
+  if (MV_DETALHES) m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_MOTOR=0 não manda o "ligar" pra mão de alerta do motor; MV_ON=0 desliga o alerta.</i>`;
   await sendTelegram(chatId, m);
 }
 // ===== V107: humor do BTC na hora do alerta (pra separar resultado por regime de mercado) =====
@@ -2026,7 +2085,7 @@ async function radarFundo(SB: any, pool: { instId: string; pct: number; volUsdt:
     await registrarAlertaFundo(SB, c.info, c.pct, fin.conf, !!fin.repique);
     await upsertLinha(SB, "_FUNDO_" + inst, { last_status: `${fin.conf}/10`, last_alert_at: new Date().toISOString() });
     // V107: modo alerta do motor (em segundo plano: a rodada espera no fim, depois de liberar a trava)
-    if (!fin.repique) _bgTarefas.push(enviarAlertaMotor({ inst, side: "long", tipo: "fundo", preco: Number(vivo ?? c.info.preco), atr: Number(c.info.atr), nota: fin.conf, vol: volDe(inst)?.u ?? null }).catch((e) => console.log("⚠️ modo alerta falhou", e))); // repique (regra nova) não vai
+    if (!fin.repique) _bgTarefas.push(enviarAlertaMotor({ inst, side: "long", tipo: "fundo", preco: Number(vivo ?? c.info.preco), atr: Number(c.info.atr), nota: fin.conf, vol: volDe(inst)?.u ?? null }).catch((e) => console.log("⚠️ modo conservador falhou", e))); // repique (regra nova) não vai
     if (ehRep) enviadosRep++; else enviados++;
     console.log(`🟢 radar de fundo enviado: ${inst} ${fin.conf}/10${ehRep ? " ⭐ repique" : ""}${subidaDe !== null ? ` (nota subiu de ${subidaDe})` : ""}`);
   }
@@ -3629,6 +3688,7 @@ async function runAlertaProativo() {
   if (COMPRESS_ON) await radarCompressao(SB, variacoes, pool, indicadores, posMap).catch((e) => console.log("❌ erro radar de compressão", e));
   if (noPrazo("sombra de volume")) await volSombraRodar(SB, variacoes, perfilAlerta).catch((e) => console.log("❌ erro sombra de volume", e)); // V106
   if (MV_ON && noPrazo("mão virada")) await radarMaoVirada(SB, variacoes, pool, indicadores).catch((e) => console.log("❌ erro mão virada", e)); // V124
+  if (MV_ON && MV_MOTOR && MOTOR_URL && MOTOR_ALERTA_SECRET && noPrazo("mão de alerta")) await mvMotorEntradas(SB).catch((e) => console.log("❌ erro mão de alerta (envio ao motor)", e)); // V138
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   // V74: sem .catch, um erro aqui pulava checarAntecipacoes, salvarEstado e processarAutoApagar da rodada
@@ -4271,20 +4331,24 @@ const MOTOR_ANON_KEY = (Deno.env.get("MOTOR_ANON_KEY") || "").trim();
 const motorHeaders = (extra: Record<string, string>): Record<string, string> => ({ "Content-Type": "application/json", ...(MOTOR_ANON_KEY ? { Authorization: `Bearer ${MOTOR_ANON_KEY}`, apikey: MOTOR_ANON_KEY } : {}), ...extra });
 // V130: devolve o que aconteceu: "ok" (o motor gravou), "recusou" (o motor ou a conferência daqui recusaram: não adianta mandar de novo),
 // "falhou" (rede/timeout/erro 5xx: dá pra tentar de novo) ou "sem" (faltam os Secrets do motor).
-async function enviarAlertaMotor(o: { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null }): Promise<"ok" | "recusou" | "falhou" | "sem"> {
-  if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) return "sem";
-  if (!(o.preco > 0) || !(o.atr > 0)) { console.log(`⚠️ modo alerta: ${o.inst} sem preço/ATR válido, não mandei pro motor`); return "recusou"; }
+// V138: juncao = topo e fundo da faixa na vela da entrada (só o alerta do mão virada, tipo "maovirada": o motor manda pra mão de alerta).
+type AlertaMotor = { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null; juncao?: { topo: number; fundo: number } };
+async function enviarAlertaMotorDet(o: AlertaMotor): Promise<{ st: "ok" | "recusou" | "falhou" | "sem"; gravados?: number; msg?: string }> {
+  if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) return { st: "sem" };
+  if (!(o.preco > 0) || !(o.atr > 0)) { console.log(`⚠️ motor: ${o.inst} sem preço/ATR válido, não mandei`); return { st: "recusou", msg: "sem preço/ATR válido" }; }
   try {
     const r = await fetch(MOTOR_URL, {
       method: "POST", headers: motorHeaders({ "x-alerta-secret": MOTOR_ALERTA_SECRET }),
-      body: JSON.stringify({ action: "alerta", instId: o.inst, side: o.side, tipo: o.tipo, preco: o.preco, atr: o.atr, nota: o.nota, vol_usdt: o.vol }),
+      body: JSON.stringify({ action: "alerta", instId: o.inst, side: o.side, tipo: o.tipo, preco: o.preco, atr: o.atr, nota: o.nota, vol_usdt: o.vol, ...(o.juncao ? { juncao_topo: o.juncao.topo, juncao_fundo: o.juncao.fundo } : {}) }),
       signal: AbortSignal.timeout(10000),
     });
     const j: any = await r.json().catch(() => null);
-    console.log(r.ok && j?.ok ? `📨 modo alerta: ${o.inst} ${o.tipo} enviado ao motor (${j.gravados ?? 0} pendente(s)${j.msg ? ` · ${j.msg}` : ""})` : `⚠️ modo alerta: o motor recusou ${o.inst} (HTTP ${r.status}${j?.error ? `: ${String(j.error).slice(0, 160)}` : ""})`);
-    return r.ok && j?.ok ? "ok" : r.status >= 400 && r.status < 500 ? "recusou" : "falhou";
-  } catch (e) { console.log(`⚠️ modo alerta: falha ao mandar ${o.inst} pro motor (${e})`); return "falhou"; }
+    console.log(r.ok && j?.ok ? `📨 motor: ${o.inst} ${o.tipo} enviado (${j.gravados ?? 0} pendente(s)${j.msg ? ` · ${j.msg}` : ""})` : `⚠️ motor: recusou ${o.inst} ${o.tipo} (HTTP ${r.status}${j?.error ? `: ${String(j.error).slice(0, 160)}` : ""})`);
+    const st = r.ok && j?.ok ? "ok" : r.status >= 400 && r.status < 500 ? "recusou" : "falhou";
+    return { st, gravados: Number(j?.gravados) || 0, msg: String(j?.msg || j?.error || "").slice(0, 160) || undefined };
+  } catch (e) { console.log(`⚠️ motor: falha ao mandar ${o.inst} ${o.tipo} (${e})`); return { st: "falhou", msg: String(e).slice(0, 160) }; }
 }
+async function enviarAlertaMotor(o: AlertaMotor): Promise<"ok" | "recusou" | "falhou" | "sem"> { return (await enviarAlertaMotorDet(o)).st; }
 // ===== V130: OPORTUNIDADE NO RETESTE pro modo alerta do motor (no lugar do cruzamento) =====
 // No /juncao (28 dias, faixa rápida, stop 1 ATR, alvo 2R, prazo 2h), a oportunidade (cruzamento a favor do dia: 24h ≥ 8% no lado da entrada) deu
 // +0.04R por operação entrando no cruzamento e +0.15R entrando no reteste (positivo em 3 das 4 semanas); na rápida + 144 o reteste ficou em zero.
@@ -5558,7 +5622,7 @@ async function conferirPlacar(SB: any) {
         if (r.tipo === "oportunidade" && OPORT_MOTOR_ENTRADA === "cruzamento" && agora - e.emMs <= OPORT_MOTOR_MAX_MIN * 60000 && MOTOR_URL && MOTOR_ALERTA_SECRET) {
           const kE = d.t.findIndex((t) => t + TF_MIN * 60000 === e.emMs);
           const atrE = kE >= 14 ? calcATR(d.h.slice(0, kE + 1), d.l.slice(0, kE + 1), d.c.slice(0, kE + 1), 14) : 0;
-          _bgTarefas.push(enviarAlertaMotor({ inst: r.instid, side: (e.lado ?? r.lado) === "short" ? "short" : "long", tipo: "oportunidade", preco: e.preco, atr: atrE, nota: r.conf != null ? Number(r.conf) : null, vol: r.vol_usdt != null ? Number(r.vol_usdt) : null }).catch((x) => console.log("⚠️ modo alerta (oportunidade) falhou", x)));
+          _bgTarefas.push(enviarAlertaMotor({ inst: r.instid, side: (e.lado ?? r.lado) === "short" ? "short" : "long", tipo: "oportunidade", preco: e.preco, atr: atrE, nota: r.conf != null ? Number(r.conf) : null, vol: r.vol_usdt != null ? Number(r.vol_usdt) : null }).catch((x) => console.log("⚠️ modo conservador (oportunidade) falhou", x)));
         }
         t0 = e.emMs; p0 = e.preco;
       }
@@ -8337,7 +8401,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
       return `  ${rot}: ${porSem.map((rs, i) => `s${i + 1} ${cel(rs)}`).join(" · ")} · <b>total ${cel(itens.map((x) => x.r))}</b>\n`;
     };
     const comR = (lista: { t: number; r: number | null }[]) => lista.filter((x): x is { t: number; r: number } => x.r !== null);
-    m += `<b>📅 SEMANA A SEMANA</b> (${nSem} semana(s); s1 = a mais antiga${dd % 7 ? `, a última com ${dd % 7} dia(s)` : ""})\n<i>Cada célula: média em R · PF · (n). 🔁 robô ligado direto · 🤖 saída do robô (cruzamento contrário ou stop ${SAIDA_STOP_ATR} ATR) · 🔂 motor real${filtrosJ.length ? " · 🔂 com filtro = o robô só abre quando o filtro passa" : ""}${reteste !== null ? (ehToque ? ` · 👆 toque e volta (depois de se afastar ${reteste}${retUn}) com a saída 🤖` : ` · 🔙 reteste a ${reteste}${retUn} com a saída 🤖`) : ""}${reteste !== null ? ` · 🔁 ${retIco} = mão virada só no ${retNome} (sai só no cruzamento contrário, sem stop) · 🔁 ✂️+${retIco} = nos dois` : ""}${reteste !== null && cfgs.length && horas.length ? ` · nas fatias do modo alerta (de alerta; a favor do dia): 🎯 = ${simCfgTxt(cfgs[0])} ou cruzamento contrário, sem prazo · 🧭 = ${simCfgTxt(cfgs[0])} · até ${hTxt(horas[0])}; entrando no cruzamento (✂️), no ${retNome} (${retIco}) ou nos dois (✂️+${retIco})` : ""}${reteste !== null && cortesV.length ? ` · ${retIco} 🤖 + corte = o ${retNome} com stop só quando a vela da entrada passa no corte (volume de 24h em unidades da moeda e em USDT, como na BloFin; top; pump e dump)` : ""}${reteste !== null && saidasX.length ? ` · ${retIco} 🪜 / ✂️ 🪜 = o mão virada com saída no lucro, no ${retNome} (em cada corte) e no cruzamento` : ""}. Fora as fatias, todos os cruzamentos; a semana é a da entrada.${topTxt}${pdTxt}${saidasTxt}</i>\n\n`;
+    m += `<b>📅 SEMANA A SEMANA</b> (${nSem} semana(s); s1 = a mais antiga${dd % 7 ? `, a última com ${dd % 7} dia(s)` : ""})\n<i>Cada célula: média em R · PF · (n). 🔁 robô ligado direto · 🤖 saída do robô (cruzamento contrário ou stop ${SAIDA_STOP_ATR} ATR) · 🔂 motor real${filtrosJ.length ? " · 🔂 com filtro = o robô só abre quando o filtro passa" : ""}${reteste !== null ? (ehToque ? ` · 👆 toque e volta (depois de se afastar ${reteste}${retUn}) com a saída 🤖` : ` · 🔙 reteste a ${reteste}${retUn} com a saída 🤖`) : ""}${reteste !== null ? ` · 🔁 ${retIco} = mão virada só no ${retNome} (sai só no cruzamento contrário, sem stop) · 🔁 ✂️+${retIco} = nos dois` : ""}${reteste !== null && cfgs.length && horas.length ? ` · nas fatias do modo conservador (de alerta; a favor do dia): 🎯 = ${simCfgTxt(cfgs[0])} ou cruzamento contrário, sem prazo · 🧭 = ${simCfgTxt(cfgs[0])} · até ${hTxt(horas[0])}; entrando no cruzamento (✂️), no ${retNome} (${retIco}) ou nos dois (✂️+${retIco})` : ""}${reteste !== null && cortesV.length ? ` · ${retIco} 🤖 + corte = o ${retNome} com stop só quando a vela da entrada passa no corte (volume de 24h em unidades da moeda e em USDT, como na BloFin; top; pump e dump)` : ""}${reteste !== null && saidasX.length ? ` · ${retIco} 🪜 / ✂️ 🪜 = o mão virada com saída no lucro, no ${retNome} (em cada corte) e no cruzamento` : ""}. Fora as fatias, todos os cruzamentos; a semana é a da entrada.${topTxt}${pdTxt}${saidasTxt}</i>\n\n`;
     for (const modo of modosAtivos) {
       m += `${MINI_DIVISOR}\n<b>${nome[modo]}</b>\n`;
       m += linhaSem("🔁", comR(modos[modo].map((e) => ({ t: e.t, r: e.ligado }))));
@@ -8431,7 +8495,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     const defEnt = ehToque
       ? `Toque = depois do cruzamento, o preço se afasta da faixa (${reteste}${retUn} ou mais) e depois uma vela encosta nela com o pavio (a máxima no SHORT, a mínima no LONG) e fecha do mesmo lado, sem cruzar, entre a ${RET_MIN}ª vela e 24h depois do cruzamento.`
       : `Reteste = depois do cruzamento, o preço se afasta da faixa (${reteste}${retUn} ou mais) e uma vela volta a fechar a menos de ${reteste}${retUn} dela, ainda do mesmo lado, entre a ${RET_MIN}ª e a ${RET_MAX}ª vela depois do cruzamento (como o alerta repetido do bot).`;
-    m += `<b>${ehToque ? "👆 TOQUE E VOLTA" : "🔙 RETESTE"} x CRUZAMENTO</b>\n<i>${defEnt} Entra no fechamento dessa vela, no lado do cruzamento, uma vez por cruzamento. 🔄 Mão virada (todos os cruzamentos): 🔁 sai só no cruzamento contrário, sem stop, e volta no próximo ${retNome} (ou cruzamento); 🤖 sai no cruzamento contrário ou no stop de ${SAIDA_STOP_ATR} ATR. "Nos dois" = entra no cruzamento e de novo no ${retNome}, as duas saindo igual. 🚨 Modo alerta, nas fatias da vela da entrada ("de alerta" = |24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO}; "a favor do dia" = 24h ≥ ${SAIDA_MOV_PADRAO}% no lado da entrada, como a 🚀 OPORTUNIDADE): 🎯 sai no stop, no alvo ou no cruzamento contrário, sem prazo; 🧭 pela rotina, com prazo. "soma" = o R somado de todas as entradas da linha.${cortesV.length ? ` 💧 = o mão virada com stop (🤖) separado pelos cortes pedidos, lidos na vela da entrada (volume de 24h em unidades da moeda, o "Volume 24h" da BloFin, e em USDT; top; pump e dump)${moedasSemVol ? `; ${moedasSemVol} moeda(s) sem volume nas velas ficam fora dos cortes de volume e de top` : ""}.` : ""}${topTxt}${pdTxt}${saidasTxt}</i>\n\n`;
+    m += `<b>${ehToque ? "👆 TOQUE E VOLTA" : "🔙 RETESTE"} x CRUZAMENTO</b>\n<i>${defEnt} Entra no fechamento dessa vela, no lado do cruzamento, uma vez por cruzamento. 🔄 Mão virada (todos os cruzamentos): 🔁 sai só no cruzamento contrário, sem stop, e volta no próximo ${retNome} (ou cruzamento); 🤖 sai no cruzamento contrário ou no stop de ${SAIDA_STOP_ATR} ATR. "Nos dois" = entra no cruzamento e de novo no ${retNome}, as duas saindo igual. 🚨 Modo conservador, nas fatias da vela da entrada ("de alerta" = |24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO}; "a favor do dia" = 24h ≥ ${SAIDA_MOV_PADRAO}% no lado da entrada, como a 🚀 OPORTUNIDADE): 🎯 sai no stop, no alvo ou no cruzamento contrário, sem prazo; 🧭 pela rotina, com prazo. "soma" = o R somado de todas as entradas da linha.${cortesV.length ? ` 💧 = o mão virada com stop (🤖) separado pelos cortes pedidos, lidos na vela da entrada (volume de 24h em unidades da moeda, o "Volume 24h" da BloFin, e em USDT; top; pump e dump)${moedasSemVol ? `; ${moedasSemVol} moeda(s) sem volume nas velas ficam fora dos cortes de volume e de top` : ""}.` : ""}${topTxt}${pdTxt}${saidasTxt}</i>\n\n`;
     type Fatia = (e: { filtro: boolean; aFavor: boolean }) => boolean;
     for (const modo of modosAtivos) {
       const cz = modos[modo], rt = retestes[modo], esp = rt.map((x) => x.espera * TF_MIN);
@@ -8466,7 +8530,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
       }
       for (const [rot, f] of [["de alerta", (e) => e.filtro], ["a favor do dia", (e) => e.aFavor]] as [string, Fatia][]) {
         const czF = cz.filter(f), rtF = rt.filter(f);
-        m += `<b>🚨 Modo alerta · ${rot}</b>\n`;
+        m += `<b>🚨 Modo conservador · ${rot}</b>\n`;
         if (cfgs.length) {
           m += `  🎯 ${simCfgTxt(cfgs[0])} ou cruzamento contrário (sem prazo):\n`;
           m += `    ✂️ no cruzamento: ${fmtS(czF.map((e) => e.alvoCruz).filter(nn))}\n`;
@@ -12334,7 +12398,7 @@ function textoHelp(chatId: number | string): string {
 
   if (SILENCIO_ON) {
     t += `${MINI_DIVISOR}\n<b>🌙 Silêncio</b>\n`;
-    t += SILENCIO_MODO === "mudo" ? `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local): tudo continua (alertas, placar, modo alerta do motor), só que as mensagens chegam sem som.\n\n` : `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local)${SILENCIO_PROTECAO ? ": só passa alerta de proteção de posição aberta" : ""}.\n\n`;
+    t += SILENCIO_MODO === "mudo" ? `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local): tudo continua (alertas, placar, modo conservador e mão de alerta do motor), só que as mensagens chegam sem som.\n\n` : `Das ${SILENCIO_INI_H}h às ${SILENCIO_FIM_H}h (horário local)${SILENCIO_PROTECAO ? ": só passa alerta de proteção de posição aberta" : ""}.\n\n`;
   }
 
   t += `${DIVISOR}\n📖 Lista de comandos: /comandos\n🆔 Seu chat_id: <b>${chatId}</b>`;
@@ -12587,9 +12651,9 @@ function montarConfig(): string {
   m += `• Aviso antecipado se auto-ajusta: ${AUTO_CALIB_ON ? `a cada ${AUTO_CALIB_INTERVALO_H}h, com ${AUTO_CALIB_DIAS} dias de dados (mínimo ${ANTEC_CALIB_MIN} amostras)` : "não"}\n`;
   m += `• Confiabilidade por moeda: mínimo ${CONFIAB_MIN_AMOSTRA} entre as últimas ${CONFIAB_JANELA_N} previsões\n\n`;
 
-  m += tit("🤖", "Motor · modo alerta");
+  m += tit("🤖", "Motor · modo conservador e mão de alerta");
   m += MOTOR_URL && MOTOR_ALERTA_SECRET
-    ? `• Alertas de fundo vão pro motor${OPORT_MOTOR_ENTRADA === "reteste" ? ` · oportunidade no reteste (depois do cruzamento a favor do dia, o preço se afasta ${OPORT_RETESTE_PCT}% da faixa e volta pra menos disso, entre a ${OPORT_RET_MIN}ª e a ${OPORT_RET_MAX}ª vela)` : OPORT_MOTOR_ENTRADA === "cruzamento" ? ` · oportunidade no cruzamento (até ${OPORT_MOTOR_MAX_MIN} min depois)` : " · oportunidade não vai (OPORT_MOTOR_ENTRADA=off)"}\n• Ligar, simular, tipos, tamanho e limites: no site\n\n`
+    ? `• Modo conservador: alertas de fundo vão pro motor${OPORT_MOTOR_ENTRADA === "reteste" ? ` · oportunidade no reteste (depois do cruzamento a favor do dia, o preço se afasta ${OPORT_RETESTE_PCT}% da faixa e volta pra menos disso, entre a ${OPORT_RET_MIN}ª e a ${OPORT_RET_MAX}ª vela)` : OPORT_MOTOR_ENTRADA === "cruzamento" ? ` · oportunidade no cruzamento (até ${OPORT_MOTOR_MAX_MIN} min depois)` : " · oportunidade não vai (OPORT_MOTOR_ENTRADA=off)"}\n• Mão de alerta: ${MV_ON && MV_MOTOR ? "o \"ligar\" do 🔂 mão virada vai pro motor, com a junção da vela da entrada" : MV_ON ? "não vai (MV_MOTOR=0)" : "não vai (mão virada desligado, MV_ON=0)"}\n• Ligar, simular, tamanho, stop, alvo e limites: no site\n\n`
     : `• ⚠️ Não envia: faltam os Secrets MOTOR_URL e/ou MOTOR_ALERTA_SECRET\n\n`;
 
   // ── rotina ──
@@ -13039,8 +13103,8 @@ async function tratarRequisicao(req: Request): Promise<Response> {
         const r = await fetch(MOTOR_URL, { method: "POST", headers: motorHeaders({ "x-alerta-secret": MOTOR_ALERTA_SECRET }), body: JSON.stringify({ action: "alerta", instId: instMt, side: "long", tipo: "teste", preco: pxMt, atr: pxMt * 0.01, nota: 0 }), signal: AbortSignal.timeout(10000) });
         const j: any = await r.json().catch(() => null);
         await sendTelegram(chatId, r.ok && j?.ok
-          ? `🧪 <b>Ligação bot → motor OK</b> (${instMt})\n${j.gravados ? `O motor gravou ${j.gravados} alerta(s) de teste. Em até 1 min ele aparece no site em "alertas que não entraram" como <i>tipo teste fora da lista</i> (é recusado de propósito: nenhuma ordem, nem simulada).` : `O motor respondeu, mas não gravou: ${String(j.msg || "modo alerta desligado no site").replace(/</g, "&lt;")}. Ligue o modo alerta no site e repita.`}`
-          : `🧪 <b>O motor recusou</b> (HTTP ${r.status})${j?.error ? `: ${String(j.error).slice(0, 200).replace(/</g, "&lt;")}` : ""}\n401/403 = confira MOTOR_ALERTA_SECRET (igual ao ALERTA_SECRET do motor) e MOTOR_ANON_KEY · 404 = confira MOTOR_URL · 500 = rode o SQL do modo alerta.`);
+          ? `🧪 <b>Ligação bot → motor OK</b> (${instMt})\n${j.gravados ? `O motor gravou ${j.gravados} alerta(s) de teste. Em até 1 min ele aparece no site em "alertas que não entraram" como <i>tipo teste fora da lista</i> (é recusado de propósito: nenhuma ordem, nem simulada).` : `O motor respondeu, mas não gravou: ${String(j.msg || "modo conservador desligado no site").replace(/</g, "&lt;")}. Ligue o modo conservador no site e repita.`}`
+          : `🧪 <b>O motor recusou</b> (HTTP ${r.status})${j?.error ? `: ${String(j.error).slice(0, 200).replace(/</g, "&lt;")}` : ""}\n401/403 = confira MOTOR_ALERTA_SECRET (igual ao ALERTA_SECRET do motor) e MOTOR_ANON_KEY · 404 = confira MOTOR_URL · 500 = rode o SQL do modo conservador (sql-v59-modo-alerta.sql).`);
       } catch (e) { await sendTelegram(chatId, `🧪 Não consegui falar com o motor: ${String(e).slice(0, 200).replace(/</g, "&lt;")}. Confira MOTOR_URL.`); }
       return new Response("ok");
     }
