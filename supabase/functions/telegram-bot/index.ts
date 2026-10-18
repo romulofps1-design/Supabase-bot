@@ -1,5 +1,8 @@
-// telegram-bot V134 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V137 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V137 (V136 + /juncao carteira escada como o modo automático do mão virada: o prazo conta do alerta; entradacruz = entra só no próximo cruzamento; virar = vira a mão nos cruzamentos dentro do prazo; stopjuncao = o stop de 2% acompanha a junção; lista3 = as operações dos últimos 3 dias). Só análise: alertas, bot e motor não mudam.
+// V136 (V135 + /juncao carteira escada: reentrada24 = se a moeda continua na lista do mão virada depois que a operação fecha, pode entrar de novo a partir de 24h depois do alerta, e depois a cada 24h). Só análise: alertas, bot e motor não mudam.
+// V135 (V134 + /juncao carteira escada: escada5em5 = mais um jeito de stop, o stop fixo com a escada de 5 em 5 — começa em +10% travando +5%, e depois a cada +5% o stop sobe mais 5%, sem o degrau de +5% → +1%). Só análise: alertas, bot e motor não mudam.
 // V134 (V133 + /juncao carteira escada: a entrada na janela de distância da faixa — dist0-6 = só com o preço a até 6% da faixa — ganha as mesmas variantes de prazo, jeito de stop e alvo da entrada a qualquer distância, pra comparar as duas). Só análise: alertas, bot e motor não mudam.
 // V133 (V132 + /juncao carteira escada: tp20,30,40,50,60,80 = também com alvo (take profit) de X% do preço; semescada = só o stop fixo de 2% além da faixa; semstop = só a escada, sem o stop fixo; tudo na entrada a qualquer distância, separado e junto). Só análise: alertas, bot e motor não mudam.
 // V132 (V131 + /juncao carteira escada com prazo: a mesma escada também com prazo de 6, 8 e 10 horas, saindo no fechamento da vela em que o prazo acaba se o stop não pegou; prazo6,8,10 escolhe). Só análise: alertas, bot e motor não mudam.
@@ -18,7 +21,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V134"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V137"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -7259,7 +7262,14 @@ type CarteiraJ = { vagas: number[]; alerta?: boolean; segura?: number; adx1h?: n
 // V132: prazos = além do "sem prazo" (sai só no stop), a mesma escada com prazo de N horas (padrão 6, 8 e 10)
 // V133: alvos = também com alvo (take profit) de X% do preço; semEscada = também só com o stop fixo (o inicial, que não sobe); semStop = também só com
 // a escada, sem o stop fixo (até o preço andar +5% a favor não tem stop). Os alvos valem em cada jeito de stop. Só na entrada a qualquer distância (🔔).
-type EscadaJ = { distMin: number; distMax: number; stopFaixa: number; prazos: number[]; alvos: number[]; semEscada: boolean; semStop: boolean };
+// V135: escada5 = também o stop fixo com a escada de 5 em 5 (sem o degrau de +5% → +1%: o 1º degrau é +10% → +5%)
+// V136: reentH = se a moeda continua ligada depois que a operação fecha, pode entrar de novo a partir de reentH horas depois do alerta, e depois a cada
+// reentH horas (uma entrada por janela de reentH horas, contadas do alerta). 0 = uma entrada por alerta, como antes.
+// V137: o modo automático do mão virada. virar = também virando a mão nos cruzamentos dentro do prazo; entCruz = também entrando só no próximo
+// cruzamento depois do alerta; stopJuncao = também com o stop acompanhando a junção; prazoEntrada = o prazo conta da entrada (como até a V136; o
+// padrão agora conta do alerta); lista = mostra as operações dos últimos N dias (0 = não mostra).
+// semPadrao = sem o jeito padrão (escada + stop fixo), quando tem outro jeito no comando; soAlvo = só as variantes com alvo (sem a "sem alvo")
+type EscadaJ = { distMin: number; distMax: number; stopFaixa: number; prazos: number[]; alvos: number[]; semEscada: boolean; semStop: boolean; escada5: boolean; reentH: number; virar?: boolean; entCruz?: boolean; stopJuncao?: boolean; prazoEntrada?: boolean; lista?: number; semPadrao?: boolean; soAlvo?: boolean };
 const ESCADA_PRAZOS_PADRAO = [6, 8, 10];
 function juncaoCarteiraDeArgs(args: string[]): CarteiraJ | null {
   if (!args.some((a) => /^carteira$/.test(a))) return null;
@@ -7284,10 +7294,22 @@ function juncaoCarteiraDeArgs(args: string[]): CarteiraJ | null {
     const mp = args.map((x) => /^prazos?(\d[\d.;,]*)h?$/.exec(x)).find((x) => !!x);
     const prazos = mp ? [...new Set(mp[1].split(/[;,]/).map(Number).filter((v) => Number.isFinite(v) && v >= 0.25 && v <= 72))].sort((x, y) => x - y).slice(0, 4) : ESCADA_PRAZOS_PADRAO;
     // V133: tp20,30,40,50,60,80 = alvo de 20 a 80% do preço (até 8, de 0,5 a 200%); semescada (ou stopfixo) = a mesma entrada só com o stop fixo;
-    // semstop (ou soescada) = só com a escada, sem o stop fixo
+    // semstop (ou soescada) = só com a escada, sem o stop fixo. V135: escada5em5 (ou escada5) = o stop fixo com a escada de 5 em 5
+    // V136: reentrada (= reentrada24) ou reentrada12 = volta a entrar na moeda que segue na lista, a partir de 24 (12) horas depois do alerta
     const mt = args.map((x) => /^tp(\d[\d.;,]*)%?$/.exec(x)).find((x) => !!x);
     const alvos = mt ? [...new Set(mt[1].split(/[;,]/).map(Number).filter((v) => Number.isFinite(v) && v >= 0.5 && v <= 200))].sort((x, y) => x - y).slice(0, 8) : [];
-    out.escada = { distMin: Math.max(0, Math.min(a0, a1)), distMax: Math.max(a0, a1, 0.01), stopFaixa: sf ?? 2, prazos, alvos, semEscada: args.includes("semescada") || args.includes("stopfixo"), semStop: args.includes("semstop") || args.includes("soescada") };
+    const mr = args.map((x) => /^reentradas?(\d{1,3})?h?$/.exec(x)).find((x) => !!x);
+    const reentH = mr ? Math.min(168, Math.max(1, mr[1] ? Number(mr[1]) : 24)) : 0;
+    // V137: virar (ou viramao) · entradacruz (ou nocruzamento) · stopjuncao · prazoentrada · lista (= lista3) ou lista7
+    const ml = args.map((x) => /^lista(\d{1,2})?$/.exec(x)).find((x) => !!x);
+    out.escada = { distMin: Math.max(0, Math.min(a0, a1)), distMax: Math.max(a0, a1, 0.01), stopFaixa: sf ?? 2, prazos, alvos, semEscada: args.includes("semescada") || args.includes("stopfixo"), semStop: args.includes("semstop") || args.includes("soescada"), escada5: args.includes("escada5em5") || args.includes("escada5"), reentH };
+    if (args.includes("virar") || args.includes("viramao")) out.escada.virar = true;
+    if (args.includes("entradacruz") || args.includes("nocruzamento")) out.escada.entCruz = true;
+    if (args.includes("stopjuncao")) out.escada.stopJuncao = true;
+    if (args.includes("prazoentrada")) out.escada.prazoEntrada = true;
+    if (ml) out.escada.lista = Math.min(14, Math.max(1, ml[1] ? Number(ml[1]) : 3));
+    if (args.includes("sempadrao")) out.escada.semPadrao = true; // V137: só os jeitos pedidos (sem a escada + stop fixo)
+    if (args.includes("soalvo")) out.escada.soAlvo = true; // V137: só com alvo
   }
   return out;
 }
@@ -7302,30 +7324,39 @@ function juncaoCarteiraDeArgs(args: string[]): CarteiraJ | null {
 // chega nele. Na mesma vela, o stop é conferido antes do alvo e o alvo antes do prazo (pior caso). comEscada = false: o stop fica no inicial (não sobe).
 // comStop = false: sem o stop fixo (o inicial); até a escada pôr o 1º degrau (+5% → +1%) não tem stop, e a posição sai só no alvo, no prazo ou no fim.
 // O R continua medido pela distância até onde o stop fixo estaria, pra dar pra comparar com os outros jeitos.
-type EscTr = { id: string; t: number; pct: number; r: number; aberta: boolean; trava: number; barras: number; risco: number; kSai: number; noPrazo: boolean; noAlvo: boolean };
-function simEscada(d: XVelas, k: number, lado: HipLado, topo: number, fundo: number, stopFaixa: number, prazoH = 0, alvoPct = 0, comEscada = true, comStop = true): Omit<EscTr, "id"> | null {
+// V135: degrau1 = false: a escada de 5 em 5, sem o degrau de +5% → +1%. O 1º degrau é +10% → +5%, e depois a cada +5% o stop sobe mais 5% (igual).
+// V137: opc.tPrazo = o fim do prazo já calculado (o modo automático conta do alerta); opc.vira + opc.lin = vira a mão: a vela que fecha do outro lado
+// da junção encerra a posição no fechamento (virou = true; a escadaOperacoes abre o lado contrário ali); opc.juncao + opc.lin = o stop acompanha a
+// junção: stopFaixa % além da linha da vela anterior (LONG: abaixo da de baixo; SHORT: acima da de cima), subindo e descendo com ela. Ordem na vela:
+// stop, alvo, prazo, virada.
+type EscOpc = { tPrazo?: number; vira?: boolean; juncao?: boolean; lin?: LinhasJ };
+type EscTr = { id: string; t: number; pct: number; r: number; aberta: boolean; trava: number; barras: number; risco: number; kSai: number; noPrazo: boolean; noAlvo: boolean; reent?: boolean; lado?: HipLado; virou?: boolean; virada?: boolean };
+function simEscada(d: XVelas, k: number, lado: HipLado, topo: number, fundo: number, stopFaixa: number, prazoH = 0, alvoPct = 0, comEscada = true, comStop = true, degrau1 = true, opc: EscOpc = {}): Omit<EscTr, "id"> | null {
   const ent = d.c[k], long = lado === "long";
   if (!(ent > 0) || !(topo > 0) || !(fundo > 0)) return null;
   const stop0 = long ? fundo * (1 - stopFaixa / 100) : topo * (1 + stopFaixa / 100);
   if (long ? !(stop0 < ent) : !(stop0 > ent)) return null;
   const risco = (Math.abs(ent - stop0) / ent) * 100;
-  const tPrazo = prazoH > 0 ? d.t[k] + prazoH * 3600000 : Infinity;
+  const tPrazo = opc.tPrazo !== undefined ? opc.tPrazo : prazoH > 0 ? d.t[k] + prazoH * 3600000 : Infinity;
   const alvoPx = alvoPct > 0 ? (long ? ent * (1 + alvoPct / 100) : ent * (1 - alvoPct / 100)) : NaN;
-  let stop = comStop ? stop0 : long ? -Infinity : Infinity, melhor = 0, trava = 0;
-  const sai = (i: number, px: number, aberta: boolean, noPrazo: boolean, noAlvo = false): Omit<EscTr, "id"> => {
+  const linJ = opc.juncao ? opc.lin : undefined, linV = opc.vira ? opc.lin : undefined;
+  let stop = comStop ? stop0 : long ? -Infinity : Infinity, melhor = 0, trava = 0, escStop = long ? -Infinity : Infinity;
+  const sai = (i: number, px: number, aberta: boolean, noPrazo: boolean, noAlvo = false, virou = false): Omit<EscTr, "id"> => {
     const pct = (long ? px / ent - 1 : 1 - px / ent) * 100 - TAXA_IDA_VOLTA_PCT;
-    return { t: d.t[k], pct, r: pct / risco, aberta, trava, barras: i - k, risco, kSai: i, noPrazo, noAlvo };
+    return { t: d.t[k], pct, r: pct / risco, aberta, trava, barras: i - k, risco, kSai: i, noPrazo, noAlvo, lado, virou };
   };
   for (let i = k + 1; i < d.c.length; i++) {
+    if (linJ) { const sj = long ? linJ.fundo[i - 1] * (1 - stopFaixa / 100) : linJ.topo[i - 1] * (1 + stopFaixa / 100); stop = long ? Math.max(sj, escStop) : Math.min(sj, escStop); }
     if (long ? d.l[i] <= stop : d.h[i] >= stop) return sai(i, long ? Math.min(stop, d.o[i]) : Math.max(stop, d.o[i]), false, false);
     if (alvoPct > 0 && (long ? d.h[i] >= alvoPx : d.l[i] <= alvoPx)) return sai(i, alvoPx, false, false, true);
     if (d.t[i] >= tPrazo) return sai(i, d.c[i], false, true);
+    if (linV && (long ? d.c[i] < linV.fundo[i] : d.c[i] > linV.topo[i])) return sai(i, d.c[i], false, false, false, true);
     if (!comEscada) continue;
     const g = (long ? d.h[i] / ent - 1 : 1 - d.l[i] / ent) * 100;
     if (g > melhor) {
       melhor = g;
-      const nova = melhor >= 10 ? Math.floor(melhor / 5) * 5 - 5 : melhor >= 5 ? 1 : 0;
-      if (nova > trava) { trava = nova; stop = long ? ent * (1 + trava / 100) : ent * (1 - trava / 100); }
+      const nova = melhor >= 10 ? Math.floor(melhor / 5) * 5 - 5 : melhor >= 5 && degrau1 ? 1 : 0;
+      if (nova > trava) { trava = nova; escStop = long ? ent * (1 + trava / 100) : ent * (1 - trava / 100); stop = linJ ? (long ? Math.max(stop, escStop) : Math.min(stop, escStop)) : escStop; }
     }
   }
   return sai(d.c.length - 1, d.c[d.c.length - 1], true, false);
@@ -7335,27 +7366,209 @@ function simEscada(d: XVelas, k: number, lado: HipLado, topo: number, fundo: num
 // distMin–distMax % dela); uma tentativa por alerta e uma posição por moeda (alerta com a anterior ainda aberta só entra depois que ela sai).
 // V132: prazoH = o prazo da escada em horas (0 = sem prazo). Com prazo a posição sai antes e o alerta seguinte da moeda pode entrar mais cedo.
 // V133: alvoPct = o alvo em % do preço (0 = sem alvo); comEscada = false: só o stop fixo; comStop = false: só a escada.
-function escadaOperacoes(d: XVelas, lig: Uint8Array, lin: LinhasJ, desdeMs: number, ce: EscadaJ, janela: boolean, prazoH = 0, alvoPct = 0, comEscada = true, comStop = true): Omit<EscTr, "id">[] {
-  const out: Omit<EscTr, "id">[] = [];
+// V135: degrau1 = false: a escada de 5 em 5 (começa em +10% → +5%)
+// V136: com ce.reentH > 0, a moeda que segue ligada depois que a operação fecha pode entrar de novo: a 2ª entrada só a partir de reentH horas depois do
+// alerta (vela de abertura ≥ a do alerta + reentH), a 3ª a partir de 2 × reentH, e assim por diante (uma entrada por janela). A janela da entrada é a
+// da vela em que ela aconteceu: entrou 30 h depois do alerta, a próxima só a partir de 48 h. reent = foi uma dessas entradas de novo.
+// V137: o modo automático do mão virada (modo). Cada alerta abre uma sessão (e, com reentrada, cada janela de reentH horas da moeda que segue na
+// lista abre outra; a hora da sessão é a do alerta ou a do começo da janela). Na sessão:
+//   - entrada: no alerta (a 1ª vela que fecha do outro lado da junção, como até a V136) ou, com modo.cruz, só no 1º cruzamento depois do alerta
+//     (a vela que fecha do outro lado da junção vindo de dentro dela ou do lado de lá);
+//   - modo.doAlerta (o padrão do /juncao a partir da V137): o prazo conta da hora da sessão, e não da entrada; a entrada só vale dentro do prazo;
+//   - modo.vira: dentro do prazo, a vela que fecha do outro lado da junção fecha a posição e abre a contrária no mesmo fechamento (virada = esta
+//     posição veio de uma virada); o stop e o alvo de cada posição são os dela;
+//   - stop ou alvo encerram a sessão (a moeda só volta num alerta novo ou na próxima janela de reentrada); o fim do prazo também.
+// Sem modo (como chamado até a V136): igualzinho à V136 (o prazo conta da entrada e a entrada vale até a moeda desligar).
+type EscModo = { vira?: boolean; cruz?: boolean; juncao?: boolean; doAlerta?: boolean };
+function escadaOperacoes(d: XVelas, lig: Uint8Array, lin: LinhasJ, desdeMs: number, ce: EscadaJ, janela: boolean, prazoH = 0, alvoPct = 0, comEscada = true, comStop = true, degrau1 = true, modo: EscModo = {}): (Omit<EscTr, "id"> & { reent: boolean })[] {
+  const out: (Omit<EscTr, "id"> & { reent: boolean })[] = [];
+  const n = d.c.length;
   const ladoEm = (k: number): HipLado | null => (d.c[k] > lin.topo[k] ? "long" : d.c[k] < lin.fundo[k] ? "short" : null);
+  const cruzouEm = (k: number): HipLado | null => (k < 1 ? null : d.c[k] > lin.topo[k] && !(d.c[k - 1] > lin.topo[k - 1]) ? "long" : d.c[k] < lin.fundo[k] && !(d.c[k - 1] < lin.fundo[k - 1]) ? "short" : null);
+  const distOk = (k: number, lado: HipLado) => {
+    if (!janela) return true;
+    const dist = lado === "long" ? ((d.c[k] - lin.topo[k]) / lin.topo[k]) * 100 : ((lin.fundo[k] - d.c[k]) / lin.fundo[k]) * 100;
+    return dist >= ce.distMin && dist <= ce.distMax;
+  };
+  const reentMs = (ce.reentH > 0 ? ce.reentH : 0) * 3600000, prazoMs = prazoH > 0 ? prazoH * 3600000 : 0;
   let livre = -1;
-  for (let k = 1; k < d.c.length; k++) {
+  for (let k = 1; k < n; k++) {
     if (!lig[k] || lig[k - 1]) continue;
     let fimT = k;
-    while (fimT + 1 < d.c.length && lig[fimT + 1]) fimT++;
-    for (let kk = k - 1; kk <= fimT; kk++) {
-      if (kk <= livre || d.t[kk] < desdeMs) continue;
-      const lado = ladoEm(kk);
-      if (!lado) continue;
-      const dist = lado === "long" ? ((d.c[kk] - lin.topo[kk]) / lin.topo[kk]) * 100 : ((lin.fundo[kk] - d.c[kk]) / lin.fundo[kk]) * 100;
-      if (janela && !(dist >= ce.distMin && dist <= ce.distMax)) continue;
-      const tr = simEscada(d, kk, lado, lin.topo[kk], lin.fundo[kk], ce.stopFaixa, prazoH, alvoPct, comEscada, comStop);
-      if (tr) { out.push(tr); livre = tr.kSai; }
-      break;
+    while (fimT + 1 < n && lig[fimT + 1]) fimT++;
+    const a = k - 1; // a vela do alerta
+    let jan = 0, kk = a; // jan = a janela de reentrada liberada (0 = a do alerta)
+    while (kk <= fimT) {
+      // começo da sessão: ainda ligada, depois da posição anterior e dentro da janela liberada
+      let s = kk;
+      while (s <= fimT && (s <= livre || (jan > 0 && d.t[s] < d.t[a] + jan * reentMs))) s++;
+      if (s > fimT) break;
+      const tS = d.t[a] + jan * reentMs; // a hora da sessão: a do alerta ou a do começo da janela de reentrada
+      // a entrada
+      let e = -1, ladoE: HipLado | null = null;
+      for (let i = s; i < n; i++) {
+        if (modo.doAlerta && prazoMs ? d.t[i] >= tS + prazoMs : i > fimT) break;
+        if (i <= livre || d.t[i] < desdeMs) continue;
+        const ld = modo.cruz ? (i > a ? cruzouEm(i) : null) : ladoEm(i);
+        if (!ld || !distOk(i, ld)) continue;
+        e = i; ladoE = ld; break;
+      }
+      if (e < 0) {
+        if (!(reentMs > 0)) break;
+        jan++; kk = s; continue; // nada nesta janela: tenta a próxima
+      }
+      const tPrazo = prazoMs ? (modo.doAlerta ? tS : d.t[e]) + prazoMs : Infinity;
+      let pos = e, lado = ladoE!, virada = false;
+      while (true) {
+        const tr = simEscada(d, pos, lado, lin.topo[pos], lin.fundo[pos], ce.stopFaixa, prazoH, alvoPct, comEscada, comStop, degrau1, { tPrazo, vira: modo.vira, juncao: modo.juncao, lin });
+        if (!tr) break;
+        out.push({ ...tr, reent: jan > 0, virada });
+        livre = tr.kSai;
+        if (!tr.virou) break;
+        pos = tr.kSai; lado = lado === "long" ? "short" : "long"; virada = true;
+      }
+      if (!(reentMs > 0)) break;
+      jan = Math.floor((d.t[e] - d.t[a]) / reentMs) + 1;
+      kk = e + 1;
     }
     k = fimT;
   }
   return out;
+}
+// V137: as variantes da escada, na ordem das linhas: prazo (0 = sem prazo) → entrada (no alerta, no cruzamento) → segura / vira a mão → jeito de
+// stop → alvo (0 = sem alvo). Jeitos: escada + stop fixo (o padrão; sempadrao tira ele quando o comando traz outro), só stop fixo (semescada), só
+// escada (semstop), escada de 5 em 5 (escada5em5) e stop na junção (stopjuncao, sem escada). soalvo = só as com alvo. Do /juncao carteira e do reais.
+type EscVar = { ph: number; alvo: number; esc: boolean; stop: boolean; d1: boolean; jun: boolean; cruz: boolean; vira: boolean };
+function escadaVariantes(ce: EscadaJ): EscVar[] {
+  const outros = [...(ce.semEscada ? [{ esc: false, stop: true, d1: true, jun: false }] : []), ...(ce.semStop ? [{ esc: true, stop: false, d1: true, jun: false }] : []), ...(ce.escada5 ? [{ esc: true, stop: true, d1: false, jun: false }] : []), ...(ce.stopJuncao ? [{ esc: false, stop: true, d1: true, jun: true }] : [])];
+  const jeitos = [...(ce.semPadrao && outros.length ? [] : [{ esc: true, stop: true, d1: true, jun: false }]), ...outros];
+  const alvos = ce.soAlvo && ce.alvos.length ? ce.alvos : [0, ...ce.alvos];
+  const out: EscVar[] = [];
+  for (const ph of [0, ...ce.prazos]) for (const cruz of ce.entCruz ? [false, true] : [false]) for (const vira of ce.virar ? [false, true] : [false]) for (const j of jeitos) for (const alvo of alvos) out.push({ ph, alvo, esc: j.esc, stop: j.stop, d1: j.d1, jun: j.jun, cruz, vira });
+  return out;
+}
+const escSg1 = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+const escPrazoRot = (ph: number) => (ph > 0 ? `prazo ${String(ph).replace(".", ",")}h` : "sem prazo"); // V132
+const escVarRot = (v: { ph: number; alvo: number; esc: boolean; stop: boolean; d1: boolean; jun?: boolean; cruz?: boolean; vira?: boolean }) => `${escPrazoRot(v.ph)}${v.cruz ? " · no cruzamento" : ""}${v.vira ? " · vira a mão" : ""}${v.jun ? " · stop na junção" : !v.esc ? " · só stop fixo" : !v.stop ? " · só escada" : !v.d1 ? " · escada 5 em 5" : ""}${v.alvo > 0 ? ` · alvo ${String(v.alvo).replace(".", ",")}%` : ""}`; // V133 (V135: escada 5 em 5; V137: cruzamento, vira a mão, stop na junção)
+// V131: a escada em % do preço (sem alavancagem, já com a taxa): as que saíram e, à parte, as que ainda estão abertas no fim das velas. V132: com prazo,
+// quantas saíram no prazo. V133: com alvo, quantas saíram no alvo; só com o stop fixo, sem o "travou lucro"; e a pior operação. V136: reentradas.
+// V137: viradas (as posições que vieram de uma virada de mão)
+function escResumoTxt(trs: EscTr[], v: { ph: number; alvo: number; esc: boolean; vira?: boolean }, reentH: number): string {
+  const f = trs.filter((x) => !x.aberta), ab = trs.filter((x) => x.aberta);
+  if (!f.length && !ab.length) return "nenhuma entrada";
+  let t = "";
+  if (f.length) {
+    const ps = f.map((x) => x.pct), soma = ps.reduce((a, b) => a + b, 0), ac = f.filter((x) => x.pct > 0).length, rMed = f.reduce((a, x) => a + x.r, 0) / f.length;
+    const sem3 = f.length > 5 ? [...ps].sort((a, b) => b - a).slice(3) : null;
+    const trav = f.filter((x) => x.trava >= 1).length, trav5 = f.filter((x) => x.trava >= 5).length;
+    t += `n=${f.length} · acerto ${Math.round((ac / f.length) * 100)}%${pmTxt(ac, f.length)} · média ${escSg1(soma / f.length)}% (${rMed >= 0 ? "+" : ""}${rMed.toFixed(2)}R) · soma ${escSg1(soma)}%${sem3 ? ` · sem os 3 melhores ${escSg1(sem3.reduce((a, b) => a + b, 0) / sem3.length)}%` : ""} · pior ${escSg1(Math.min(...ps))}% · risco ${(f.reduce((a, x) => a + x.risco, 0) / f.length).toFixed(1)}%${v.esc ? ` · travou lucro ${trav} (+5% ou mais: ${trav5})` : ""}${v.alvo > 0 ? ` · saiu no alvo ${f.filter((x) => x.noAlvo).length}` : ""}${v.ph > 0 ? ` · saiu no prazo ${f.filter((x) => x.noPrazo).length}` : ""}${reentH > 0 ? ` · reentradas ${f.filter((x) => x.reent).length}` : ""}${v.vira ? ` · viradas ${f.filter((x) => x.virada).length}` : ""} · ~${Math.round((_med(f.map((x) => x.barras)) * TF_MIN) / 60)}h${f.length < 15 ? " ⚠️" : ""}`;
+  }
+  if (ab.length) t += `${t ? " · " : ""}${ab.length} aberta(s) (${escSg1(ab.reduce((a, x) => a + x.pct, 0))}% agora)`;
+  return t;
+}
+// V137: uma operação na lista: moeda, hora do fechamento da vela da entrada, lado (↺ = veio de uma virada · ² = reentrada), resultado e por onde saiu
+const escMotivo = (x: EscTr) => (x.aberta ? "aberta" : x.noAlvo ? "alvo" : x.noPrazo ? "prazo" : x.virou ? "virou" : "stop");
+const escOpTxt = (x: EscTr) => `${x.id.replace(/-USDT$/, "")} ${divDH(x.t + TF_MIN * 60000)} ${x.lado === "short" ? "S" : "L"}${x.virada ? "↺" : ""}${x.reent ? "²" : ""} ${escSg1(x.pct)}% ${escMotivo(x)}`;
+const escOrdem = (x: EscTr, y: EscTr) => x.t - y.t || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
+// a lista de uma variante: com mais de 40 operações (virando a mão sem prazo, por exemplo), as 20 primeiras, quantas ficaram de fora e as 20 últimas
+const escOpsTxt = (trs: EscTr[]) => (trs.length > 40 ? [...trs.slice(0, 20).map(escOpTxt), `… +${trs.length - 40} …`, ...trs.slice(-20).map(escOpTxt)] : trs.map(escOpTxt)).join(" · ");
+// V137: /juncao reais — o modo automático do mão virada nos alertas de verdade. Cada "ligar" do histórico do /maovirada é um alerta, e a moeda fica
+// na lista até o "desligar" seguinte (ou até agora). A vela do alerta é a 1ª de 15m que fecha a partir de 2 min antes da hora do alerta (o mão virada
+// roda logo depois da hora fechada, com a vela que acabou de fechar; o alerta das 22:42 fica com a vela que fecha 22:45); a moeda fica ligada até a
+// vela que fecha até 2 min depois do "desligar". Fica de fora o alerta com volume de 24h (as 96 velas até a do alerta, em USDT) abaixo do filtro do
+// pool (FILTRO_VOL_MIN_USDT, ou vol500k no comando). As operações são as da escada do /juncao carteira (escadaOperacoes), com as mesmas variantes;
+// sem dist no comando, só a entrada a qualquer distância. A faixa padrão é a do robô mão virada (MV_FAIXA).
+type AlertaReal = { id: string; tL: number; tD: number | null; pct: number | null; a: number; kd: number; vq: number; ok: boolean; status: string; depois: string };
+function alertasReaisDoHist(hist: MvHist[]): AlertaReal[] {
+  const als: AlertaReal[] = [];
+  for (const h of [...hist].sort((x, y) => x.t - y.t)) {
+    if (h.a === "liga") { if (!als.some((x) => x.id === h.i && x.tD === null)) als.push({ id: h.i, tL: h.t, tD: null, pct: h.pct, a: -1, kd: -1, vq: NaN, ok: false, status: "", depois: "" }); }
+    else { const x = als.find((y) => y.id === h.i && y.tD === null); if (x) x.tD = h.t; }
+  }
+  return als;
+}
+// as velas de cada alerta (a do alerta e a última ligada), o volume de 24h na vela do alerta e quanto o preço andou 6h, 10h e 24h depois
+function prepAlertaReal(x: AlertaReal, d: XVelas | undefined, volMin: number) {
+  const TFMS = TF_MIN * 60000;
+  if (!d) { x.status = "fora (sem velas)"; return; }
+  const n = d.c.length;
+  let a = -1;
+  for (let k = 0; k < n; k++) if (d.t[k] + TFMS >= x.tL - 120000) { a = k; break; }
+  if (a < 0 || a + 1 >= n) { x.status = "fora (recente demais)"; return; }
+  if (a < VELAS_AQUEC) { x.status = "fora (velas de menos antes do alerta)"; return; }
+  let kd = n - 1;
+  if (x.tD !== null) { kd = a + 1; for (let k = a + 1; k < n && d.t[k] + TFMS <= x.tD + 120000; k++) kd = k; }
+  let vq = NaN;
+  if (d.vq && d.vq.length === n && a >= 95) { let s = 0, c = 0; for (let k = a - 95; k <= a; k++) if (Number.isFinite(d.vq[k])) { s += d.vq[k]; c++; } if (c > 0) vq = s; }
+  x.a = a; x.kd = kd; x.vq = vq;
+  x.depois = [6, 10, 24].map((h) => { const k = a + h * (60 / TF_MIN); return k < n && d.c[a] > 0 ? `${h}h ${escSg1((d.c[k] / d.c[a] - 1) * 100)}%` : `${h}h —`; }).join(" · ");
+  if (Number.isFinite(vq) && volMin > 0 && vq < volMin) { x.status = `fora (volume de 24h ${fmtVol(vq)} USDT, abaixo de ${fmtVol(volMin)})`; return; }
+  x.ok = true;
+  if (!Number.isFinite(vq)) x.status = "sem o volume";
+}
+async function runEscadaReais(chatId: number | string, args: string[]) {
+  const SB = getSupabase();
+  if (!SB) { await sendTelegram(chatId, "⚠️ Supabase não configurado."); return; }
+  const est = await mvLer(SB);
+  if (!est) { await sendTelegram(chatId, "⚠️ Não consegui ler o histórico do mão virada agora. Tente de novo em instantes."); return; }
+  const ce = juncaoCarteiraDeArgs(["carteira", "escada", ...args])!.escada!;
+  const vars = escadaVariantes(ce);
+  const comJanela = args.some((a) => /^dist\d/.test(a));
+  const volMin = juncaoFiltrosDeArgs(args)?.find((f) => f.tipo === "vol")?.v ?? FILTRO_VOL_MIN_USDT;
+  const ms = juncaoModosDeArgs(args).filter((k): k is Exclude<ModoJ6, "custom"> => k === "classica" || k === "rapida" || k === "rapida144");
+  const modosR: Exclude<ModoJ6, "custom">[] = ms.length ? ms : [MV_FAIXA];
+  const als = alertasReaisDoHist(est.hist);
+  if (!als.length) { await sendTelegram(chatId, "🔂 <b>MÃO VIRADA DE VERDADE</b>\n\nO histórico do mão virada ainda não tem nenhum alerta."); return; }
+  const agora = Date.now(), TFMS = TF_MIN * 60000;
+  const ids = [...new Set(als.map((x) => x.id))];
+  const velasR = new Map<string, XVelas>();
+  await emLotes(ids, 5, async (id) => {
+    const t0 = Math.min(...als.filter((x) => x.id === id).map((x) => x.tL));
+    const q = Math.min(JUNCAO_MAX_DIAS * 96, Math.ceil((agora - t0) / TFMS) + 2) + VELAS_AQUEC + 100;
+    let d = await blofinVelasHistorico(id, TIMEFRAME, q).catch(() => null);
+    if (!d || d.c.length < VELAS_AQUEC) d = await xCandles(id, TIMEFRAME, SAIDA_CANDLES).catch(() => null);
+    if (d && d.c.length >= VELAS_AQUEC) velasR.set(id, d);
+  });
+  // -zil no comando tira a moeda (por exemplo, um alerta de quando o filtro de volume estava mais baixo)
+  const tirar = new Set(args.map((a) => /^-([a-z0-9]{1,15}?)(?:-?usdt)?$/i.exec(a)).filter((x): x is RegExpExecArray => !!x).map((x) => `${x[1].toUpperCase()}-USDT`));
+  for (const x of als) {
+    prepAlertaReal(x, velasR.get(x.id), volMin);
+    if (tirar.has(x.id)) { x.ok = false; x.status = "fora (tirada no comando)"; }
+  }
+  const okN = als.filter((x) => x.ok).length;
+  const fx = (v: number) => String(v).replace(".", ",");
+  const janTxt = ce.distMin > 0 ? `a ${fx(ce.distMin)}–${fx(ce.distMax)}%` : `a até ${fx(ce.distMax)}%`;
+  const nomeR: Record<string, string> = { classica: "🐢 CLÁSSICA", rapida: "⚡ RÁPIDA", rapida144: "⚡➕ RÁPIDA + 144" };
+  let m = `🔂 <b>MÃO VIRADA DE VERDADE</b> · o modo automático nos alertas reais\n`;
+  m += `<i>Cada "ligar" do /maovirada é um alerta, e a moeda fica na lista até o "desligar" (ou até agora). Entrada no fechamento da vela de 15m do alerta (o mão virada roda logo depois da hora fechada; o alerta fora da hora fica com a vela seguinte) se o preço já fecha do outro lado da junção, ou na 1ª vela depois que fechar${comJanela ? ` (🪜 = só ${janTxt} da junção)` : ""}${ce.entCruz ? `; "no cruzamento" = espera o 1º cruzamento depois do alerta` : ""}. Stop ${fx(ce.stopFaixa)}% além da junção (LONG: abaixo da linha de baixo · SHORT: acima da de cima)${ce.stopJuncao ? `; "stop na junção" = esse stop acompanha a junção, subindo e descendo` : ""}${ce.alvos.length ? `; alvo em % do preço desde a entrada` : ""}; "sem prazo" = sai só no stop${ce.alvos.length ? " ou no alvo" : ""}, e o prazo conta ${ce.prazoEntrada ? "da entrada" : "do alerta (a entrada só vale dentro dele)"}${ce.virar ? `; "vira a mão" = dentro do prazo, o cruzamento contrário fecha a posição e abre a do outro lado (↺); sem isso, a posição segura o cruzamento` : ""}. O stop ou o alvo encerram a moeda até o alerta seguinte${ce.reentH > 0 ? `, ou até ${ce.reentH}h depois do alerta, se ela segue na lista (reentrada, ²)` : ""}. Fica de fora o alerta com volume de 24h abaixo de ${fmtVol(volMin)} USDT. Resultado em % do preço (sem alavancagem), com a taxa. "depois" = quanto o preço andou 6h, 10h e 24h depois do alerta. São poucas amostras: é pra conferir no gráfico, não pra tirar média.</i>\n\n`;
+  m += `<b>Alertas</b> (${als.length}; ${okN} no teste)\n`;
+  for (const x of als) m += `  ${x.id.replace(/-USDT$/, "")} ${divDH(x.tL)} → ${x.tD !== null ? divDH(x.tD) : "na lista"}${x.pct !== null && Number.isFinite(x.pct) ? ` · ${escSg1(x.pct)}% em 24h` : ""}${Number.isFinite(x.vq) ? ` · volume ${fmtVol(x.vq)}` : ""}${x.depois ? ` · depois: ${x.depois}` : ""}${x.status ? ` · ${x.status}` : ""}\n`;
+  for (const modo of modosR) {
+    const esc: EscTr[][] = vars.map(() => []), escAl: EscTr[][] = vars.map(() => []);
+    for (const id of ids) {
+      const d = velasR.get(id), meus = als.filter((x) => x.id === id && x.ok);
+      if (!d || !meus.length) continue;
+      const lig = new Uint8Array(d.c.length);
+      for (const x of meus) lig.fill(1, x.a + 1, x.kd + 1);
+      const lin = linhasDeBanda(bandaModo(d.c, modo));
+      vars.forEach((v, vi) => {
+        const modoV: EscModo = { vira: v.vira, cruz: v.cruz, juncao: v.jun, doAlerta: !ce.prazoEntrada };
+        if (comJanela) for (const tr of escadaOperacoes(d, lig, lin, 0, ce, true, v.ph, v.alvo, v.esc, v.stop, v.d1, modoV)) esc[vi].push({ ...tr, id });
+        for (const tr of escadaOperacoes(d, lig, lin, 0, ce, false, v.ph, v.alvo, v.esc, v.stop, v.d1, modoV)) escAl[vi].push({ ...tr, id });
+      });
+    }
+    m += `\n${MINI_DIVISOR}\n<b>${nomeR[modo]}</b>\n`;
+    for (const [rot, lst] of [...(comJanela ? [[`🪜 Entrada no alerta ${janTxt} da junção`, esc]] : []), ["🔔 Entrada no alerta a qualquer distância", escAl]] as [string, EscTr[][]][]) {
+      m += `<b>${rot}</b>\n`;
+      vars.forEach((v, vi) => {
+        const trs = [...lst[vi]].sort(escOrdem);
+        m += `  ${escVarRot(v)}: ${escResumoTxt(trs, v, ce.reentH)}\n`;
+        if (trs.length) m += `    ${escOpsTxt(trs)}\n`;
+      });
+    }
+  }
+  m += `\n<i>Uso: /juncao reais prazo6,8,10 tp30 soalvo semescada sempadrao stopjuncao entradacruz virar reentrada (rapida ou rapida144 escolhe a faixa; dist0-6 também com a entrada só a até 6% da junção; vol500k muda o volume mínimo; -zil tira uma moeda; prazoentrada = o prazo conta da entrada).</i>`;
+  await enviarEmPartes(chatId, m);
 }
 async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false, novos: NovoJ[] = [], filtros: FiltroJ[] | null = null, reteste: number | null = null, semanas = false, retesteEmAtr = false, porMoeda = false, extraMoedas: string[] = [], retesteModo: "perto" | "toque" = "perto", rodizio: number | null = null, volume = false, amostra = false, extras: { saidas?: SaidaPctJ[]; soModos?: string[]; carteira?: CarteiraJ; so?: boolean } = {}) {
   // V107: até 4 J6 personalizadas no mesmo teste (chaves c0..c3)
@@ -7529,12 +7742,10 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
   // V133: cada variante = prazo (0 = sem prazo), jeito de stop e alvo (0 = sem alvo). Jeitos de stop: escada + stop fixo (o padrão, como na V132),
   // só o stop fixo (semescada) e só a escada (semstop). Por prazo, cada jeito sem alvo e com cada alvo (tp...).
   // V134: as variantes valem nas duas entradas, a da janela de distância (🪜, ex.: dist0-6) e a a qualquer distância (🔔)
-  type EscVar = { ph: number; alvo: number; esc: boolean; stop: boolean };
-  const escVars: EscVar[] = [];
-  if (cart?.escada) {
-    const jeitos = [{ esc: true, stop: true }, ...(cart.escada.semEscada ? [{ esc: false, stop: true }] : []), ...(cart.escada.semStop ? [{ esc: true, stop: false }] : [])];
-    for (const ph of [0, ...cart.escada.prazos]) for (const j of jeitos) for (const alvo of [0, ...cart.escada.alvos]) escVars.push({ ph, alvo, esc: j.esc, stop: j.stop });
-  }
+  // V135: d1 = false: o stop fixo com a escada de 5 em 5 (escada5em5), o último jeito da lista
+  // V137: jun = o stop acompanhando a junção (stopjuncao, sem escada); cruz = entra só no próximo cruzamento (entradacruz); vira = vira a mão nos
+  // cruzamentos (virar). Ordem: prazo → entrada (no alerta, no cruzamento) → segura / vira a mão → jeito de stop → alvo (escadaVariantes)
+  const escVars: EscVar[] = cart?.escada ? escadaVariantes(cart.escada) : [];
   if (cart) {
     let tFim = 0;
     for (const d of velasJ.values()) tFim = Math.max(tFim, d.t[d.t.length - 1] + TF_MIN * 60000);
@@ -7838,8 +8049,9 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
           const ce = cart.escada;
           if (ce && (s.crit === "var" || !s.crit)) {
             escVars.forEach((v, vi) => {
-              for (const tr of escadaOperacoes(d, lig, lin, desdeMs, ce, true, v.ph, v.alvo, v.esc, v.stop)) res.esc[vi].push({ ...tr, id });
-              for (const tr of escadaOperacoes(d, lig, lin, desdeMs, ce, false, v.ph, v.alvo, v.esc, v.stop)) res.escAl[vi].push({ ...tr, id });
+              const modoV: EscModo = { vira: v.vira, cruz: v.cruz, juncao: v.jun, doAlerta: !ce.prazoEntrada }; // V137
+              for (const tr of escadaOperacoes(d, lig, lin, desdeMs, ce, true, v.ph, v.alvo, v.esc, v.stop, v.d1, modoV)) res.esc[vi].push({ ...tr, id });
+              for (const tr of escadaOperacoes(d, lig, lin, desdeMs, ce, false, v.ph, v.alvo, v.esc, v.stop, v.d1, modoV)) res.escAl[vi].push({ ...tr, id });
             });
           }
         }
@@ -7915,30 +8127,17 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
     const sg1E = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
     // V132: com prazo, mostra também quantas saíram no prazo (o stop não pegou até lá). V133: com alvo, quantas saíram no alvo; só com o stop fixo,
     // não mostra o "travou lucro" (o stop não sobe); e em todas, a pior operação (o tamanho do tombo num pump e dump, por exemplo)
-    const escTxt = (trs: EscTr[], v: { ph: number; alvo: number; esc: boolean }): string => {
-      const f = trs.filter((x) => !x.aberta), ab = trs.filter((x) => x.aberta);
-      if (!f.length && !ab.length) return "nenhuma entrada";
-      let t = "";
-      if (f.length) {
-        const ps = f.map((x) => x.pct), soma = ps.reduce((a, b) => a + b, 0), ac = f.filter((x) => x.pct > 0).length, rMed = f.reduce((a, x) => a + x.r, 0) / f.length;
-        const sem3 = f.length > 5 ? [...ps].sort((a, b) => b - a).slice(3) : null;
-        const trav = f.filter((x) => x.trava >= 1).length, trav5 = f.filter((x) => x.trava >= 5).length;
-        t += `n=${f.length} · acerto ${Math.round((ac / f.length) * 100)}%${pmTxt(ac, f.length)} · média ${sg1E(soma / f.length)}% (${rMed >= 0 ? "+" : ""}${rMed.toFixed(2)}R) · soma ${sg1E(soma)}%${sem3 ? ` · sem os 3 melhores ${sg1E(sem3.reduce((a, b) => a + b, 0) / sem3.length)}%` : ""} · pior ${sg1E(Math.min(...ps))}% · risco ${(f.reduce((a, x) => a + x.risco, 0) / f.length).toFixed(1)}%${v.esc ? ` · travou lucro ${trav} (+5% ou mais: ${trav5})` : ""}${v.alvo > 0 ? ` · saiu no alvo ${f.filter((x) => x.noAlvo).length}` : ""}${v.ph > 0 ? ` · saiu no prazo ${f.filter((x) => x.noPrazo).length}` : ""} · ~${Math.round((_med(f.map((x) => x.barras)) * TF_MIN) / 60)}h${f.length < 15 ? " ⚠️" : ""}`;
-      }
-      if (ab.length) t += `${t ? " · " : ""}${ab.length} aberta(s) (${sg1E(ab.reduce((a, x) => a + x.pct, 0))}% agora)`;
-      return t;
-    };
-    const prazoRot = (ph: number) => (ph > 0 ? `prazo ${String(ph).replace(".", ",")}h` : "sem prazo"); // V132
+    const escTxt = (trs: EscTr[], v: { ph: number; alvo: number; esc: boolean; vira?: boolean }): string => escResumoTxt(trs, v, cart.escada?.reentH ?? 0); // V137: escResumoTxt
     // V134: a janela de distância da faixa: "a 4–6%" ou, sem mínimo (dist0-6), "a até 6%"
     const janelaTxt = (ce: EscadaJ) => (ce.distMin > 0 ? `a ${String(ce.distMin).replace(".", ",")}–${String(ce.distMax).replace(".", ",")}%` : `a até ${String(ce.distMax).replace(".", ",")}%`);
-    const varRot = (v: { ph: number; alvo: number; esc: boolean; stop: boolean }) => `${prazoRot(v.ph)}${!v.esc ? " · só stop fixo" : !v.stop ? " · só escada" : ""}${v.alvo > 0 ? ` · alvo ${String(v.alvo).replace(".", ",")}%` : ""}`; // V133
+    const varRot = escVarRot; // V133 (V135: escada 5 em 5; V137: cruzamento, vira a mão, stop na junção, e fora daqui pro /juncao reais)
     const nomeCrit: Record<CritC, string> = { var: "📈 variação", unid: "🪙 unidades", usdt: "💵 USDT", atr: "🌊 ATR", er: "📏 tendência" };
     const rotSel = (s: CartSel) => (s.crit ? `${s.vagas} vaga${s.vagas > 1 ? "s" : ""} · ${nomeCrit[s.crit]}` : "todas que passam");
     const faixaNomeV = cartModoV === "rapida144" ? "rápida + 144" : cartModoV === "rapida" ? "rápida" : "clássica"; // V126
     const condTxt = [cartTop !== undefined ? `no top ${cartTop} de alta ou de queda em 24h${cartSemCond ? " (o padrão, porque o comando não trouxe condição)" : ""}` : "", cartVol !== undefined ? `≥ ${fmtVol(cartVol)} USDT em 24h` : "", cartUnid !== undefined ? `≥ ${fmtVol(cartUnid)} unidades em 24h` : "", cartPd !== undefined ? `sem ${pdVela ? `vela de 15m de ±${cartPd}% ou mais` : `pump e dump ≥ ${cartPd}%`} (fora ${PD_BLOQ_DIAS} dias depois)` : "", cartAlerta ? `de alerta (|24h| ≥ ${SAIDA_MOV_PADRAO}% e ADX ≥ ${SAIDA_ADX_PADRAO})` : "", cartAtrp !== undefined ? `ATR(14) ≥ ${cartAtrp}% do preço` : "",
       cartTrocas !== undefined ? `até ${cartTrocas} virada(s) da faixa (${faixaNomeV}) nas 24h antes` : "", cartRitmo !== undefined ? `a faixa (${faixaNomeV}) virou até ${cartRitmo} vez(es) por dia nos 3 dias antes` : "",
       cartAdx1h !== undefined ? `ADX(14) do 1h ≥ ${cartAdx1h}` : "", cartAdx4h !== undefined ? `ADX(14) do 4h ≥ ${cartAdx4h}` : "", cartEr3d !== undefined ? `andou reto em 3 dias (ER de 72h ≥ ${cartEr3d})` : ""].filter(Boolean).join(" · ");
-    if (cart.escada) m += `<i>🪜 Escada (V131; prazo na V132; alvo e jeitos de stop na V133, nas duas entradas na V134): cada vez que a moeda liga (o alerta do mão virada) é um gatilho. Entra no fechamento da 1ª vela de 15m, da hora do alerta até ela desligar, que fecha do outro lado da faixa ${janelaTxt(cart.escada)} dela (🔔 = a 1ª do outro lado, a qualquer distância). Stop inicial ${String(cart.escada.stopFaixa).replace(".", ",")}% além da faixa (LONG: abaixo da linha de baixo · SHORT: acima da de cima). Stop no lucro pelo quanto o preço andou a favor desde a entrada: +5% → stop em +1% · +10% → +5% · depois, a cada +5%, o stop anda mais 5%. Sem alvo${cart.escada.semEscada ? `; "só stop fixo" = só o stop de ${String(cart.escada.stopFaixa).replace(".", ",")}% além da faixa, que não sobe` : ""}${cart.escada.semStop ? `; "só escada" = sem esse stop fixo: até o preço andar +5% a favor não tem stop nenhum (sai só no alvo, no prazo ou quando a escada pega), e o R é medido pela distância até onde o stop fixo estaria` : ""}${cart.escada.alvos.length ? `; "alvo ${cart.escada.alvos.map((x) => String(x).replace(".", ",")).join("/")}%" = o mesmo jeito de stop com alvo: sai quando o preço anda isso a favor desde a entrada (se o stop e o alvo caem na mesma vela, vale o stop; "saiu no alvo" = quantas saíram assim)` : ""}${cart.escada.alvos.length || cart.escada.semEscada || cart.escada.semStop ? " (esses valem nas duas entradas). \"pior\" = a operação que mais perdeu" : ""}. "sem prazo" = sai só no stop${cart.escada.alvos.length ? " ou no alvo" : ""}, mesmo depois de a moeda desligar${cart.escada.prazos.length ? `; "prazo ${cart.escada.prazos.map((x) => `${String(x).replace(".", ",")}h`).join("/")}" = se o stop não pegou até lá (contando da entrada), sai no fechamento da vela de 15m em que o prazo acaba ("saiu no prazo" = quantas saíram assim)` : ""}. Uma posição por moeda${cart.escada.prazos.length ? " (com prazo ela sai antes, e o alerta seguinte da moeda pode entrar mais cedo)" : ""}. Resultado em % do preço (sem alavancagem), com a taxa; R = resultado ÷ distância até o stop inicial (o "risco"). Pior caso na vela: o stop que vale é o das velas anteriores.</i>\n\n`;
+    if (cart.escada) m += `<i>🪜 Escada (V131; prazo na V132; alvo e jeitos de stop na V133, nas duas entradas na V134, escada 5 em 5 na V135, reentrada na V136, modo automático na V137): cada vez que a moeda liga (o alerta do mão virada) é um gatilho. Entra no fechamento da 1ª vela de 15m, da hora do alerta até ela desligar${cart.escada.prazos.length && !cart.escada.prazoEntrada ? " (com prazo, até o prazo acabar)" : ""}, que fecha do outro lado da faixa ${janelaTxt(cart.escada)} dela (🔔 = a 1ª do outro lado, a qualquer distância). Stop inicial ${String(cart.escada.stopFaixa).replace(".", ",")}% além da faixa (LONG: abaixo da linha de baixo · SHORT: acima da de cima). Stop no lucro pelo quanto o preço andou a favor desde a entrada: +5% → stop em +1% · +10% → +5% · depois, a cada +5%, o stop anda mais 5%. Sem alvo${cart.escada.semEscada ? `; "só stop fixo" = só o stop de ${String(cart.escada.stopFaixa).replace(".", ",")}% além da faixa, que não sobe` : ""}${cart.escada.semStop ? `; "só escada" = sem esse stop fixo: até o preço andar +5% a favor não tem stop nenhum (sai só no alvo, no prazo ou quando a escada pega), e o R é medido pela distância até onde o stop fixo estaria` : ""}${cart.escada.escada5 ? `; "escada 5 em 5" = o stop fixo com a escada sem o degrau de +5% → +1%: o 1º degrau é +10% → stop em +5%, e depois a cada +5% o stop anda mais 5% (+15% → +10%, +20% → +15%...)` : ""}${cart.escada.alvos.length ? `; "alvo ${cart.escada.alvos.map((x) => String(x).replace(".", ",")).join("/")}%" = o mesmo jeito de stop com alvo: sai quando o preço anda isso a favor desde a entrada (se o stop e o alvo caem na mesma vela, vale o stop; "saiu no alvo" = quantas saíram assim)` : ""}${cart.escada.alvos.length || cart.escada.semEscada || cart.escada.semStop || cart.escada.escada5 ? " (esses valem nas duas entradas). \"pior\" = a operação que mais perdeu" : ""}. "sem prazo" = sai só no stop${cart.escada.alvos.length ? " ou no alvo" : ""}, mesmo depois de a moeda desligar${cart.escada.prazos.length ? `; "prazo ${cart.escada.prazos.map((x) => `${String(x).replace(".", ",")}h`).join("/")}" = se o stop não pegou até lá (contando ${cart.escada.prazoEntrada ? "da entrada" : "do alerta, e a entrada só vale dentro do prazo"}), sai no fechamento da vela de 15m em que o prazo acaba ("saiu no prazo" = quantas saíram assim)` : ""}.${cart.escada.entCruz ? ` "no cruzamento" (V137) = em vez de entrar no alerta, espera o 1º cruzamento depois dele (a vela que fecha do outro lado da junção vindo de dentro ou do lado de lá) e entra nele.` : ""}${cart.escada.virar ? ` "vira a mão" (V137) = dentro do prazo, a vela que fecha do outro lado da junção fecha a posição e abre a contrária ali, com stop e alvo novos ("viradas" = quantas posições vieram assim); sem isso, a posição segura o cruzamento. O stop ou o alvo encerram a moeda até o alerta seguinte.` : ""}${cart.escada.stopJuncao ? ` "stop na junção" (V137) = o stop fica ${String(cart.escada.stopFaixa).replace(".", ",")}% além da junção e acompanha ela, subindo e descendo (LONG: abaixo da linha de baixo · SHORT: acima da de cima), sem escada.` : ""} Uma posição por moeda${cart.escada.prazos.length ? " (com prazo ela sai antes, e o alerta seguinte da moeda pode entrar mais cedo)" : ""}.${cart.escada.reentH > 0 ? ` Reentrada (V136): se a moeda continua na lista depois que a operação fecha (no stop, no alvo ou no prazo), ela pode entrar de novo a partir de ${cart.escada.reentH}h depois do alerta, do mesmo jeito; e depois a cada ${cart.escada.reentH}h, uma entrada por vez ("reentradas" = quantas foram assim). Sem isso, é uma entrada por alerta.` : ""} Resultado em % do preço (sem alavancagem), com a taxa; R = resultado ÷ distância até o stop inicial (o "risco"). Pior caso na vela: o stop que vale é o das velas anteriores.</i>\n\n`;
     m += `<b>🧺 CARTEIRA</b> (no máximo ${cart.vagas.join(", ")} moeda(s) ligada(s) ao mesmo tempo)\n<i>Condições, conferidas a cada hora fechada: ${condTxt}. ${cartSegura > 0 ? `A moeda só liga quando passa, e a ligada só é desligada depois de ${cartSegura} hora(s) fechada(s) seguidas sem passar (a posição dela fecha na hora)` : "A moeda ligada que deixa de passar é desligada e a posição dela fecha na hora"}; a vaga vai pra próxima que passa, na ordem de cada critério: 📈 maior variação de 24h (alta ou queda) · 🪙 mais volume em unidades · 💵 mais volume em USDT · 🌊 maior ATR (% do preço) · 📏 tendência mais limpa (ER de 24h). Ligada, o robô espera o próximo cruzamento (ou ${retNome}) pra entrar. 🔂 = mão virada no cruzamento (o motor, com stop de ${SAIDA_STOP_ATR} ATR); ${retIco} = mão virada só no ${retNome} (sai no cruzamento contrário ou no stop). "sem carteira" = o robô ligado o tempo todo em todas as moedas; "todas que passam" = sem limite de vagas. "trocas" = quantas vezes uma moeda foi ligada; "ocupação" = média de moedas ligadas por hora.${topTxt}${pdTxt}</i>\n\n`;
     for (const modo of modosAtivos) {
       m += `${MINI_DIVISOR}\n<b>${nome[modo]}</b>\n`;
@@ -7960,6 +8159,16 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
             m += `  ${rotSel(sel)}\n`;
             escVars.forEach((v, vi) => { m += `    ${varRot(v)}: ${escTxt(cartRes[modo].get(sel.chave)![campo][vi], v)}\n`; });
           }
+        }
+        // V137: as operações dos últimos N dias (lista3), na carteira com mais vagas pelo 📈 variação, entrada a qualquer distância, pra conferir no gráfico
+        const vMaxL = Math.max(...cart.vagas), selL = cartSels.find((x) => x.crit === "var" && x.vagas === vMaxL);
+        if (ce.lista && selL) {
+          const desdeL = cartT0 + cartNH * H_MS - ce.lista * 86400000;
+          m += `<b>📋 Operações dos últimos ${ce.lista} dia(s)</b> (${rotSel(selL)}, entrada a qualquer distância · hora do fechamento da vela da entrada · L/S = lado · ↺ = veio de uma virada · ² = reentrada)\n`;
+          escVars.forEach((v, vi) => {
+            const trs = cartRes[modo].get(selL.chave)!.escAl[vi].filter((x) => x.t + TF_MIN * 60000 >= desdeL).sort(escOrdem);
+            m += `  ${varRot(v)}: ${trs.length ? escOpsTxt(trs) : "nenhuma"}\n`;
+          });
         }
       }
       m += "\n";
@@ -8016,7 +8225,7 @@ async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], 
         }
       }
     }
-    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%; so +us = só essa moeda; alerta = só "de alerta" · atrp1 = ATR ≥ 1% · segura6 = só desliga depois de 6 h sem passar · trocas6 = até 6 viradas da faixa em 24h · ritmo4 = até 4 por dia em 3 dias · adx1h25, adx4h25 = tendência no 1h/4h · er3d0.3 = andou reto em 3 dias · escada = entrar sozinho no alerta com stop além da faixa e stop no lucro em degraus, dist4-6, alemfaixa2 e prazo6,8,10 por padrão, além do sem prazo; dist0-6 = só com o preço a até 6% da faixa; prazo0 = só sem prazo; tp20,30 = também com alvo de 20 e 30% do preço; semescada = também só com o stop fixo; semstop = também só com a escada, sem o stop fixo) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
+    m += `\n<i>Compare a soma e o "sem os 3 melhores" nas linhas com o mesmo número de vagas: o critério bom ganha em várias semanas, não numa só. Uso: /juncao 28 carteira top20 vol500k unid30m pd30 rapida144 (as condições são o 1º valor de cada corte; sem nenhuma, vale o top 20; pdvela20 no lugar do pd30 = sem vela de 15m de ±20%; so +us = só essa moeda; alerta = só "de alerta" · atrp1 = ATR ≥ 1% · segura6 = só desliga depois de 6 h sem passar · trocas6 = até 6 viradas da faixa em 24h · ritmo4 = até 4 por dia em 3 dias · adx1h25, adx4h25 = tendência no 1h/4h · er3d0.3 = andou reto em 3 dias · escada = entrar sozinho no alerta com stop além da faixa e stop no lucro em degraus, dist4-6, alemfaixa2 e prazo6,8,10 por padrão, além do sem prazo; dist0-6 = só com o preço a até 6% da faixa; prazo0 = só sem prazo; tp20,30 = também com alvo de 20 e 30% do preço; semescada = também só com o stop fixo; semstop = também só com a escada, sem o stop fixo; escada5em5 = também o stop fixo com a escada de 5 em 5, que começa em +10% → +5%; reentrada24 = a moeda que segue na lista volta a entrar a partir de 24h depois do alerta; entradacruz = também entrando só no próximo cruzamento; virar = também virando a mão nos cruzamentos; stopjuncao = também com o stop acompanhando a junção; sempadrao = sem a escada + stop fixo (só os jeitos pedidos); soalvo = só com alvo; lista3 = as operações dos últimos 3 dias; prazoentrada = o prazo conta da entrada, como até a V136; /juncao reais = nos alertas de verdade do /maovirada) · vagas1,2,4 escolhe quantas moedas · semanas = semana a semana · reteste0.5 muda a distância do reteste (padrão 1%).</i>`;
     await enviarEmPartes(chatId, m);
     return;
   }
@@ -12195,7 +12404,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["🚪 /saida 7", "o robô virando a cada cruzamento", "simula o robô ligado nos alertas, virando a cada cruzamento e com o trailing do motor. Já filtra do seu jeito (moeda 8%+ no dia e ADX 14+ subindo). Extras: tudo (sem filtro), mov15, comp/oport/rev/fundo/topo, ou uma moeda (/saida QNT)"],
     ["🧪 /radarsim 9", "operar os alertas com stop, alvo e prazo", "entra nos alertas de topo, fundo e repique e sai no stop, no alvo ou no prazo. Extras: romp (entra no rompimento da vela), regra, btc, mov. Com cruz usa os alertas de cruzamento: entra junto com o robô e segue com stop, sem virar (viradas 0,1,3 compara deixar virar até N vezes)"],
     ["🔪 /facasim 7", "faca: onde entrar no SHORT", "compara entrar direto, no rompimento da vela ou no rompimento do último fundo, com várias saídas (stop apertado, normal e solto, alvo curto, zero a zero, stop móvel). /facasim 7 foguete faz o mesmo pro LONG"],
-    ["🔀 /juncao 7", "compara as junções da faixa", "recalcula a faixa nas versões clássica, rápida e rápida + 144 (e nas suas, com medias 9,20,21,30) e compara serrote, robô virando e rotina com stop e alvo. Com pura, cada J6 também sozinha, sem a SUPREMA (/juncao 7 pura). Com mov no fim, separa pelo quanto a moeda andou no dia. Com novos, compara a faixa do bot com SuperTrend, faixa com folga, Chandelier e Donchian (/juncao 7 novos). Com filtros, roda o motor com ADX, Choppiness e ER (/juncao 7 novos filtros). Com reteste, compara entrar quando o preço volta perto da faixa com entrar no cruzamento (/juncao 7 reteste). Vai até 30 dias; com semanas, separa cada linha por semana (/juncao 28 semanas). Com moedas, mostra as moedas que mais ganharam e perderam; +us põe uma moeda no teste. Com toque, entra quando o pavio encosta na faixa e volta (/juncao 28 toque). Com rodizio, escolhe as moedas a cada 7 dias olhando só a semana anterior e mede a seguinte (/juncao 28 rodizio). Com atrp0.5, o robô só abre com ATR ≥ 0,5% do preço (/juncao 28 filtros atrp0.5). Com volume, separa o motor pelo volume de 24h em USDT e em unidades da moeda e roda com o filtro de volume (/juncao 28 volume); amostra troca as moedas do alerta por moedas espalhadas pelo volume da BloFin (/juncao 28 volume amostra). Com reteste e cortes de volume, separa o mão virada no reteste por volume (/juncao 28 reteste1 vol100k unid10m,20m,30m,40m). Com top, só conta a moeda que está entre as que mais subiram ou caíram em 24h, como no pool do alerta (/juncao 28 reteste1 top vol100k unid30m). Com carteira e escada, testa entrar sozinho no alerta do mão virada com a moeda a 4–6% da faixa, stop 2% além da faixa e stop no lucro em degraus: +5% trava +1%, +10% trava +5% e depois a cada 5% (/juncao 28 carteira alerta atrp1 segura6 er3d0.15 escada rapida; dist3-7 muda a distância, alemfaixa1.5 o stop e prazo6,8,10 os prazos, que saem no fim do prazo se o stop não pegou; tp20,30,40,50 testa alvos em % do preço, semescada a mesma entrada só com o stop fixo e semstop só com a escada)"],
+    ["🔀 /juncao 7", "compara as junções da faixa", "recalcula a faixa nas versões clássica, rápida e rápida + 144 (e nas suas, com medias 9,20,21,30) e compara serrote, robô virando e rotina com stop e alvo. Com pura, cada J6 também sozinha, sem a SUPREMA (/juncao 7 pura). Com mov no fim, separa pelo quanto a moeda andou no dia. Com novos, compara a faixa do bot com SuperTrend, faixa com folga, Chandelier e Donchian (/juncao 7 novos). Com filtros, roda o motor com ADX, Choppiness e ER (/juncao 7 novos filtros). Com reteste, compara entrar quando o preço volta perto da faixa com entrar no cruzamento (/juncao 7 reteste). Vai até 30 dias; com semanas, separa cada linha por semana (/juncao 28 semanas). Com moedas, mostra as moedas que mais ganharam e perderam; +us põe uma moeda no teste. Com toque, entra quando o pavio encosta na faixa e volta (/juncao 28 toque). Com rodizio, escolhe as moedas a cada 7 dias olhando só a semana anterior e mede a seguinte (/juncao 28 rodizio). Com atrp0.5, o robô só abre com ATR ≥ 0,5% do preço (/juncao 28 filtros atrp0.5). Com volume, separa o motor pelo volume de 24h em USDT e em unidades da moeda e roda com o filtro de volume (/juncao 28 volume); amostra troca as moedas do alerta por moedas espalhadas pelo volume da BloFin (/juncao 28 volume amostra). Com reteste e cortes de volume, separa o mão virada no reteste por volume (/juncao 28 reteste1 vol100k unid10m,20m,30m,40m). Com top, só conta a moeda que está entre as que mais subiram ou caíram em 24h, como no pool do alerta (/juncao 28 reteste1 top vol100k unid30m). Com carteira e escada, testa entrar sozinho no alerta do mão virada com a moeda a 4–6% da faixa, stop 2% além da faixa e stop no lucro em degraus: +5% trava +1%, +10% trava +5% e depois a cada 5% (/juncao 28 carteira alerta atrp1 segura6 er3d0.15 escada rapida; dist3-7 muda a distância, alemfaixa1.5 o stop e prazo6,8,10 os prazos, que saem no fim do prazo se o stop não pegou; tp20,30,40,50 testa alvos em % do preço, semescada a mesma entrada só com o stop fixo, semstop só com a escada, escada5em5 o stop fixo com a escada de 5 em 5 e reentrada24 deixa a moeda que segue na lista entrar de novo 24h depois do alerta; entradacruz, virar e stopjuncao testam o modo automático: entrar só no próximo cruzamento, virar a mão nos cruzamentos e o stop acompanhando a junção; sempadrao e soalvo deixam só os jeitos e os alvos pedidos; lista3 mostra as operações dos últimos 3 dias). Com reais, testa o modo automático nos alertas de verdade do /maovirada (/juncao reais prazo6,8,10 tp30 soalvo semescada sempadrao stopjuncao entradacruz virar)"],
     ["🕯️ /velas 30", "as velas num arquivo", "manda as velas de 15m das moedas do /juncao num arquivo CSV (até 60 dias; moedas60 escolhe quantas moedas), pra testar combinações fora do bot"],
   ], c ? "stop1 · alvo2 · horas 1,2,4 · trail1 · arma1 · be1 · stop0/alvo0 = sem · listas comparam tudo" : "Opções: stop1 = stop a 1 ATR do 15m · alvo2 = alvo em 2R · horas 1,2,4 = prazo · trail1 = stop móvel a 1 ATR · arma1 = o stop móvel só começa depois de +1 ATR · be1 = zero a zero depois de +1 ATR · stop0/alvo0 = sem. Com listas (stop1,1.5) compara todas as combinações. 2 a 3 ATR do 15m ≈ 1 ATR do 1h.");
 
@@ -12571,6 +12780,11 @@ async function tratarRequisicao(req: Request): Promise<Response> {
     if (text === "/juncao" || text.startsWith("/juncao ") || text.startsWith("/juncao@") || text === "/junção" || text.startsWith("/junção ")) {
       // V107: /juncao [dias] [stopX] [alvoX] [horas a,b] — junção clássica x rápida, recalculada nas mesmas velas
       const argsJ = text.split(/\s+/).slice(1);
+      // V137: /juncao reais ... = o modo automático do mão virada nos alertas de verdade (o histórico do /maovirada)
+      if (argsJ.some((a) => /^(real|reais)$/.test(a))) {
+        await comAguarde("🔂 Testando o modo automático nos alertas de verdade do mão virada, aguarde (menos de 1 min)...", () => runEscadaReais(chatId, argsJ));
+        return new Response("ok");
+      }
       const iHJ = argsJ.findIndex((a) => a.startsWith("horas"));
       const diasJ = Math.min(JUNCAO_MAX_DIAS, Math.max(1, Math.round(Number(argsJ.find((a, i) => /^\d+$/.test(a) && !(iHJ >= 0 && argsJ[iHJ] === "horas" && i === iHJ + 1) && !(i > 0 && /^m[eé]dias$/.test(argsJ[i - 1])))) || 7)));
       // V107: stop e alvo aceitam lista (stop1,1.5 alvo1.5,2): compara todas as combinações nas mesmas velas (máx. 6)
