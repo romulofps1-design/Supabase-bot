@@ -1,6 +1,6 @@
 // telegram-bot V142 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V142 (V141 + no /indicador carteira e no /indicador reais: stopvela5,6,7 = mais um jeito de stop, o stop FIXO X% além da vela de 15m antes da vela do alerta — LONG: X% abaixo da mínima dela; SHORT: X% acima da máxima —, parado (não sobe), com os alvos do comando, entrando no alerta e sem prazo; sem "escada" no comando sai só a entrada a qualquer distância, como as variantes do motor V72. Só análise: alertas, o que vai pro motor e o resto do bot não mudam).
+// V142 (V141 + no /indicador carteira e no /indicador reais: stopvela5,6,7 = mais um jeito de stop, o stop FIXO X% além da vela de 15m antes da vela do alerta — LONG: X% abaixo da mínima dela; SHORT: X% acima da máxima —, parado (não sobe), com os alvos do comando, entrando no alerta e sem prazo; sem "escada" no comando sai só a entrada a qualquer distância, como as variantes do motor V72. Só análise: alertas, o que vai pro motor e o resto do bot não mudam). O /indicador reais passa a aceitar a J6 personalizada (medias 10,20,30,40, ou 10,20,30,40|9,20,21), como a carteira.
 // V141 (V140 + V72-PARTE1 do motor — o jeito do stop da mão de alerta em variantes — no /indicador carteira e no /indicador reais: stopgain1 = o stop fixo com o STOP GAIN que garante lucro (a regra da V61: 1% além do Indicador da vela anterior, arma quando esse nível passa do preço de entrada e depois só anda a favor; stopgain0.5 muda a distância), stopgain1semalvo = o mesmo sem alvo, stopjuncao1 = o stop NO INDICADOR a 1%, subindo e descendo desde a entrada (stopindicador1 também), stopjuncao1semalvo = o mesmo sem alvo; com eles as linhas ganham as letras A, B, C e D do motor e, sem "escada" no comando, sai só a entrada a qualquer distância e sem prazo. robo = o robô ligado virando a mão com o anti pump-dump de 2% sozinho x com o stop gain de 1%. Só análise: alertas, o que vai pro motor e o resto do bot não mudam).
 // V140 (V139 + a regra da MÃO DE ALERTA do motor V64 no /indicador carteira escada e no /indicador reais: protecao = mais um jeito de stop, o stop fixo com a proteção no Indicador — com o preço +1% a favor desde a entrada (máxima no LONG, mínima no SHORT), o stop vai pra 1% além do Indicador da vela anterior (LONG: linha de baixo −1%; SHORT: linha de cima +1%), recalculado a cada vela e só a favor; protecao0.5 muda a distância. Com tp30 = stop fixo 2% + alvo 30% + proteção 1%, como o motor opera. Só análise: alertas, o que vai pro motor e o resto do bot não mudam).
 // V139 (V138 + "junção" vira "Indicador" em todos os textos do bot; /indicador faz o mesmo que o /juncao — que continua funcionando, junto com o /junção — e stopindicador = stopjuncao. Os alertas, as análises e o que vai pro motor não mudam; nomes internos e Secrets ficam).
@@ -6614,6 +6614,20 @@ function juncaoSaidasDeArgs(args: string[]): SaidaPctJ[] {
 }
 // V117: só alguns modos da faixa (classica, rapida, rapida144 ou r144), pra rodada pesada caber no limite de processamento da function
 const juncaoModosDeArgs = (args: string[]): string[] => [...new Set(args.map((a) => (/^cl[aá]ssica$/.test(a) ? "classica" : /^r[aá]pida$/.test(a) ? "rapida" : /^(r[aá]pida144|r144)$/.test(a) ? "rapida144" : "")).filter(Boolean))];
+// V142: as J6 personalizadas do comando, como no /indicador (medias 9,20,21,30 ou medias9,20,21,30; vários conjuntos com |): 2 a 8 médias de 2 a
+// 200 períodos cada, até 4 conjuntos (só a J6 muda; a J3 21/50/60 continua na faixa)
+const mediasDeArgs = (args: string[]): number[][] => {
+  const out: number[][] = [];
+  args.forEach((a, i) => {
+    if (!/^m[eé]dias/.test(a)) return;
+    const bruto = /^m[eé]dias$/.test(a) ? args[i + 1] || "" : a.replace(/^m[eé]dias/, "");
+    for (const conj of bruto.split("|")) {
+      const ps = [...new Set(conj.split(/[,;\/]/).map((x) => Math.round(Number(x))).filter((x) => Number.isFinite(x) && x >= 2 && x <= 200))].slice(0, 8);
+      if (ps.length >= 2) out.push(ps);
+    }
+  });
+  return out.slice(0, 4);
+};
 function simPernaPct(d: XVelas, kIni: number, lado: HipLado, entrada: number, atr: number, stopAtr: number, sx: SaidaPctJ, cruzouContra: (k: number) => boolean): number | null {
   if (!(atr > 0) || !(entrada > 0)) return null;
   const long = lado === "long";
@@ -7711,7 +7725,9 @@ async function runEscadaReais(chatId: number | string, args: string[]) {
   const comJanela = args.some((a) => /^dist\d/.test(a));
   const volMin = juncaoFiltrosDeArgs(args)?.find((f) => f.tipo === "vol")?.v ?? FILTRO_VOL_MIN_USDT;
   const ms = juncaoModosDeArgs(args).filter((k): k is Exclude<ModoJ6, "custom"> => k === "classica" || k === "rapida" || k === "rapida144");
-  const modosR: Exclude<ModoJ6, "custom">[] = ms.length ? ms : [MV_FAIXA];
+  // V142: medias 10,20,30,40 (ou 10,20,30,40|9,20,21) = também a J6 personalizada (chaves c0..c3), como na carteira; só ela no comando = só ela
+  const customsR = mediasDeArgs(args);
+  const modosR: string[] = [...(ms.length ? ms : customsR.length ? [] : [MV_FAIXA]), ...customsR.map((_, i) => `c${i}`)];
   const als = alertasReaisDoHist(est.hist);
   if (!als.length) { await sendTelegram(chatId, "🔂 <b>MÃO VIRADA DE VERDADE</b>\n\nO histórico do mão virada ainda não tem nenhum alerta."); return; }
   const agora = Date.now(), TFMS = TF_MIN * 60000;
@@ -7734,6 +7750,7 @@ async function runEscadaReais(chatId: number | string, args: string[]) {
   const fx = (v: number) => String(v).replace(".", ",");
   const janTxt = ce.distMin > 0 ? `a ${fx(ce.distMin)}–${fx(ce.distMax)}%` : `a até ${fx(ce.distMax)}%`;
   const nomeR: Record<string, string> = { classica: "🐢 CLÁSSICA", rapida: "⚡ RÁPIDA", rapida144: "⚡➕ RÁPIDA + 144" };
+  customsR.forEach((c, i) => { nomeR[`c${i}`] = `🧪 PERSONALIZADA ${customsR.length > 1 ? `${i + 1} ` : ""}(J6 = ${c.join("/")}; J3 = 21/50/60)`; }); // V142
   let m = `🔂 <b>MÃO VIRADA DE VERDADE</b> · o modo automático nos alertas reais\n`;
   m += `<i>Cada "ligar" do /maovirada é um alerta, e a moeda fica na lista até o "desligar" (ou até agora). Entrada no fechamento da vela de 15m do alerta (o mão virada roda logo depois da hora fechada; o alerta fora da hora fica com a vela seguinte) se o preço já fecha do outro lado do Indicador, ou na 1ª vela depois que fechar${comJanela ? ` (🪜 = só ${janTxt} do Indicador)` : ""}${ce.entCruz ? `; "no cruzamento" = espera o 1º cruzamento depois do alerta` : ""}. Stop ${fx(ce.stopFaixa)}% além do Indicador (LONG: abaixo da linha de baixo · SHORT: acima da de cima)${ce.stopJuncao ? `; "stop no Indicador" = esse stop acompanha o Indicador, subindo e descendo` : ""}${ce.protecao ? `; "stop fixo + proteção ${fx(ce.protecao)}%" (V140, a regra da mão de alerta do motor V64) = com o preço +${fx(PROT_ARMA_PCT)}% a favor desde a entrada (máxima no LONG, mínima no SHORT), o stop vai pra ${fx(ce.protecao)}% além do Indicador da vela anterior (LONG: linha de baixo · SHORT: linha de cima), de novo a cada vela e só a favor; a vela que arma não usa a proteção (pior caso)` : ""}${ce.v72 ? `; V141, as variantes do motor V72 (a letra na frente): A = só o stop fixo, com alvo · B = o stop fixo + o stop gain que garante lucro (${fx(ce.sg ?? ce.sgSemAlvo ?? 1)}% além do Indicador da vela anterior: arma quando esse nível passa do preço de entrada e depois só anda a favor; "stop gain armou" = em quantas armou, "saiu nele" = quantas fecharam nele) · C = a B sem alvo · D = o stop no Indicador a ${fx(ce.sj ?? ce.sjSemAlvo ?? 1)}%, subindo e descendo desde a entrada (com e sem alvo)` : ""}${ce.sv?.length ? `; V142: "stop fixo X% além da vela antes do alerta" = o stop X% abaixo da mínima (LONG) ou acima da máxima (SHORT) da vela de 15m antes da vela do alerta, parado (não sobe)` : ""}${ce.alvos.length ? `; alvo em % do preço desde a entrada` : ""}; "sem prazo" = sai só no stop${ce.alvos.length ? " ou no alvo" : ""}, e o prazo conta ${ce.prazoEntrada ? "da entrada" : "do alerta (a entrada só vale dentro dele)"}${ce.virar ? `; "vira a mão" = dentro do prazo, o cruzamento contrário fecha a posição e abre a do outro lado (↺); sem isso, a posição segura o cruzamento` : ""}. O stop ou o alvo encerram a moeda até o alerta seguinte${ce.reentH > 0 ? `, ou até ${ce.reentH}h depois do alerta, se ela segue na lista (reentrada, ²)` : ""}. Fica de fora o alerta com volume de 24h abaixo de ${fmtVol(volMin)} USDT. Resultado em % do preço (sem alavancagem), com a taxa. "depois" = quanto o preço andou 6h, 10h e 24h depois do alerta. São poucas amostras: é pra conferir no gráfico, não pra tirar média.</i>\n\n`;
   m += `<b>Alertas</b> (${als.length}; ${okN} no teste)\n`;
@@ -7746,7 +7763,7 @@ async function runEscadaReais(chatId: number | string, args: string[]) {
       if (!d || !meus.length) continue;
       const lig = new Uint8Array(d.c.length);
       for (const x of meus) lig.fill(1, x.a + 1, x.kd + 1);
-      const lin = linhasDeBanda(bandaModo(d.c, modo));
+      const lin = linhasDeBanda(/^c\d+$/.test(modo) ? bandaCustom(d.c, customsR[Number(modo.slice(1))]) : bandaModo(d.c, modo as Exclude<ModoJ6, "custom">)); // V142: a personalizada
       vars.forEach((v, vi) => {
         const modoV: EscModo = { vira: v.vira, cruz: v.cruz, juncao: v.jun, prot: v.prot, sg: v.sg, sf: v.sf, sv: v.sv, doAlerta: !ce.prazoEntrada }; // V140: prot · V141: sg, sf
         if (comJanela) for (const tr of escadaOperacoes(d, lig, lin, 0, ce, true, v.ph, v.alvo, v.esc, v.stop, v.d1, modoV)) esc[vi].push({ ...tr, id });
@@ -7768,7 +7785,8 @@ async function runEscadaReais(chatId: number | string, args: string[]) {
       roboVarsDe(rbR).forEach(([rot, sgP], ri) => { m += `  ${rot}: ${roboResumoTxt(roboR[ri], sgP > 0)}\n`; });
     }
   }
-  m += `\n<i>Uso: /indicador reais prazo6,8,10 tp30 soalvo semescada sempadrao stopindicador protecao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo stopvela5,6,7 robo entradacruz virar reentrada (rapida ou rapida144 escolhe a faixa; V142: stopvela5,6,7 = o stop fixo 5, 6 e 7% além da vela antes do alerta (abaixo da mínima no LONG, acima da máxima no SHORT); V141: "/indicador reais tp30 soalvo semescada sempadrao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo" = as variantes A, B, C e D do motor V72 lado a lado, sem prazo (stopgain0.5 ou stopjuncao2 mudam a distância; prazo6,8 pede prazos); robo = o robô ligado virando a mão com o anti pump-dump de 2% sozinho x com o stop gain de 1%; protecao = o stop fixo com a proteção da mão de alerta, protecao0.5 muda a distância, e "/indicador reais prazo0 tp30 protecao sempadrao" = como o motor V64 opera; dist0-6 também com a entrada só a até 6% do Indicador; vol500k muda o volume mínimo; -zil tira uma moeda; prazoentrada = o prazo conta da entrada).</i>`;
+  if (customsR.length) m += `\n<i>A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo.</i>`; // V142
+  m += `\n<i>Uso: /indicador reais prazo6,8,10 tp30 soalvo semescada sempadrao stopindicador protecao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo stopvela5,6,7 robo entradacruz virar reentrada (rapida ou rapida144 escolhe a faixa; V142: stopvela5,6,7 = o stop fixo 5, 6 e 7% além da vela antes do alerta (abaixo da mínima no LONG, acima da máxima no SHORT); medias 10,20,30,40 (ou 10,20,30,40|9,20,21) = também com a J6 personalizada (a J3 21/50/60 continua); V141: "/indicador reais tp30 soalvo semescada sempadrao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo" = as variantes A, B, C e D do motor V72 lado a lado, sem prazo (stopgain0.5 ou stopjuncao2 mudam a distância; prazo6,8 pede prazos); robo = o robô ligado virando a mão com o anti pump-dump de 2% sozinho x com o stop gain de 1%; protecao = o stop fixo com a proteção da mão de alerta, protecao0.5 muda a distância, e "/indicador reais prazo0 tp30 protecao sempadrao" = como o motor V64 opera; dist0-6 também com a entrada só a até 6% do Indicador; vol500k muda o volume mínimo; -zil tira uma moeda; prazoentrada = o prazo conta da entrada).</i>`;
   await enviarEmPartes(chatId, m);
 }
 async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false, novos: NovoJ[] = [], filtros: FiltroJ[] | null = null, reteste: number | null = null, semanas = false, retesteEmAtr = false, porMoeda = false, extraMoedas: string[] = [], retesteModo: "perto" | "toque" = "perto", rodizio: number | null = null, volume = false, amostra = false, extras: { saidas?: SaidaPctJ[]; soModos?: string[]; carteira?: CarteiraJ; so?: boolean } = {}) {
