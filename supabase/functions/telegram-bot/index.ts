@@ -1,5 +1,6 @@
-// telegram-bot V142 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V143 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V143 (V142 + faixas separadas por função, como o motor V73: MV_FAIXA = a faixa do ROBÔ de mão virada — o lado que sai no alerta 🔂 — e MV_MAO_FAIXA (novo) = a da MÃO DE ALERTA — o lado e a junção (topo/fundo) da entrada que vai pro motor (mvMotorEntradas). As duas aceitam classica, rapida, rapida144 ou a J6 personalizada (lista de 2 a 8 médias de 2 a 200, ex.: MV_FAIXA=9,20,21 e MV_MAO_FAIXA=10,20,30,40; a J3 21/50/60 continua, a conta do bandaCustom). Sem MV_MAO_FAIXA, a mão de alerta segue a MV_FAIXA, e sem as duas vale a rápida + 144 — igual à V142. O alerta da mão de alerta leva a faixa pro motor, que confere com a dele e avisa se for diferente. O /juncao reais sem faixa no comando segue a MV_FAIXA (agora também a lista de médias). /juncao, /indicador e o resto do bot não mudam).
 // V142 (V141 + no /indicador carteira e no /indicador reais: stopvela5,6,7 = mais um jeito de stop, o stop FIXO X% além da vela de 15m antes da vela do alerta — LONG: X% abaixo da mínima dela; SHORT: X% acima da máxima —, parado (não sobe), com os alvos do comando, entrando no alerta e sem prazo; sem "escada" no comando sai só a entrada a qualquer distância, como as variantes do motor V72. Só análise: alertas, o que vai pro motor e o resto do bot não mudam). O /indicador reais passa a aceitar a J6 personalizada (medias 10,20,30,40, ou 10,20,30,40|9,20,21), como a carteira.
 // V141 (V140 + V72-PARTE1 do motor — o jeito do stop da mão de alerta em variantes — no /indicador carteira e no /indicador reais: stopgain1 = o stop fixo com o STOP GAIN que garante lucro (a regra da V61: 1% além do Indicador da vela anterior, arma quando esse nível passa do preço de entrada e depois só anda a favor; stopgain0.5 muda a distância), stopgain1semalvo = o mesmo sem alvo, stopjuncao1 = o stop NO INDICADOR a 1%, subindo e descendo desde a entrada (stopindicador1 também), stopjuncao1semalvo = o mesmo sem alvo; com eles as linhas ganham as letras A, B, C e D do motor e, sem "escada" no comando, sai só a entrada a qualquer distância e sem prazo. robo = o robô ligado virando a mão com o anti pump-dump de 2% sozinho x com o stop gain de 1%. Só análise: alertas, o que vai pro motor e o resto do bot não mudam).
 // V140 (V139 + a regra da MÃO DE ALERTA do motor V64 no /indicador carteira escada e no /indicador reais: protecao = mais um jeito de stop, o stop fixo com a proteção no Indicador — com o preço +1% a favor desde a entrada (máxima no LONG, mínima no SHORT), o stop vai pra 1% além do Indicador da vela anterior (LONG: linha de baixo −1%; SHORT: linha de cima +1%), recalculado a cada vela e só a favor; protecao0.5 muda a distância. Com tp30 = stop fixo 2% + alvo 30% + proteção 1%, como o motor opera. Só análise: alertas, o que vai pro motor e o resto do bot não mudam).
@@ -26,7 +27,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V142"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V143"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -1785,10 +1786,38 @@ const MV_VAGAS = Math.max(1, Math.min(10, Math.round(numEnv("MV_VAGAS", "2"))));
 const MV_SEGURA_H = Math.max(0, Math.min(48, Math.round(numEnv("MV_SEGURA_H", "6"))));
 const MV_CRITERIO: "var" | "atr" = (Deno.env.get("MV_CRITERIO") || "var").trim().toLowerCase() === "atr" ? "atr" : "var";
 // V125: a faixa do robô mão virada (o lado LONG/SHORT que sai no alerta). Padrão: rápida + 144, que vira menos que a rápida dos alertas.
-// Use o mesmo valor do J6_MODO do motor do robô. O cenário (de alerta e ATR) não depende da faixa.
-const MV_FAIXA_ENV = (Deno.env.get("MV_FAIXA") || "rapida144").trim().toLowerCase().replace(/[\s+_-]/g, "");
-const MV_FAIXA: "classica" | "rapida" | "rapida144" = MV_FAIXA_ENV === "classica" ? "classica" : MV_FAIXA_ENV === "rapida" ? "rapida" : "rapida144";
-const mvFaixaNome = () => (MV_FAIXA === "rapida144" ? "rápida + 144" : MV_FAIXA === "rapida" ? "rápida" : "clássica");
+// O cenário (de alerta e ATR) não depende da faixa.
+// V143: as faixas separadas por função, como o motor V73 (a faixa dos robôs e a da mão de alerta, no site):
+//   MV_FAIXA     = a do ROBÔ de mão virada: o lado do alerta 🔂 (testada nos 28 dias: 9,20,21). O mesmo valor da faixa dos robôs no site.
+//   MV_MAO_FAIXA = a da MÃO DE ALERTA: o lado e a junção (topo/fundo) da entrada que vai pro motor (testada: 10,20,30,40). O mesmo valor da faixa da
+//                  mão de alerta no site. Sem ela, segue a MV_FAIXA (como na V142).
+// Cada uma: classica, rapida, rapida144 (144, rapida+144) ou a J6 personalizada, 2 a 8 médias de 2 a 200 períodos (9,20,21 ou medias 9,20,21; a J3 21/50/60
+// continua: a conta do bandaCustom do /juncao). Sem o Secret = como na V142 (rápida + 144). Valor que não dá pra ler = o padrão, com aviso no log.
+type MvFaixa = { chave: string; nome: string; modo: "classica" | "rapida" | "rapida144" | null; per: number[] };
+const MV_FAIXAS_FIXAS: Record<"classica" | "rapida" | "rapida144", MvFaixa> = {
+  classica: { chave: "classica", nome: "clássica", modo: "classica", per: [20, 21, 50, 60, 100, 200] },
+  rapida: { chave: "rapida", nome: "rápida", modo: "rapida", per: [9, 20, 21, 50, 60] },
+  rapida144: { chave: "rapida144", nome: "rápida + 144", modo: "rapida144", per: [9, 20, 21, 50, 60, 144] },
+};
+// a mesma regra da faixa do motor V73 (e do site): repetida conta uma vez; mais de um conjunto (|), número quebrado ou fora de 2..200 = não dá pra ler
+function mvFaixaDe(secret: string, padrao: MvFaixa): MvFaixa {
+  const bruto = (Deno.env.get(secret) || "").trim();
+  if (!bruto) return padrao;
+  const s = bruto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[\s+_-]/g, "");
+  if (s === "classica" || s === "rapida") return MV_FAIXAS_FIXAS[s];
+  if (s === "rapida144" || s === "144" || s === "r144") return MV_FAIXAS_FIXAS.rapida144;
+  const lista = s.replace(/^medias?/, "");
+  if (/^\d+([,;/]\d+)*$/.test(lista)) {
+    const per = [...new Set(lista.split(/[,;/]/).map(Number))];
+    if (per.length >= 2 && per.length <= 8 && per.every((p) => Number.isInteger(p) && p >= 2 && p <= 200)) return { chave: per.join(","), nome: `J6 ${per.join("/")}`, modo: null, per };
+  }
+  console.log(`⚠️ ${secret}="${bruto.slice(0, 40)}" não é classica, rapida, rapida144 nem uma lista de 2 a 8 médias de 2 a 200 (ex.: 9,20,21) - usando ${padrao.nome}`);
+  return padrao;
+}
+const MV_FAIXA: MvFaixa = mvFaixaDe("MV_FAIXA", MV_FAIXAS_FIXAS.rapida144);
+const MV_MAO_FAIXA: MvFaixa = mvFaixaDe("MV_MAO_FAIXA", MV_FAIXA);
+const mvFaixaNome = () => MV_FAIXA.nome;
+const mvBanda = (closes: number[], fx: MvFaixa) => (fx.modo ? bandaModo(closes, fx.modo) : bandaCustom(closes, fx.per)); // V143
 // V127: andou reto em 3 dias (ER de 72h ≥ MV_ER3D; 0 desliga). No /juncao carteira (28 dias, rápida + 144): com 1 moeda o trade foi de +0.08R pra
 // +0.36R, e ligando todas as que passam foi de −0.06R pra +0.10R.
 const MV_ER3D = Math.max(0, Math.min(1, numEnv("MV_ER3D", "0.15")));
@@ -1799,6 +1828,7 @@ const MV_DETALHES = (Deno.env.get("MV_DETALHES") || "0").trim() === "1";
 // de lá. A entrada é a do /juncao (entrada no alerta, a qualquer distância): a 1ª vela de 15m fechada, da do alerta em diante, com o preço fora da faixa
 // do robô (MV_FAIXA), enquanto a moeda segue recomendada; uma vez por "ligar" (sem reentrada). Vai com o topo e o fundo da faixa nessa vela (a junção
 // do stop). Precisa de MOTOR_URL e MOTOR_ALERTA_SECRET (os mesmos do modo conservador). MV_MOTOR=0 desliga o envio.
+// V143: a faixa dessa entrada é a da mão de alerta (MV_MAO_FAIXA; sem ela, a MV_FAIXA), e ela vai junto pro motor V73 conferir com a dele.
 const MV_MOTOR = (Deno.env.get("MV_MOTOR") || "1").trim() !== "0";
 const MV_ROW = "_MAO_VIRADA_";
 type MvCen = { pct: number; adx: number; atrP: number; er3d?: number; lado: "long" | "short" | null; passa: boolean };
@@ -1809,7 +1839,7 @@ type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number;
 type MvHist = { i: string; a: "liga" | "desliga"; t: number; pct: number | null; adx: number | null; atrP: number | null; er3d?: number | null };
 type MvEstado = { hora: number; lig: MvLig[]; cands: { i: string; pct: number; adx: number; atrP: number; er3d?: number }[]; hist: MvHist[] };
 const MV_HIST_MAX = 200;
-const mvRegraTxt = () => `de alerta (|24h| ≥ ${MV_MOV}% e ADX ≥ ${MV_ADX}) e ATR ≥ ${MV_ATR_MIN}% do preço${MV_ER3D > 0 ? ` e andou reto em 3 dias (≥ ${MV_ER3D})` : ""} · até ${MV_VAGAS} moeda(s), ${MV_CRITERIO === "atr" ? "a de maior ATR" : "a que mais andou em 24h"} primeiro · desligar depois de ${MV_SEGURA_H} h fora do cenário · lado pela faixa ${mvFaixaNome()}`;
+const mvRegraTxt = () => `de alerta (|24h| ≥ ${MV_MOV}% e ADX ≥ ${MV_ADX}) e ATR ≥ ${MV_ATR_MIN}% do preço${MV_ER3D > 0 ? ` e andou reto em 3 dias (≥ ${MV_ER3D})` : ""} · até ${MV_VAGAS} moeda(s), ${MV_CRITERIO === "atr" ? "a de maior ATR" : "a que mais andou em 24h"} primeiro · desligar depois de ${MV_SEGURA_H} h fora do cenário · lado pela faixa ${mvFaixaNome()}${MV_MAO_FAIXA.chave !== MV_FAIXA.chave ? ` · entrada da mão de alerta pela faixa ${MV_MAO_FAIXA.nome}` : ""}`; // V143
 // cenário de uma moeda: variação de 24h do ticker, ADX(14) e ATR(14) da última vela de 15m fechada
 function mvCenario(info: InfoFiltravel, pct: number): MvCen {
   const atrP = info.preco > 0 && info.atr > 0 ? (info.atr / info.preco) * 100 : NaN;
@@ -1820,11 +1850,12 @@ function mvCenario(info: InfoFiltravel, pct: number): MvCen {
 }
 const mvNome = (inst: string) => inst.replace(/-USDT$/, "");
 // V125: o lado da faixa do robô (MV_FAIXA) na última vela fechada; se for a mesma faixa do bot (J6_MODO), usa a conta que o alerta já fez
+// V143: a faixa do robô pode ser a lista de médias (bandaCustom)
 async function mvLado(inst: string, info: InfoFiltravel): Promise<"long" | "short" | null> {
-  if (MV_FAIXA === (J6_R144 ? "rapida144" : J6_RAPIDA ? "rapida" : "classica")) return ladoAtual(info);
+  if (MV_FAIXA.modo && MV_FAIXA.modo === (J6_R144 ? "rapida144" : J6_RAPIDA ? "rapida" : "classica")) return ladoAtual(info);
   const d = await xCandles(inst, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
   if (!d || d.c.length < 200) return null;
-  const lin = linhasDeBanda(bandaModo(d.c, MV_FAIXA)), k = d.c.length - 1;
+  const lin = linhasDeBanda(mvBanda(d.c, MV_FAIXA)), k = d.c.length - 1;
   return d.c[k] > lin.topo[k] ? "long" : d.c[k] < lin.fundo[k] ? "short" : null;
 }
 const mvCenTxt = (c: { pct: number; adx: number; atrP: number; er3d?: number | null }) => `${c.pct >= 0 ? "+" : ""}${c.pct.toFixed(1)}% em 24h, ADX ${Number.isFinite(c.adx) ? Math.round(c.adx) : "?"}, ATR ${Number.isFinite(c.atrP) ? c.atrP.toFixed(1) : "?"}%${typeof c.er3d === "number" && Number.isFinite(c.er3d) ? `, reto em 3 dias ${c.er3d.toFixed(2)}` : ""}`;
@@ -1905,7 +1936,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   return linhas;
 }
 // V138: manda pro motor a entrada da MÃO DE ALERTA das moedas recomendadas que ainda não foram (uma vez por "ligar"). Confere cada vela de 15m nova:
-// acha a 1ª vela, da do alerta em diante, que fechou fora da faixa do robô (MV_FAIXA). Sendo a última fechada (ou a anterior, com a última ainda do
+// acha a 1ª vela, da do alerta em diante, que fechou fora da faixa do robô (MV_FAIXA; V143: a da mão de alerta, MV_MAO_FAIXA). Sendo a última fechada (ou a anterior, com a última ainda do
 // mesmo lado: até uma vela de atraso), manda o lado, o preço de agora, o ATR(14) e a junção (topo e fundo da faixa) dessa última vela; mais atrasada que
 // isso, não manda (a entrada do teste já passou). Falha de rede tenta de novo na rodada seguinte (até 3 vezes). Roda dentro da trava do cron.
 async function mvMotorEntradas(SB: any, agoraMs = Date.now()): Promise<number> {
@@ -1920,7 +1951,7 @@ async function mvMotorEntradas(SB: any, agoraMs = Date.now()): Promise<number> {
     if (!d || d.c.length < 200) continue; // sem velas agora: tenta na próxima rodada
     const k = d.c.length - 1, velaAlerta = Math.floor(l.desde / TFMS) * TFMS - TFMS;
     if (d.t[k] < velaAlerta || (l.motT ?? 0) >= d.t[k]) continue; // a fonte ainda não publicou a vela nova
-    const lin = linhasDeBanda(bandaModo(d.c, MV_FAIXA));
+    const lin = linhasDeBanda(mvBanda(d.c, MV_MAO_FAIXA)); // V143: a faixa da mão de alerta (o lado e a junção da entrada)
     const ladoEm = (i: number): "long" | "short" | null => (d.c[i] > lin.topo[i] ? "long" : d.c[i] < lin.fundo[i] ? "short" : null);
     const iA = Math.max(1, d.t.findIndex((t) => t >= velaAlerta));
     let f = -1;
@@ -1935,11 +1966,11 @@ async function mvMotorEntradas(SB: any, agoraMs = Date.now()): Promise<number> {
     }
     const topo = lin.topo[k], fundo = lin.fundo[k], atr = atrSerie(d.h, d.l, d.c, 14)[k];
     const vivo = await precoAoVivo(l.i).catch(() => null);
-    const r = await enviarAlertaMotorDet({ inst: l.i, side: lado!, tipo: "maovirada", preco: vivo ?? d.c[k], atr, nota: null, vol: volDe(l.i)?.u ?? null, juncao: { topo, fundo } });
+    const r = await enviarAlertaMotorDet({ inst: l.i, side: lado!, tipo: "maovirada", preco: vivo ?? d.c[k], atr, nota: null, vol: volDe(l.i)?.u ?? null, juncao: { topo, fundo, faixa: MV_MAO_FAIXA.chave } });
     if (r.st === "falhou" && (l.motFalhas ?? 0) < 2) { l.motFalhas = (l.motFalhas ?? 0) + 1; l.motT = d.t[k] - 1; continue; } // tenta de novo na próxima rodada
     l.mot = agoraMs; l.motLado = lado!; l.motRes = r.st === "ok" ? (r.gravados ? "ok" : "naogravou") : r.st === "sem" ? "falhou" : r.st; l.motMsg = r.msg;
     if (l.motRes === "ok") enviados++;
-    console.log(`🔂 mão de alerta: ${l.i} ${lado} -> motor: ${l.motRes}${r.msg ? ` (${r.msg})` : ""} | vela ${new Date(d.t[k]).toISOString()} | Indicador ${fundo} a ${topo}`);
+    console.log(`🔂 mão de alerta: ${l.i} ${lado} -> motor: ${l.motRes}${r.msg ? ` (${r.msg})` : ""} | vela ${new Date(d.t[k]).toISOString()} | Indicador ${fundo} a ${topo} (faixa ${MV_MAO_FAIXA.chave})`);
   }
   if (mudou) await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est) });
   return enviados;
@@ -1967,7 +1998,7 @@ async function runMaoVirada(chatId: number | string) {
   if (fora.length) m += `<b>Também passavam</b> (sem vaga)\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvPub(c)}\n`).join("")}`;
   const ult = est.hist.slice(-10).reverse();
   if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvPub({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN, er3d: h.er3d ?? null })})` : ""}\n`).join("")}`;
-  if (MV_DETALHES) m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (rapida144, rapida ou classica: a faixa do robô); MV_MOTOR=0 não manda o "ligar" pra mão de alerta do motor; MV_ON=0 desliga o alerta.</i>`;
+  if (MV_DETALHES) m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr), MV_FAIXA (a faixa do robô: rapida144, rapida, classica ou a lista de médias, ex.: 9,20,21), MV_MAO_FAIXA (a da entrada da mão de alerta; vazia = a MV_FAIXA); MV_MOTOR=0 não manda o "ligar" pra mão de alerta do motor; MV_ON=0 desliga o alerta.</i>`;
   await sendTelegram(chatId, m);
 }
 // ===== V107: humor do BTC na hora do alerta (pra separar resultado por regime de mercado) =====
@@ -4342,14 +4373,15 @@ const motorHeaders = (extra: Record<string, string>): Record<string, string> => 
 // V130: devolve o que aconteceu: "ok" (o motor gravou), "recusou" (o motor ou a conferência daqui recusaram: não adianta mandar de novo),
 // "falhou" (rede/timeout/erro 5xx: dá pra tentar de novo) ou "sem" (faltam os Secrets do motor).
 // V138: juncao = topo e fundo da faixa na vela da entrada (só o alerta do mão virada, tipo "maovirada": o motor manda pra mão de alerta).
-type AlertaMotor = { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null; juncao?: { topo: number; fundo: number } };
+// V143: juncao.faixa = a faixa dessa junção (MV_MAO_FAIXA): o motor V73 confere com a faixa da mão de alerta dele (o V72 ignora o campo).
+type AlertaMotor = { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null; juncao?: { topo: number; fundo: number; faixa?: string } };
 async function enviarAlertaMotorDet(o: AlertaMotor): Promise<{ st: "ok" | "recusou" | "falhou" | "sem"; gravados?: number; msg?: string }> {
   if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) return { st: "sem" };
   if (!(o.preco > 0) || !(o.atr > 0)) { console.log(`⚠️ motor: ${o.inst} sem preço/ATR válido, não mandei`); return { st: "recusou", msg: "sem preço/ATR válido" }; }
   try {
     const r = await fetch(MOTOR_URL, {
       method: "POST", headers: motorHeaders({ "x-alerta-secret": MOTOR_ALERTA_SECRET }),
-      body: JSON.stringify({ action: "alerta", instId: o.inst, side: o.side, tipo: o.tipo, preco: o.preco, atr: o.atr, nota: o.nota, vol_usdt: o.vol, ...(o.juncao ? { juncao_topo: o.juncao.topo, juncao_fundo: o.juncao.fundo } : {}) }),
+      body: JSON.stringify({ action: "alerta", instId: o.inst, side: o.side, tipo: o.tipo, preco: o.preco, atr: o.atr, nota: o.nota, vol_usdt: o.vol, ...(o.juncao ? { juncao_topo: o.juncao.topo, juncao_fundo: o.juncao.fundo, ...(o.juncao.faixa ? { faixa: o.juncao.faixa } : {}) } : {}) }),
       signal: AbortSignal.timeout(10000),
     });
     const j: any = await r.json().catch(() => null);
@@ -7727,7 +7759,10 @@ async function runEscadaReais(chatId: number | string, args: string[]) {
   const ms = juncaoModosDeArgs(args).filter((k): k is Exclude<ModoJ6, "custom"> => k === "classica" || k === "rapida" || k === "rapida144");
   // V142: medias 10,20,30,40 (ou 10,20,30,40|9,20,21) = também a J6 personalizada (chaves c0..c3), como na carteira; só ela no comando = só ela
   const customsR = mediasDeArgs(args);
-  const modosR: string[] = [...(ms.length ? ms : customsR.length ? [] : [MV_FAIXA]), ...customsR.map((_, i) => `c${i}`)];
+  // V143: sem faixa no comando = a do robô (MV_FAIXA), que agora pode ser a lista de médias (aí entra como a personalizada c0)
+  const padraoR = !ms.length && !customsR.length ? MV_FAIXA : null;
+  if (padraoR && !padraoR.modo) customsR.push(padraoR.per);
+  const modosR: string[] = [...(ms.length ? ms : customsR.length ? [] : [padraoR!.modo!]), ...customsR.map((_, i) => `c${i}`)];
   const als = alertasReaisDoHist(est.hist);
   if (!als.length) { await sendTelegram(chatId, "🔂 <b>MÃO VIRADA DE VERDADE</b>\n\nO histórico do mão virada ainda não tem nenhum alerta."); return; }
   const agora = Date.now(), TFMS = TF_MIN * 60000;
@@ -7751,6 +7786,7 @@ async function runEscadaReais(chatId: number | string, args: string[]) {
   const janTxt = ce.distMin > 0 ? `a ${fx(ce.distMin)}–${fx(ce.distMax)}%` : `a até ${fx(ce.distMax)}%`;
   const nomeR: Record<string, string> = { classica: "🐢 CLÁSSICA", rapida: "⚡ RÁPIDA", rapida144: "⚡➕ RÁPIDA + 144" };
   customsR.forEach((c, i) => { nomeR[`c${i}`] = `🧪 PERSONALIZADA ${customsR.length > 1 ? `${i + 1} ` : ""}(J6 = ${c.join("/")}; J3 = 21/50/60)`; }); // V142
+  if (padraoR && !padraoR.modo) nomeR.c0 = `🤖 A FAIXA DO ROBÔ (MV_FAIXA: J6 = ${padraoR.per.join("/")}; J3 = 21/50/60)`; // V143: a padrão, sem faixa no comando
   let m = `🔂 <b>MÃO VIRADA DE VERDADE</b> · o modo automático nos alertas reais\n`;
   m += `<i>Cada "ligar" do /maovirada é um alerta, e a moeda fica na lista até o "desligar" (ou até agora). Entrada no fechamento da vela de 15m do alerta (o mão virada roda logo depois da hora fechada; o alerta fora da hora fica com a vela seguinte) se o preço já fecha do outro lado do Indicador, ou na 1ª vela depois que fechar${comJanela ? ` (🪜 = só ${janTxt} do Indicador)` : ""}${ce.entCruz ? `; "no cruzamento" = espera o 1º cruzamento depois do alerta` : ""}. Stop ${fx(ce.stopFaixa)}% além do Indicador (LONG: abaixo da linha de baixo · SHORT: acima da de cima)${ce.stopJuncao ? `; "stop no Indicador" = esse stop acompanha o Indicador, subindo e descendo` : ""}${ce.protecao ? `; "stop fixo + proteção ${fx(ce.protecao)}%" (V140, a regra da mão de alerta do motor V64) = com o preço +${fx(PROT_ARMA_PCT)}% a favor desde a entrada (máxima no LONG, mínima no SHORT), o stop vai pra ${fx(ce.protecao)}% além do Indicador da vela anterior (LONG: linha de baixo · SHORT: linha de cima), de novo a cada vela e só a favor; a vela que arma não usa a proteção (pior caso)` : ""}${ce.v72 ? `; V141, as variantes do motor V72 (a letra na frente): A = só o stop fixo, com alvo · B = o stop fixo + o stop gain que garante lucro (${fx(ce.sg ?? ce.sgSemAlvo ?? 1)}% além do Indicador da vela anterior: arma quando esse nível passa do preço de entrada e depois só anda a favor; "stop gain armou" = em quantas armou, "saiu nele" = quantas fecharam nele) · C = a B sem alvo · D = o stop no Indicador a ${fx(ce.sj ?? ce.sjSemAlvo ?? 1)}%, subindo e descendo desde a entrada (com e sem alvo)` : ""}${ce.sv?.length ? `; V142: "stop fixo X% além da vela antes do alerta" = o stop X% abaixo da mínima (LONG) ou acima da máxima (SHORT) da vela de 15m antes da vela do alerta, parado (não sobe)` : ""}${ce.alvos.length ? `; alvo em % do preço desde a entrada` : ""}; "sem prazo" = sai só no stop${ce.alvos.length ? " ou no alvo" : ""}, e o prazo conta ${ce.prazoEntrada ? "da entrada" : "do alerta (a entrada só vale dentro dele)"}${ce.virar ? `; "vira a mão" = dentro do prazo, o cruzamento contrário fecha a posição e abre a do outro lado (↺); sem isso, a posição segura o cruzamento` : ""}. O stop ou o alvo encerram a moeda até o alerta seguinte${ce.reentH > 0 ? `, ou até ${ce.reentH}h depois do alerta, se ela segue na lista (reentrada, ²)` : ""}. Fica de fora o alerta com volume de 24h abaixo de ${fmtVol(volMin)} USDT. Resultado em % do preço (sem alavancagem), com a taxa. "depois" = quanto o preço andou 6h, 10h e 24h depois do alerta. São poucas amostras: é pra conferir no gráfico, não pra tirar média.</i>\n\n`;
   m += `<b>Alertas</b> (${als.length}; ${okN} no teste)\n`;
@@ -7785,8 +7821,9 @@ async function runEscadaReais(chatId: number | string, args: string[]) {
       roboVarsDe(rbR).forEach(([rot, sgP], ri) => { m += `  ${rot}: ${roboResumoTxt(roboR[ri], sgP > 0)}\n`; });
     }
   }
-  if (customsR.length) m += `\n<i>A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo.</i>`; // V142
-  m += `\n<i>Uso: /indicador reais prazo6,8,10 tp30 soalvo semescada sempadrao stopindicador protecao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo stopvela5,6,7 robo entradacruz virar reentrada (rapida ou rapida144 escolhe a faixa; V142: stopvela5,6,7 = o stop fixo 5, 6 e 7% além da vela antes do alerta (abaixo da mínima no LONG, acima da máxima no SHORT); medias 10,20,30,40 (ou 10,20,30,40|9,20,21) = também com a J6 personalizada (a J3 21/50/60 continua); V141: "/indicador reais tp30 soalvo semescada sempadrao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo" = as variantes A, B, C e D do motor V72 lado a lado, sem prazo (stopgain0.5 ou stopjuncao2 mudam a distância; prazo6,8 pede prazos); robo = o robô ligado virando a mão com o anti pump-dump de 2% sozinho x com o stop gain de 1%; protecao = o stop fixo com a proteção da mão de alerta, protecao0.5 muda a distância, e "/indicador reais prazo0 tp30 protecao sempadrao" = como o motor V64 opera; dist0-6 também com a entrada só a até 6% do Indicador; vol500k muda o volume mínimo; -zil tira uma moeda; prazoentrada = o prazo conta da entrada).</i>`;
+  if (customsR.length && !padraoR) m += `\n<i>A personalizada é um teste: só a J6 muda (a J3 21/50/60 continua na faixa); o bot e o motor não têm esse modo.</i>`; // V142
+  else if (customsR.length) m += `\n<i>Sem faixa no comando = a faixa do robô (MV_FAIXA). Só a J6 muda (a J3 21/50/60 continua na faixa).</i>`; // V143
+  m += `\n<i>Uso: /indicador reais prazo6,8,10 tp30 soalvo semescada sempadrao stopindicador protecao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo stopvela5,6,7 robo entradacruz virar reentrada (rapida ou rapida144 escolhe a faixa; V142: stopvela5,6,7 = o stop fixo 5, 6 e 7% além da vela antes do alerta (abaixo da mínima no LONG, acima da máxima no SHORT); medias 10,20,30,40 (ou 10,20,30,40|9,20,21) = também com a J6 personalizada (a J3 21/50/60 continua); V141: "/indicador reais tp30 soalvo semescada sempadrao stopgain1 stopgain1semalvo stopjuncao1 stopjuncao1semalvo" = as variantes A, B, C e D do motor V72 lado a lado, sem prazo (stopgain0.5 ou stopjuncao2 mudam a distância; prazo6,8 pede prazos); robo = o robô ligado virando a mão com o anti pump-dump de 2% sozinho x com o stop gain de 1%; protecao = o stop fixo com a proteção da mão de alerta, protecao0.5 muda a distância, e "/indicador reais prazo0 tp30 protecao sempadrao" = como o motor V64 opera; dist0-6 também com a entrada só a até 6% do Indicador; vol500k muda o volume mínimo; -zil tira uma moeda; prazoentrada = o prazo conta da entrada; V143: sem faixa no comando = a do robô, MV_FAIXA, que agora aceita a lista de médias — e a J6 personalizada também vale no bot (MV_FAIXA, MV_MAO_FAIXA) e no motor V73 (a faixa do robô e a da mão de alerta, no site)).</i>`;
   await enviarEmPartes(chatId, m);
 }
 async function runJuncao(chatId: number | string, dias: number, cfgs: SimCfg[], horas: number[], customs: number[][] = [], porMov = false, pura = false, novos: NovoJ[] = [], filtros: FiltroJ[] | null = null, reteste: number | null = null, semanas = false, retesteEmAtr = false, porMoeda = false, extraMoedas: string[] = [], retesteModo: "perto" | "toque" = "perto", rodizio: number | null = null, volume = false, amostra = false, extras: { saidas?: SaidaPctJ[]; soModos?: string[]; carteira?: CarteiraJ; so?: boolean } = {}) {
