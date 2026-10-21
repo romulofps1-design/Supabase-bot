@@ -1,6 +1,6 @@
 // telegram-bot V145 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
-// V145 (V144 + planos de acesso: o modo "Novato" virou "Premium" (tudo liberado, pra admin e pros IDs do Secret ALLOWED_CHAT_IDS) e o "Experiente" virou "Free" (Secret novo FREE_CHAT_IDS): o Free só recebe os alertas proativos de mão virada, notícia e agenda; qualquer comando ou botão responde "Você não tem autorização, entre em contato com o administrador!". O plano vem dos Secrets, não é mais escolhido com /modo; o texto compacto do antigo Experiente saiu de uso).
+// V145 (V144 + planos de acesso: o modo "Novato" virou "Premium" (tudo liberado, pra admin e pros IDs do Secret ALLOWED_CHAT_IDS) e o "Experiente" virou "Free" (Secret novo FREE_CHAT_IDS): o Free só recebe os alertas proativos de mão virada, notícia e agenda; qualquer comando (exceto o /modo, que mostra o plano) ou botão responde "Você não tem autorização, entre em contato com o administrador!". O plano vem dos Secrets, não é mais escolhido com /modo; o texto compacto do antigo Experiente saiu de uso).
 // V144 (V143 + motor V73.1: as faixas padrão viram as testadas — sem o Secret, MV_FAIXA = 9,20,21 (o robô de mão virada e a virada da mão de alerta) e MV_MAO_FAIXA = 10,20,30,40 (a entrada da mão de alerta); antes eram rápida + 144 e a mão de alerta seguia a MV_FAIXA. O Secret continua valendo por cima. O chat não mostra mais a faixa do robô nem a da mão de alerta, só "Indicador" (o valor fica no log): o /maovirada com MV_DETALHES=1 e o /indicador reais sem faixa no comando ("🤖 O INDICADOR DO ROBÔ"). A OPORTUNIDADE que vai pro motor (modo conservador) passa a ser sempre no Indicador CLÁSSICO, no reteste, seja qual for o J6_MODO, e vai com faixa "classica" (o motor V73.1 recusa oportunidade de outro Indicador); com OPORT_MOTOR_ENTRADA=cruzamento ela vai com a faixa do J6_MODO e o motor só aceita a clássica. Os alertas, as análises e o resto do bot não mudam).
 // V143 (V142 + faixas separadas por função, como o motor V73: MV_FAIXA = a faixa do ROBÔ de mão virada — o lado que sai no alerta 🔂 — e MV_MAO_FAIXA (novo) = a da MÃO DE ALERTA — o lado e a junção (topo/fundo) da entrada que vai pro motor (mvMotorEntradas). As duas aceitam classica, rapida, rapida144 ou a J6 personalizada (lista de 2 a 8 médias de 2 a 200, ex.: MV_FAIXA=9,20,21 e MV_MAO_FAIXA=10,20,30,40; a J3 21/50/60 continua, a conta do bandaCustom). Sem MV_MAO_FAIXA, a mão de alerta segue a MV_FAIXA, e sem as duas vale a rápida + 144 — igual à V142. O alerta da mão de alerta leva a faixa pro motor, que confere com a dele e avisa se for diferente. O /juncao reais sem faixa no comando segue a MV_FAIXA (agora também a lista de médias). /juncao, /indicador e o resto do bot não mudam).
 // V142 (V141 + no /indicador carteira e no /indicador reais: stopvela5,6,7 = mais um jeito de stop, o stop FIXO X% além da vela de 15m antes da vela do alerta — LONG: X% abaixo da mínima dela; SHORT: X% acima da máxima —, parado (não sobe), com os alvos do comando, entrando no alerta e sem prazo; sem "escada" no comando sai só a entrada a qualquer distância, como as variantes do motor V72. Só análise: alertas, o que vai pro motor e o resto do bot não mudam). O /indicador reais passa a aceitar a J6 personalizada (medias 10,20,30,40, ou 10,20,30,40|9,20,21), como a carteira.
@@ -161,6 +161,8 @@ const WATCH_REPETIR = (Deno.env.get("WATCH_REPETIR") || "1") !== "0";
 // V72: o aviso de "cruzou CONTRA" (ACOMP_) some em 5 min por padrão, mais rápido que o auto-apagar geral (15 min) —
 // é um aviso informativo, e com WATCH_REPETIR ligado pode chegar de novo a cada virada; não precisa ficar muito tempo.
 const ACOMP_AUTOAPAGAR_MIN = numEnv("ACOMP_AUTOAPAGAR_MIN", "5");
+// V145: ACOMP_AVISO=0 desliga a MENSAGEM de "cruzou CONTRA" (padrão 1 = avisa). A virada continua sendo registrada em silêncio, igual às moedas que não importam pro chat.
+const ACOMP_AVISO_ON = (Deno.env.get("ACOMP_AVISO") ?? "1").trim() !== "0";
 // V74: intervalo mínimo entre dois avisos de "cruzou CONTRA" da MESMA moeda no mesmo chat (padrão 0 = desligado: aviso toda vez que cruza, o que também serve de sinal de moeda lateral; ligue com ACOMP_INTERVALO_MIN=30, por ex.).
 // Evita spam em moeda picotada que cruza toda hora. Guardado no Supabase (a function serverless não guarda memória entre rodadas).
 const ACOMP_INTERVALO_MIN = numEnv("ACOMP_INTERVALO_MIN", "30"); // V82: antes 0 (sem intervalo). O 1º 🔁 de uma moeda sai na hora; o seguinte só depois do intervalo e se ela AINDA estiver contra (corta o vai-e-vem em cima da linha).
@@ -558,7 +560,30 @@ async function getFuturesPairs(): Promise<string[]> {
   } catch (e) { console.log(`⚠️ erro instrumentos (${e}), usando FALLBACK_PAIRS`); }
   return FALLBACK_PAIRS;
 }
-type Botao = { text: string; callback_data?: string; url?: string };
+type Botao = { text: string; callback_data?: string; url?: string; web_app?: { url: string } };
+// V145: botão "🎨 Ver painel" — abre a página colorida (Mini App, Secret PAINEL_URL; vazio = sem botão) com o texto do alerta.
+// cor: long (verde) · short (vermelho) · neutro (cinza) · mao (roxo, mão virada) · noticia (azul) · aviso (âmbar, agenda).
+const PAINEL_URL = (Deno.env.get("PAINEL_URL") ?? "https://telegram-cores.vercel.app/").trim();
+function botaoPainel(msgHtml: string, titulo: string, cor: "long" | "short" | "neutro" | "mao" | "noticia" | "aviso" = "neutro"): Botoes {
+  if (!PAINEL_URL) return [];
+  let txt = textoSemHtml(msgHtml).replace(/[ \t]*\n[ \t]*/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  const monta = (t: string) => `${PAINEL_URL}${PAINEL_URL.includes("?") ? "&" : "?"}lado=${cor}&titulo=${encodeURIComponent(titulo)}&msg=${encodeURIComponent(t)}`;
+  let url = monta(txt);
+  while (url.length > 1800 && txt.length > 40) { txt = txt.slice(0, Math.floor(txt.length * 0.8)).trimEnd() + "…"; url = monta(txt); } // URL curta: o Telegram recusa botão com endereço muito grande
+  return [[{ text: "🎨 Ver painel", web_app: { url } }]];
+}
+// V145: junta o botão do painel aos botões que o alerta já tem (todo alerta proativo passa por aqui). Título = 1ª linha do texto; cor: notícia (azul), agenda (âmbar),
+// LONG (verde) ou SHORT (vermelho) quando o texto fala de um lado só, senão cinza. Se o alerta já trouxe o botão do painel (mão virada), não repete.
+function comPainel(botoes: Botoes | undefined, msg: string, instId: string): Botoes | undefined {
+  if (!PAINEL_URL || botoes?.some((l) => l.some((b) => !!b.web_app))) return botoes;
+  const plano = textoSemHtml(msg);
+  const titulo = (plano.split("\n").map((l) => l.trim()).find(Boolean) || "ALERTA").slice(0, 60);
+  let cor: "long" | "short" | "neutro" | "noticia" | "aviso" = "neutro";
+  if (/^NOTICIA_/.test(instId)) cor = "noticia";
+  else if (/^AGENDA/.test(instId)) cor = "aviso";
+  else { const L = /\bLONG\b/i.test(plano), S = /\bSHORT\b/i.test(plano); cor = L && !S ? "long" : S && !L ? "short" : "neutro"; }
+  return [...(botoes ?? []), ...botaoPainel(msg, titulo, cor)];
+}
 type Botoes = Botao[][];
 const TECLADO_ITENS: [string, string][] = [
   ["🚀 Oportunidade", "/oportunidade"], ["🔄 Reversão", "/reversao"], ["🟢 Fundo", "/fundo"], ["🔴 Topo", "/topo"], ["📋 Lista", "/lista"],
@@ -1918,7 +1943,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date(agoraMs).toISOString() });
   if (!linhas.length) return [];
   const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\nRecomendadas agora: ${ficam.length ? ficam.map((l) => mvNome(l.i)).join(", ") : "nenhuma"} (até ${MV_VAGAS})\n<i>Só recomendação: ligar e desligar o robô é com você. ${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Detalhes em /maovirada.</i>`;
-  for (const ch of ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c))) await sendTelegram(ch, msg).catch((e) => console.log("⚠️ mão virada: envio falhou", e)); // V145: Premium + Free
+  for (const ch of ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c))) await sendTelegram(ch, msg, botaoPainel(msg, "MÃO VIRADA", "mao")).catch((e) => console.log("⚠️ mão virada: envio falhou", e)); // V145: Premium + Free + botão do painel
   return linhas;
 }
 // V138: manda pro motor a entrada da MÃO DE ALERTA das moedas recomendadas que ainda não foram (uma vez por "ligar"). Confere cada vela de 15m nova:
@@ -2969,7 +2994,7 @@ async function checarListaAcompanhamento(SB: any, poolInfoMap: Map<string, Indic
     // V81: só manda a mensagem se a moeda importa pra este chat (alerta recente, seguida ou com posição). Senão registra a virada na lista, em silêncio.
     const idadeOrigH = row.last_alert_at ? (Date.now() - new Date(row.last_alert_at).getTime()) / 3600000 : 0;
     const importa = ACOMP_AVISO_MAX_H <= 0 || !row.last_alert_at || idadeOrigH <= ACOMP_AVISO_MAX_H || segSet.has(`${ch}|${pw.inst}`) || ps.length > 0;
-    if (!importa) { await atualizarVig(false); return; }
+    if (!importa || !ACOMP_AVISO_ON) { await atualizarVig(false); return; } // V145: ACOMP_AVISO=0 = sem mensagem
     if (silChat(ch) && !(SILENCIO_PROTECAO && ps.some((p) => p.lado !== atual))) return;
     // V74: intervalo mínimo desde o último aviso desta moeda neste chat. Dentro dele não envia e não mexe na linha:
     // a próxima rodada reavalia (se ainda estiver contra, sai quando o intervalo passar; se desvirou, o `atual === watch_side` acima já barra).
@@ -3080,7 +3105,7 @@ async function enviarOuEditarFinal(SB: any, pend: FinalPend | undefined, chats: 
   await Promise.all(chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
     const msg = cortar(await msgPorChat(ch));
     const existente = pend?.msgIds?.[ch];
-    if (existente && (await editarTelegram(ch, existente, cortar(agRiscoLinha() + msg), botoes))) return;
+    if (existente && (await editarTelegram(ch, existente, cortar(agRiscoLinha() + msg), comPainel(botoes, msg, `FINAL_${inst}`)))) return;
     const novo = await enviarAlertaMoeda(SB, ch, `FINAL_${inst}`, msg, botoes);
     if (novo) ids[ch] = novo; else delete ids[ch];
   }));
@@ -5379,7 +5404,7 @@ async function runLista(chatId: number | string, tudo = false) {
       : `⭐ seguida por você (sem alerta ainda)\n`;
     if (pct !== undefined) b += `${pct >= 0 ? "📈 +" : "📉 "}${pct.toFixed(2)}% (24h)\n`;
     if (!info) return b + `Indicador: sem dado agora\n\n`;
-    if (contra) b += `🔁 JÁ CRUZOU CONTRA o alerta — o aviso 🔁 sai na próxima varredura\n`;
+    if (contra) b += ACOMP_AVISO_ON ? `🔁 JÁ CRUZOU CONTRA o alerta — o aviso 🔁 sai na próxima varredura\n` : `🔁 JÁ CRUZOU CONTRA o alerta (aviso por mensagem desligado: ACOMP_AVISO=0)\n`;
     b += `📍 ${indicadorTxt(info)}\n${idadeTxt(info.idadeCandles)}\npreço ${fmtPrice(info.preco)} | topo ${fmtPrice(info.topo)} | fundo ${fmtPrice(info.fundo)}\n\n`;
     return b;
   });
@@ -11116,7 +11141,7 @@ async function checarAgenda(SB: any) {
       const linhaPos = pos === null ? `\n🛡️ Com posição aberta: considere reduzir ou proteger antes.`
         : pos.lista.length ? `\n🛡️ <b>Você tem ${pos.lista.length} posição(ões) aberta(s):</b> ${pos.lista.join(" · ")}\nConsidere reduzir ou proteger antes do dado.`
         : `\n✅ Você não tem posição aberta agora — é só ficar de fora até ~${ate}.`;
-      return enviarAlertaMoeda(SB, ch, `AGENDA_${g.ts}`, cortar(msg + linhaPos));
+      return enviarAlertaMoeda(SB, ch, `AGENDA_${g.ts}`, cortar(msg + linhaPos), botaoPainel(msg + linhaPos, "AGENDA", "aviso"));
     }));
     if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima rodada
     // marca este nível e os maiores como enviados (o de 60 não deve sair depois que o de 15 já saiu)
@@ -11231,7 +11256,7 @@ async function checarResultadoAgenda(SB: any) {
     const sem = esperados.length - prontos.length;
     if (sem > 0) msg += `<i>+${sem} item(ns) do mesmo horário ainda sem resultado na fonte.</i>\n\n`;
     msg += `⚠️ <i>A 1ª reação do preço costuma ser exagerada e reverter. Espere a vela pós-dado fechar antes de confiar em cruzamento novo. Estatístico, não é recomendação.</i>`;
-    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `AGENDA_RES_${g.ts}`, cortar(msg))));
+    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `AGENDA_RES_${g.ts}`, cortar(msg), botaoPainel(msg, "RESULTADO DO DADO", "aviso"))));
     if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima consulta
     _agResEnviados.add(String(g.ts));
     mudou = true;
@@ -11549,7 +11574,7 @@ async function checarNoticias(SB: any) {
     const lista = it.tipo === "cripto" ? _ntEnviosCripto : _ntEnvios, lim = it.tipo === "cripto" ? NOTICIAS_ALERTA_MAX_HORA_CRIPTO : NOTICIAS_ALERTA_MAX_HORA;
     if (lista.filter((t) => agora - t < 3600000).length >= lim) continue;
     const msg = `📰 <b>NOTÍCIA — ${agEsc(it.fonte)}</b> · ${horaLocal(it.ts)}\n${DIVISOR}\n\n${it.tipo === "trump" && it.pt ? `“${agEsc(ntCortar(ntPt(it), 500))}”` : `<b>${agEsc(ntCortar(ntPt(it), 500))}</b>`}\n\n${it.link ? `<a href="${agEsc(it.link)}">ver original</a>\n\n` : ""}⚠️ <i>Palavra de alto impacto (tarifa, juros/Fed, cripto, sanções, guerra...). A 1ª reação do preço costuma ser exagerada e pode reverter: espere a vela fechar antes de confiar em cruzamento novo. Pode ser apagado ou desmentido depois. /noticia mostra as outras.</i>`;
-    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `NOTICIA_${it.ts}`, cortar(msg))));
+    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `NOTICIA_${it.ts}`, cortar(msg), botaoPainel(msg, "NOTÍCIA", "noticia"))));
     if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima rodada
     _ntEnviados.add(it.id);
     lista.push(agora);
@@ -11821,7 +11846,7 @@ async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: str
   if (/^(FUNDO|TOPO|COMPRESSAO|ACOMP|FINAL|CRUZ|ANTEC|SEG)_/.test(instId)) {
     try { await buscarAgenda(SB); risco = agRiscoLinha(); } catch { }
   }
-  const novo = await sendTelegram(chat, cortar(ALERTA_MARCA + risco + msg), botoes, { semUi: true });
+  const novo = await sendTelegram(chat, cortar(ALERTA_MARCA + risco + msg), comPainel(botoes, msg, instId), { semUi: true }); // V145: + botão do painel
   if (novo) {
     if (antigo) await apagarMsg(chat, antigo);
     // NOTICIA_<ts> e AGENDA_RES_<ts> são chaves únicas (nunca substituem nada): gravar o id só criaria uma linha nova por aviso, pra sempre.
@@ -12936,6 +12961,12 @@ async function tratarRequisicao(req: Request): Promise<Response> {
           await fetch(`${TG_API}/answerCallbackQuery`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ callback_query_id: cq.id, text: MSG_SEM_AUTORIZACAO, show_alert: true }),
+          }).catch(() => {});
+        } else if (/^\/modo(@\w+)?(\s|$)/.test(text)) {
+          // V145: o /modo é o único comando liberado pro Free (só mostra o plano)
+          await fetch(`${TG_API}/sendMessage`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, parse_mode: "HTML", text: "🆓 <b>Plano Free</b> — você recebe os alertas de mão virada, notícia e agenda." }),
           }).catch(() => {});
         } else if (text.startsWith("/")) {
           await fetch(`${TG_API}/sendMessage`, {
