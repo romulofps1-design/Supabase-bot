@@ -561,19 +561,18 @@ async function getFuturesPairs(): Promise<string[]> {
   return FALLBACK_PAIRS;
 }
 type Botao = { text: string; callback_data?: string; url?: string; web_app?: { url: string } };
-// V145: botão "🎨 Ver painel" — abre a página colorida (Mini App, Secret PAINEL_URL; vazio = sem botão) com o texto do alerta.
-// cor: long (verde) · short (vermelho) · neutro (cinza) · mao (roxo, mão virada) · noticia (azul) · aviso (âmbar, agenda).
+// V145: PAINEL_URL = endereço da página do painel e das imagens da faixa colorida. Vazio = sem faixa e sem botão.
+// PAINEL_BOTAO=0 ESCONDE o botão "🎨 Ver painel" (a faixa colorida continua; FAIXA_COR=0 desliga a faixa). Padrão 1 = mostra o botão.
 const PAINEL_URL = (Deno.env.get("PAINEL_URL") ?? "https://telegram-cores.vercel.app/").trim();
+const PAINEL_BOTAO_ON = (Deno.env.get("PAINEL_BOTAO") ?? "1").trim() !== "0";
 function botaoPainel(msgHtml: string, titulo: string, cor: "long" | "short" | "neutro" | "mao" | "noticia" | "aviso" = "neutro"): Botoes {
-  if (!PAINEL_URL) return [];
+  if (!PAINEL_URL || !PAINEL_BOTAO_ON) return [];
   let txt = textoSemHtml(msgHtml).replace(/[ \t]*\n[ \t]*/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   const monta = (t: string) => `${PAINEL_URL}${PAINEL_URL.includes("?") ? "&" : "?"}lado=${cor}&titulo=${encodeURIComponent(titulo)}&msg=${encodeURIComponent(t)}`;
   let url = monta(txt);
   while (url.length > 1800 && txt.length > 40) { txt = txt.slice(0, Math.floor(txt.length * 0.8)).trimEnd() + "…"; url = monta(txt); } // URL curta: o Telegram recusa botão com endereço muito grande
   return [[{ text: "🎨 Ver painel", web_app: { url } }]];
 }
-// V145: junta o botão do painel aos botões que o alerta já tem (todo alerta proativo passa por aqui). Título = 1ª linha do texto; cor: notícia (azul), agenda (âmbar),
-// LONG (verde) ou SHORT (vermelho) quando o texto fala de um lado só, senão cinza. Se o alerta já trouxe o botão do painel (mão virada), não repete.
 type CorAlerta = "long" | "short" | "neutro" | "mao" | "noticia" | "aviso";
 function corDoAlerta(msg: string, instId: string): CorAlerta {
   if (/^NOTICIA_/.test(instId)) return "noticia";
@@ -582,8 +581,9 @@ function corDoAlerta(msg: string, instId: string): CorAlerta {
   const L = /\bLONG\b/i.test(plano), S = /\bSHORT\b/i.test(plano);
   return L && !S ? "long" : S && !L ? "short" : "neutro";
 }
+// junta o botão do painel aos botões que o alerta já tem (todo alerta de moeda passa por aqui). Título = 1ª linha do texto; cor = corDoAlerta.
 function comPainel(botoes: Botoes | undefined, msg: string, instId: string): Botoes | undefined {
-  if (!PAINEL_URL || botoes?.some((l) => l.some((b) => !!b.web_app))) return botoes;
+  if (!PAINEL_URL || !PAINEL_BOTAO_ON || botoes?.some((l) => l.some((b) => !!b.web_app))) return botoes;
   const titulo = (textoSemHtml(msg).split("\n").map((l) => l.trim()).find(Boolean) || "ALERTA").slice(0, 60);
   return [...(botoes ?? []), ...botaoPainel(msg, titulo, corDoAlerta(msg, instId))];
 }
@@ -11156,7 +11156,7 @@ async function checarAgenda(SB: any) {
       const linhaPos = pos === null ? `\n🛡️ Com posição aberta: considere reduzir ou proteger antes.`
         : pos.lista.length ? `\n🛡️ <b>Você tem ${pos.lista.length} posição(ões) aberta(s):</b> ${pos.lista.join(" · ")}\nConsidere reduzir ou proteger antes do dado.`
         : `\n✅ Você não tem posição aberta agora — é só ficar de fora até ~${ate}.`;
-      return enviarAlertaMoeda(SB, ch, `AGENDA_${g.ts}`, cortar(msg + linhaPos), botaoPainel(msg + linhaPos, "AGENDA", "aviso"));
+      return enviarAlertaMoeda(SB, ch, `AGENDA_${g.ts}`, cortar(msg + linhaPos));
     }));
     if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima rodada
     // marca este nível e os maiores como enviados (o de 60 não deve sair depois que o de 15 já saiu)
@@ -11271,7 +11271,7 @@ async function checarResultadoAgenda(SB: any) {
     const sem = esperados.length - prontos.length;
     if (sem > 0) msg += `<i>+${sem} item(ns) do mesmo horário ainda sem resultado na fonte.</i>\n\n`;
     msg += `⚠️ <i>A 1ª reação do preço costuma ser exagerada e reverter. Espere a vela pós-dado fechar antes de confiar em cruzamento novo. Estatístico, não é recomendação.</i>`;
-    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `AGENDA_RES_${g.ts}`, cortar(msg), botaoPainel(msg, "RESULTADO DO DADO", "aviso"))));
+    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `AGENDA_RES_${g.ts}`, cortar(msg))));
     if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima consulta
     _agResEnviados.add(String(g.ts));
     mudou = true;
@@ -11589,7 +11589,7 @@ async function checarNoticias(SB: any) {
     const lista = it.tipo === "cripto" ? _ntEnviosCripto : _ntEnvios, lim = it.tipo === "cripto" ? NOTICIAS_ALERTA_MAX_HORA_CRIPTO : NOTICIAS_ALERTA_MAX_HORA;
     if (lista.filter((t) => agora - t < 3600000).length >= lim) continue;
     const msg = `📰 <b>NOTÍCIA — ${agEsc(it.fonte)}</b> · ${horaLocal(it.ts)}\n${DIVISOR}\n\n${it.tipo === "trump" && it.pt ? `“${agEsc(ntCortar(ntPt(it), 500))}”` : `<b>${agEsc(ntCortar(ntPt(it), 500))}</b>`}\n\n${it.link ? `<a href="${agEsc(it.link)}">ver original</a>\n\n` : ""}⚠️ <i>Palavra de alto impacto (tarifa, juros/Fed, cripto, sanções, guerra...). A 1ª reação do preço costuma ser exagerada e pode reverter: espere a vela fechar antes de confiar em cruzamento novo. Pode ser apagado ou desmentido depois. /noticia mostra as outras.</i>`;
-    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `NOTICIA_${it.ts}`, cortar(msg), botaoPainel(msg, "NOTÍCIA", "noticia"))));
+    const ids = await Promise.all(destinos.map((ch) => enviarAlertaMoeda(SB, ch, `NOTICIA_${it.ts}`, cortar(msg))));
     if (!ids.some((id) => !!id)) continue; // ninguém confirmou: tenta de novo na próxima rodada
     _ntEnviados.add(it.id);
     lista.push(agora);
