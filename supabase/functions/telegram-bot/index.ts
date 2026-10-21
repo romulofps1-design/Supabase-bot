@@ -1,5 +1,6 @@
-// telegram-bot V144 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V145 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V145 (V144 + planos de acesso: o modo "Novato" virou "Premium" (tudo liberado, pra admin e pros IDs do Secret ALLOWED_CHAT_IDS) e o "Experiente" virou "Free" (Secret novo FREE_CHAT_IDS): o Free só recebe os alertas proativos de mão virada, notícia e agenda; qualquer comando ou botão responde "Você não tem autorização, entre em contato com o administrador!". O plano vem dos Secrets, não é mais escolhido com /modo; o texto compacto do antigo Experiente saiu de uso).
 // V144 (V143 + motor V73.1: as faixas padrão viram as testadas — sem o Secret, MV_FAIXA = 9,20,21 (o robô de mão virada e a virada da mão de alerta) e MV_MAO_FAIXA = 10,20,30,40 (a entrada da mão de alerta); antes eram rápida + 144 e a mão de alerta seguia a MV_FAIXA. O Secret continua valendo por cima. O chat não mostra mais a faixa do robô nem a da mão de alerta, só "Indicador" (o valor fica no log): o /maovirada com MV_DETALHES=1 e o /indicador reais sem faixa no comando ("🤖 O INDICADOR DO ROBÔ"). A OPORTUNIDADE que vai pro motor (modo conservador) passa a ser sempre no Indicador CLÁSSICO, no reteste, seja qual for o J6_MODO, e vai com faixa "classica" (o motor V73.1 recusa oportunidade de outro Indicador); com OPORT_MOTOR_ENTRADA=cruzamento ela vai com a faixa do J6_MODO e o motor só aceita a clássica. Os alertas, as análises e o resto do bot não mudam).
 // V143 (V142 + faixas separadas por função, como o motor V73: MV_FAIXA = a faixa do ROBÔ de mão virada — o lado que sai no alerta 🔂 — e MV_MAO_FAIXA (novo) = a da MÃO DE ALERTA — o lado e a junção (topo/fundo) da entrada que vai pro motor (mvMotorEntradas). As duas aceitam classica, rapida, rapida144 ou a J6 personalizada (lista de 2 a 8 médias de 2 a 200, ex.: MV_FAIXA=9,20,21 e MV_MAO_FAIXA=10,20,30,40; a J3 21/50/60 continua, a conta do bandaCustom). Sem MV_MAO_FAIXA, a mão de alerta segue a MV_FAIXA, e sem as duas vale a rápida + 144 — igual à V142. O alerta da mão de alerta leva a faixa pro motor, que confere com a dele e avisa se for diferente. O /juncao reais sem faixa no comando segue a MV_FAIXA (agora também a lista de médias). /juncao, /indicador e o resto do bot não mudam).
 // V142 (V141 + no /indicador carteira e no /indicador reais: stopvela5,6,7 = mais um jeito de stop, o stop FIXO X% além da vela de 15m antes da vela do alerta — LONG: X% abaixo da mínima dela; SHORT: X% acima da máxima —, parado (não sobe), com os alvos do comando, entrando no alerta e sem prazo; sem "escada" no comando sai só a entrada a qualquer distância, como as variantes do motor V72. Só análise: alertas, o que vai pro motor e o resto do bot não mudam). O /indicador reais passa a aceitar a J6 personalizada (medias 10,20,30,40, ou 10,20,30,40|9,20,21), como a carteira.
@@ -129,6 +130,12 @@ const _capturas = new Map<string, { msgs: (string | null)[] }>();
 const ehCaptura = (chatId: unknown): boolean => typeof chatId === "string" && _capturas.has(chatId);
 const ALERT_EXCLUIR = (Deno.env.get("ALERT_EXCLUIR_IDS") || "").split(",").map((x) => x.trim()).filter(Boolean);
 const ALERT_CHAT_IDS = [...new Set(ALLOWED_CHAT_IDS)].filter((x) => !ALERT_EXCLUIR.includes(x));
+// V145: plano FREE. Secret FREE_CHAT_IDS (IDs separados por vírgula). Quem está em ALLOWED_CHAT_IDS (ou é o admin) é Premium e vence se aparecer nas duas listas.
+// O Free só recebe os alertas proativos de mão virada, notícia e agenda (ALERT_CHAT_IDS_FREE_E_PREMIUM) e não executa nenhum comando nem botão.
+const FREE_CHAT_IDS = (Deno.env.get("FREE_CHAT_IDS") || "").split(",").map((s) => s.trim()).filter(Boolean);
+const ALERT_CHAT_IDS_FREE = [...new Set(FREE_CHAT_IDS)].filter((x) => !ALERT_EXCLUIR.includes(x) && !ALLOWED_CHAT_IDS.includes(x));
+const ALERT_CHAT_IDS_FREE_E_PREMIUM = [...ALERT_CHAT_IDS, ...ALERT_CHAT_IDS_FREE];
+const MSG_SEM_AUTORIZACAO = "Você não tem autorização, entre em contato com o administrador!";
 let ALERT_OPORT_PCT_MIN = numEnv("ALERT_OPORT_PCT_MIN", "8");
 let ALERT_REV_PCT_MIN = numEnv("ALERT_REV_PCT_MIN", "12");
 // V37: alertas proativos (os que o robô manda sozinho, sem comando) levam uma marca discreta
@@ -582,7 +589,7 @@ async function configurarMenuBotao() {
     { command: "comandos", description: "Lista de todos os comandos" },
     { command: "help", description: "Como o robô e os alertas funcionam" },
     { command: "status", description: "Testar as conexões" },
-    { command: "modo", description: "Trocar entre Novato e Experiente" },
+    { command: "modo", description: "Ver seu plano (Premium ou Free)" },
   ];
   try {
     await fetch(`${TG_API}/setMyCommands`, {
@@ -635,38 +642,13 @@ async function uiLimpar(chatId: number, extras: number[] = []) {
   }
   await Promise.all(ids.map((m) => apagarMsg(chatId, m)));
 }
-// V38: modo Novato (padrão, mensagens explicadas) x Experiente (só confirmações e números).
-// Guardado por chat no Supabase (mesma tabela dos outros flags); cache em memória evita 1 SELECT por mensagem.
-type Modo = "novato" | "experiente";
-const MODO_PREFIXO = "_MODO_";
-const _modoCache = new Map<string, Modo>();
+// V145: planos de acesso (antes: modo Novato x Experiente, escolhido por chat com /modo). Agora o plano vem dos Secrets:
+// Premium = admin + IDs de ALLOWED_CHAT_IDS (tudo liberado, mensagens completas) · Free = IDs de FREE_CHAT_IDS (só alertas proativos de mão virada, notícia e agenda).
+type Modo = "premium" | "free";
 async function getModo(chatId: number | string): Promise<Modo> {
-  const chave = String(chatId);
-  if (_modoCache.has(chave)) return _modoCache.get(chave)!;
-  let modo: Modo = "novato";
-  try {
-    const SB = getSupabase();
-    if (SB) {
-      const { data } = await SB.from(TAB).select("last_status").eq("instid", `${MODO_PREFIXO}${chatId}`).maybeSingle();
-      if (data?.last_status === "experiente") modo = "experiente";
-    }
-  } catch { }
-  _modoCache.set(chave, modo);
-  return modo;
+  return ehPremium(chatId) ? "premium" : "free";
 }
-async function setModo(chatId: number | string, modo: Modo) {
-  _modoCache.set(String(chatId), modo);
-  try { const SB = getSupabase(); if (SB) await upsertLinha(SB, `${MODO_PREFIXO}${chatId}`, { last_status: modo }); } catch { }
-}
-async function modoJaEscolhido(chatId: number | string): Promise<boolean> {
-  try {
-    const SB = getSupabase();
-    if (!SB) return true; // sem Supabase não dá pra lembrar a escolha, então não pergunta de novo a cada /start
-    const { data } = await SB.from(TAB).select("instid").eq("instid", `${MODO_PREFIXO}${chatId}`).maybeSingle();
-    return !!data;
-  } catch { return true; }
-}
-// Reduz o texto pro modo Experiente: tira os blocos <i>explicativo/rodapé</i> e encurta a lista de
+// (V145: sem uso — era o texto compacto do antigo modo Experiente; fica aqui caso queira reaproveitar.) Reduz o texto pro modo Experiente: tira os blocos <i>explicativo/rodapé</i> e encurta a lista de
 // motivos (✅/⚠️) do "🧭 Sinal de ...: X/10" pra só a nota. Roda em cima do texto já pronto, então
 // vale pra toda mensagem do bot (alertas automáticos e comandos manuais) sem duplicar cada função.
 function compactarExperiente(texto: string): string {
@@ -723,7 +705,6 @@ const textoSemHtml = (t: string): string =>
   t.replace(/<\/?(b|i|u|s|a|code|pre)\b[^>]*>/gi, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
 async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes, opts?: { semUi?: boolean }): Promise<number | null> {
   if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; cap.msgs.push(text); return cap.msgs.length; } // V109: pedido de análise, guarda em vez de mandar
-  if (await getModo(chatId) === "experiente") text = compactarExperiente(text);
   if (text.length > 4096) text = cortar(text); // rede de segurança: acima disso o Telegram recusa e a mensagem se perdia em silêncio
   // texto grande: o botão "⬆️ Ir ao topo" já vai na própria mensagem (teclado inline, 1 chamada só).
   // O teclado fixo do rodapé continua valendo: o Telegram não o remove quando chega uma mensagem com botões inline.
@@ -893,7 +874,6 @@ async function avisarAdmin(texto: string): Promise<void> {
 async function editarTelegram(chatId: number | string, messageId: number, text: string, botoes?: Botoes): Promise<boolean> {
   if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; if (messageId >= 1 && messageId <= cap.msgs.length) cap.msgs[messageId - 1] = text; else cap.msgs.push(text); return true; } // V109
   let t = text;
-  if (await getModo(chatId) === "experiente") t = compactarExperiente(t);
   const markup = botoes ? { reply_markup: { inline_keyboard: botoes } } : {};
   try {
     const j: any = await tgPost("editMessageText", { chat_id: chatId, message_id: messageId, text: t, parse_mode: "HTML", disable_web_page_preview: true, ...markup });
@@ -1938,7 +1918,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date(agoraMs).toISOString() });
   if (!linhas.length) return [];
   const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\nRecomendadas agora: ${ficam.length ? ficam.map((l) => mvNome(l.i)).join(", ") : "nenhuma"} (até ${MV_VAGAS})\n<i>Só recomendação: ligar e desligar o robô é com você. ${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Detalhes em /maovirada.</i>`;
-  for (const ch of ALERT_CHAT_IDS.filter((c) => !silChat(c))) await sendTelegram(ch, msg).catch((e) => console.log("⚠️ mão virada: envio falhou", e));
+  for (const ch of ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c))) await sendTelegram(ch, msg).catch((e) => console.log("⚠️ mão virada: envio falhou", e)); // V145: Premium + Free
   return linhas;
 }
 // V138: manda pro motor a entrada da MÃO DE ALERTA das moedas recomendadas que ainda não foram (uma vez por "ligar"). Confere cada vela de 15m nova:
@@ -11100,7 +11080,7 @@ async function runAgenda(chatId: number | string) {
   await enviarEmPartes(chatId, msg); // V107: em partes
 }
 async function checarAgenda(SB: any) {
-  if (!AGENDA_ON || !AGENDA_AVISOS_MIN.length || !ALERT_CHAT_IDS.length) return;
+  if (!AGENDA_ON || !AGENDA_AVISOS_MIN.length || !ALERT_CHAT_IDS_FREE_E_PREMIUM.length) return;
   const { ev } = await buscarAgenda(SB);
   if (!ev || !ev.length) return;
   const agora = Date.now();
@@ -11115,7 +11095,7 @@ async function checarAgenda(SB: any) {
       for (const k of arr) _agEnviados.add(String(k));
     } catch { }
   }
-  const destinos = ALERT_CHAT_IDS.filter((c) => !silChat(c));
+  const destinos = ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c)); // V145: Premium + Free
   if (!destinos.length) return;
   let mudou = false;
   for (const g of proximos) {
@@ -11214,7 +11194,7 @@ function agLinhaResultado(e: AgEv, r: AgRes): string {
   return `${r.tom} <b>${agEsc(agTraduzir(e.titulo))}</b>: saiu <b>${agEsc(e.atual)}</b> (${cmp}) → <b>${r.sentido} do esperado</b>${r.contra === "anterior" ? " (sem projeção: comparado ao anterior)" : ""}\n<i>${r.leitura}</i>\n`;
 }
 async function checarResultadoAgenda(SB: any) {
-  if (!AGENDA_ON || !AGENDA_RESULTADO_ON || !ALERT_CHAT_IDS.length) return;
+  if (!AGENDA_ON || !AGENDA_RESULTADO_ON || !ALERT_CHAT_IDS_FREE_E_PREMIUM.length) return;
   const agora = Date.now();
   const ini = AGENDA_RESULTADO_APOS_MIN * 60000, jan = AGENDA_RESULTADO_JAN_MIN * 60000;
   // Usa o cache (sem custo) só pra saber se há algum dado esperando resultado; a consulta fresca só acontece se houver.
@@ -11237,7 +11217,7 @@ async function checarResultadoAgenda(SB: any) {
   if (agora - _agForcadoT < AGENDA_RESULTADO_POLL_MIN * 60000) return;
   const { ev, velho } = await buscarAgenda(SB, true);
   if (!ev || velho) return; // fonte fora: tenta de novo na próxima janela de consulta
-  const destinos = ALERT_CHAT_IDS.filter((c) => !silChat(c));
+  const destinos = ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c)); // V145: Premium + Free
   if (!destinos.length) return;
   let mudou = false;
   for (const g of pendente(ev)) {
@@ -11538,7 +11518,7 @@ let _ntEnvios: number[] = [];
 let _ntEnviosCripto: number[] = [];
 let _ntSigs: { t: number; k: string[] }[] = []; // palavras das manchetes de cripto já avisadas (48h): barra a mesma notícia vinda de outra fonte em outra rodada
 async function checarNoticias(SB: any) {
-  if (!NOTICIAS_ON || !NOTICIAS_ALERTA_ON || !ALERT_CHAT_IDS.length) return;
+  if (!NOTICIAS_ON || !NOTICIAS_ALERTA_ON || !ALERT_CHAT_IDS_FREE_E_PREMIUM.length) return;
   const { itens } = await buscarNoticias(SB);
   if (!itens || !itens.length) return;
   const agora = Date.now();
@@ -11556,7 +11536,7 @@ async function checarNoticias(SB: any) {
     } catch { }
     _ntEnvCarregado = true;
   }
-  const destinos = ALERT_CHAT_IDS.filter((c) => !silChat(c));
+  const destinos = ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c)); // V145: Premium + Free
   if (!destinos.length) return;
   if ((await ntTraduzirFaltantes(SB, novos.filter((i) => !_ntEnviados.has(i.id)))) > 0) await ntSalvarCache(SB);
   let mudou = false;
@@ -12540,23 +12520,20 @@ async function runRobo(chatId: number | string) {
 const ADMIN_CHAT_ID = String(Deno.env.get("ADMIN_CHAT_ID") || DONO_CHAT || "");
 const ehAdmin = (chatId: number | string, remetente?: number | string | null) =>
   ADMIN_CHAT_ID !== "" && String(chatId) === ADMIN_CHAT_ID && String(remetente ?? chatId) === ADMIN_CHAT_ID;
-const modoPicker: Botoes = [[{ text: "🎓 Novato", callback_data: "/modo novato" }, { text: "⚡ Experiente", callback_data: "/modo experiente" }]];
-function textoEscolhaModo(): string {
-  return "🎛️ <b>Antes de começar, escolha seu modo</b>\n" + MINI_DIVISOR + "\n\n" +
-    "🎓 <b>Novato</b>\nAlertas e comandos vêm com a explicação completa — o quê, por quê e o que fazer.\n\n" +
-    "⚡ <b>Experiente</b>\nSó as confirmações e os números, sem o texto explicando.\n\n" +
-    "Dá pra trocar a qualquer hora com /modo.";
-}
+// V145: Premium = admin, IDs de ALLOWED_CHAT_IDS e o chat falso de pedido de análise. Todo o resto é Free (se estiver em FREE_CHAT_IDS) ou sem acesso.
+const ehPremium = (chatId: number | string): boolean =>
+  ehCaptura(chatId) || ALLOWED_CHAT_IDS.includes(String(chatId)) || (ADMIN_CHAT_ID !== "" && String(chatId) === ADMIN_CHAT_ID);
+const ehFree = (chatId: number | string): boolean => !ehPremium(chatId) && FREE_CHAT_IDS.includes(String(chatId));
 // V65: /help e /comandos separados.
 // • /start: boas-vindas curtas, apontando pros dois.
 // • /help: só o informativo — como o robô e os alertas funcionam (igual pros dois modos).
-// • /comandos: só a lista de comandos, agrupada por assunto; Novato = explicação completa, Experiente = uma linha curta por comando.
+// • /comandos: só a lista de comandos, agrupada por assunto, com a explicação completa (V145: Premium).
 function textoBoasVindas(chatId: number | string, modoAtual: Modo): string {
   return "🤖 <b>Pronto, já pode chamar as moedas</b>\n" + MINI_DIVISOR + "\n\n" +
     "🔎 <code>/analise ONE</code> — veredito completo de uma moeda\n" +
     "📖 <code>/comandos</code> — lista de todos os comandos\n" +
     "ℹ️ <code>/help</code> — como o robô e os alertas funcionam\n\n" +
-    `🎛️ Modo: <b>${modoAtual === "experiente" ? "⚡ Experiente" : "🎓 Novato"}</b> (troque com /modo)\n` +
+    `🎛️ Plano: <b>${modoAtual === "free" ? "🆓 Free" : "👑 Premium"}</b> (veja com /modo)\n` +
     `🆔 Seu chat_id: <b>${chatId}</b>`;
 }
 function textoHelp(chatId: number | string): string {
@@ -12633,7 +12610,7 @@ function textoHelp(chatId: number | string): string {
 // V107: /comandos reescrito — descrições curtas e diretas, comandos agrupados pelo que fazem (consultar, mercado, resultado dos
 // alertas, simulações, motor) e as opções das simulações explicadas uma vez só, numa legenda.
 function textoComandos(chatId: number | string, modoAtual: Modo, remetente: number | string): string {
-  const c = modoAtual === "experiente"; // compacto: uma linha curta por comando
+  const c = modoAtual === "free"; // V145: compacto só se algum dia o Free chegar aqui (hoje o Free não executa comandos)
   let t = `📖 <b>Comandos</b>\n${DIVISOR}\n`;
   let primeiro = true;
   const sec = (titulo: string, itens: [string, string, string][], nota = "") => {
@@ -12714,7 +12691,7 @@ function textoComandos(chatId: number | string, modoAtual: Modo, remetente: numb
     ["⏸ /pausar", "pausa os alertas", "pausa os alertas por 1h, 2h ou 3h"],
     ["▶️ /retomar", "volta os alertas", "volta os alertas antes do fim da pausa"],
     ["⌨️ /menu", "teclado fixo", "mostra o teclado de atalhos aqui embaixo"],
-    ["🎛️ /modo", `agora: ${c ? "⚡ Experiente" : "🎓 Novato"}`, `troca entre Novato (explicações completas) e Experiente (resumido). Agora: ${c ? "⚡ Experiente" : "🎓 Novato"}`],
+    ["🎛️ /modo", `plano: ${c ? "🆓 Free" : "👑 Premium"}`, "mostra o seu plano (Premium = tudo liberado · Free = só os alertas de mão virada, notícia e agenda)"],
     ["🩺 /status", "testa as conexões", "testa Supabase, corretora, sua conta BloFin e o cron"],
   ];
   if (ehAdmin(chatId, remetente)) {
@@ -12901,7 +12878,7 @@ function montarConfig(): string {
   m += `• Segurança: webhook ${WEBHOOK_SECRET ? "protegido ✅" : "sem senha ⚠️"} · cron ${CRON_SO_HEADER ? "só aceita senha no cabeçalho ✅" : "aceita senha na URL ⚠️"}\n\n`;
 
   m += tit("👥", "Acesso");
-  m += `• ${ALLOWED_CHAT_IDS.length} chat(s) liberado(s) · ${ALERT_CHAT_IDS.length} recebem alertas${ALERT_EXCLUIR.length ? ` (${ALERT_EXCLUIR.length} fora)` : ""} · ${Object.keys(BLOFIN_USERS).length + (BLOFIN_LEGADO ? 1 : 0)} com chave BloFin\n`;
+  m += `• ${ALLOWED_CHAT_IDS.length} chat(s) Premium · ${ALERT_CHAT_IDS.length} recebem alertas${ALERT_EXCLUIR.length ? ` (${ALERT_EXCLUIR.length} fora)` : ""} · ${FREE_CHAT_IDS.length} chat(s) Free (${ALERT_CHAT_IDS_FREE.length} recebem alertas) · ${Object.keys(BLOFIN_USERS).length + (BLOFIN_LEGADO ? 1 : 0)} com chave BloFin\n`;
   m += `• 🔑 Admin: <b>${ADMIN_CHAT_ID || "não definido"}</b>${adminFixo ? "" : " ⚠️ vem do 1º da lista de chats; fixe com o Secret ADMIN_CHAT_ID"}\n`;
   m += `\n<i>Tokens e chaves nunca aparecem aqui.</i>`;
   return m;
@@ -12952,7 +12929,22 @@ async function tratarRequisicao(req: Request): Promise<Response> {
     const text = aliasIndicador(TECLADO_CMD[textoBruto] ?? textoBruto); // V139: /indicador = /juncao
     if (!chatId) return new Response("ok");
     const remetente = cq?.from?.id ?? update?.message?.from?.id ?? chatId;
-    if (!ALLOWED_CHAT_IDS.includes(String(chatId)) && !ehCaptura(chatId)) { // V109: o chat falso de um pedido de análise em andamento também passa
+    if (!ehPremium(chatId)) { // V109: o chat falso de um pedido de análise em andamento também passa (V145: ehPremium = admin + ALLOWED_CHAT_IDS + captura)
+      if (ehFree(chatId)) {
+        // V145: plano Free — nenhum comando nem botão. Botão inline: aviso na tela (popup); comando ou botão do teclado fixo: mensagem no chat. Texto solto é ignorado.
+        if (cq?.id) {
+          await fetch(`${TG_API}/answerCallbackQuery`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ callback_query_id: cq.id, text: MSG_SEM_AUTORIZACAO, show_alert: true }),
+          }).catch(() => {});
+        } else if (text.startsWith("/")) {
+          await fetch(`${TG_API}/sendMessage`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, text: MSG_SEM_AUTORIZACAO }),
+          }).catch(() => {});
+        }
+        return new Response("ok");
+      }
       console.log(`⛔ chat_id ${chatId} nao autorizado (fora de ALLOWED_CHAT_IDS) - ignorando mensagem "${text}"`);
       if (!cq && (text === "/start" || text === "/help" || /^\/comandos?(@\w+)?$/i.test(text))) {
         await fetch(`${TG_API}/sendMessage`, {
@@ -13043,16 +13035,13 @@ async function tratarRequisicao(req: Request): Promise<Response> {
     const ehComandos = /^\/comandos?(@\w+)?$/i.test(text);
     if (text === "/start" || text === "/help" || ehComandos) {
       const modoAtual = await getModo(chatId);
-      if (text === "/start" && !(await modoJaEscolhido(chatId))) {
-        await sendTelegram(chatId, textoEscolhaModo(), modoPicker);
-      }
       if (text === "/start") {
         await sendTelegram(chatId, textoBoasVindas(chatId, modoAtual));
         await sendTelegram(chatId, "⌨️ Atalhos fixos ativados aqui embaixo 👇");
       } else if (text === "/help") {
         for (const parte of dividirTexto(textoHelp(chatId), 4090)) await sendTelegram(chatId, parte); // V70: 4090 (antes 3800): uma mensagem só quando cabe
       } else {
-        // em partes se passar do limite do Telegram (modo Novato fica perto de 4k caracteres)
+        // em partes se passar do limite do Telegram (o /comandos do Premium fica perto de 4k caracteres)
         for (const parte of dividirTexto(textoComandos(chatId, modoAtual, remetente))) await sendTelegram(chatId, parte);
       }
       return new Response("ok");
@@ -13432,16 +13421,11 @@ async function tratarRequisicao(req: Request): Promise<Response> {
       return new Response("ok");
     }
     if (text.startsWith("/modo")) {
-      const arg = text.split(/\s+/)[1];
-      if (arg === "novato" || arg === "experiente") {
-        await setModo(chatId, arg);
-        await sendTelegram(chatId, arg === "experiente"
-          ? "⚡ <b>Modo Experiente ativado</b> — alertas e comandos vêm só com a confirmação e os números, sem o texto explicando o porquê. Troque de volta a qualquer hora com /modo."
-          : "🎓 <b>Modo Novato ativado</b> — alertas e comandos voltam a vir com a explicação completa. Troque a qualquer hora com /modo.");
-      } else {
-        const atual = await getModo(chatId);
-        await sendTelegram(chatId, `🎛️ Modo atual: <b>${atual === "experiente" ? "⚡ Experiente" : "🎓 Novato"}</b>\nEscolha abaixo pra trocar:`, modoPicker);
-      }
+      // V145: o plano vem dos Secrets (ALLOWED_CHAT_IDS / admin = Premium · FREE_CHAT_IDS = Free); não dá mais pra trocar por aqui.
+      const plano = await getModo(chatId);
+      await sendTelegram(chatId, plano === "free"
+        ? "🆓 <b>Plano Free</b> — você recebe os alertas de mão virada, notícia e agenda."
+        : "👑 <b>Plano Premium</b> — tudo liberado: comandos, análises e todos os alertas.");
       return new Response("ok");
     }
     return new Response("ok");
