@@ -574,16 +574,31 @@ function botaoPainel(msgHtml: string, titulo: string, cor: "long" | "short" | "n
 }
 // V145: junta o botão do painel aos botões que o alerta já tem (todo alerta proativo passa por aqui). Título = 1ª linha do texto; cor: notícia (azul), agenda (âmbar),
 // LONG (verde) ou SHORT (vermelho) quando o texto fala de um lado só, senão cinza. Se o alerta já trouxe o botão do painel (mão virada), não repete.
+type CorAlerta = "long" | "short" | "neutro" | "mao" | "noticia" | "aviso";
+function corDoAlerta(msg: string, instId: string): CorAlerta {
+  if (/^NOTICIA_/.test(instId)) return "noticia";
+  if (/^AGENDA/.test(instId)) return "aviso";
+  const plano = textoSemHtml(msg);
+  const L = /\bLONG\b/i.test(plano), S = /\bSHORT\b/i.test(plano);
+  return L && !S ? "long" : S && !L ? "short" : "neutro";
+}
 function comPainel(botoes: Botoes | undefined, msg: string, instId: string): Botoes | undefined {
   if (!PAINEL_URL || botoes?.some((l) => l.some((b) => !!b.web_app))) return botoes;
-  const plano = textoSemHtml(msg);
-  const titulo = (plano.split("\n").map((l) => l.trim()).find(Boolean) || "ALERTA").slice(0, 60);
-  let cor: "long" | "short" | "neutro" | "noticia" | "aviso" = "neutro";
-  if (/^NOTICIA_/.test(instId)) cor = "noticia";
-  else if (/^AGENDA/.test(instId)) cor = "aviso";
-  else { const L = /\bLONG\b/i.test(plano), S = /\bSHORT\b/i.test(plano); cor = L && !S ? "long" : S && !L ? "short" : "neutro"; }
-  return [...(botoes ?? []), ...botaoPainel(msg, titulo, cor)];
+  const titulo = (textoSemHtml(msg).split("\n").map((l) => l.trim()).find(Boolean) || "ALERTA").slice(0, 60);
+  return [...(botoes ?? []), ...botaoPainel(msg, titulo, corDoAlerta(msg, instId))];
 }
+// V145: FAIXA COLORIDA direto no chat (sem tocar em nada). É uma imagem (faixa-long.png, faixa-short.png, faixa-neutro.png, faixa-mao.png, faixa-noticia.png, faixa-aviso.png,
+// hospedadas junto da página, em PAINEL_URL) que aparece ACIMA do texto como pré-visualização de link (link_preview_options.show_above_text), na mesma mensagem.
+// FAIXA_COR=0 desliga. Sem PAINEL_URL também não tem faixa.
+const FAIXA_ON = (Deno.env.get("FAIXA_COR") ?? "1").trim() !== "0";
+function faixaUrl(cor: CorAlerta): string | undefined {
+  if (!FAIXA_ON || !PAINEL_URL) return undefined;
+  const base = PAINEL_URL.replace(/[?#].*$/, "").replace(/\/?$/, "/");
+  return `${base}faixa-${cor}.png`;
+}
+const prevFaixa = (faixa?: string) => faixa
+  ? { link_preview_options: { url: faixa, show_above_text: true, prefer_large_media: true } }
+  : { disable_web_page_preview: true };
 type Botoes = Botao[][];
 const TECLADO_ITENS: [string, string][] = [
   ["🚀 Oportunidade", "/oportunidade"], ["🔄 Reversão", "/reversao"], ["🟢 Fundo", "/fundo"], ["🔴 Topo", "/topo"], ["📋 Lista", "/lista"],
@@ -728,7 +743,7 @@ async function tgPost(path: string, body: any): Promise<any> {
 // pra não aparecer "&lt;", "&amp;" nem tag crua na mensagem.
 const textoSemHtml = (t: string): string =>
   t.replace(/<\/?(b|i|u|s|a|code|pre)\b[^>]*>/gi, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
-async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes, opts?: { semUi?: boolean }): Promise<number | null> {
+async function sendTelegram(chatId: number | string, text: string, botoes?: Botoes, opts?: { semUi?: boolean; faixa?: string }): Promise<number | null> {
   if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; cap.msgs.push(text); return cap.msgs.length; } // V109: pedido de análise, guarda em vez de mandar
   if (text.length > 4096) text = cortar(text); // rede de segurança: acima disso o Telegram recusa e a mensagem se perdia em silêncio
   // texto grande: o botão "⬆️ Ir ao topo" já vai na própria mensagem (teclado inline, 1 chamada só).
@@ -739,10 +754,10 @@ async function sendTelegram(chatId: number | string, text: string, botoes?: Boto
   let id: number | null = null;
   try {
     const mudo = SILENCIO_MODO === "mudo" && emSilencio(); // V107: horário mudo = chega sem som
-    const j: any = await tgPost("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, disable_notification: mudo, ...markup });
+    const j: any = await tgPost("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", ...prevFaixa(opts?.faixa), disable_notification: mudo, ...markup });
     if (j.ok === false) {
       console.log(`⚠️ sendTelegram HTML falhou (${JSON.stringify(j).slice(0,200)}), tentando sem parse_mode`);
-      const j2: any = await tgPost("sendMessage", { chat_id: chatId, text: textoSemHtml(text), disable_web_page_preview: true, disable_notification: mudo, ...markup });
+      const j2: any = await tgPost("sendMessage", { chat_id: chatId, text: textoSemHtml(text), ...prevFaixa(opts?.faixa), disable_notification: mudo, ...markup });
       id = j2?.result?.message_id ?? null;
     } else id = j?.result?.message_id ?? null;
   } catch (e) { console.log("Erro sendTelegram", e); }
@@ -896,12 +911,12 @@ async function avisarAdmin(texto: string): Promise<void> {
 // V39: edita uma mensagem já mandada (usado nos minutos finais da vela, pra atualizar a MESMA mensagem —
 // distância/tempo restando — em vez de mandar uma nova a cada rodada do cron). Se a edição falhar (mensagem
 // muito antiga, apagada pelo usuário etc.) devolve false pra quem chamou mandar uma mensagem nova.
-async function editarTelegram(chatId: number | string, messageId: number, text: string, botoes?: Botoes): Promise<boolean> {
+async function editarTelegram(chatId: number | string, messageId: number, text: string, botoes?: Botoes, faixa?: string): Promise<boolean> {
   if (ehCaptura(chatId)) { const cap = _capturas.get(String(chatId))!; if (messageId >= 1 && messageId <= cap.msgs.length) cap.msgs[messageId - 1] = text; else cap.msgs.push(text); return true; } // V109
   let t = text;
   const markup = botoes ? { reply_markup: { inline_keyboard: botoes } } : {};
   try {
-    const j: any = await tgPost("editMessageText", { chat_id: chatId, message_id: messageId, text: t, parse_mode: "HTML", disable_web_page_preview: true, ...markup });
+    const j: any = await tgPost("editMessageText", { chat_id: chatId, message_id: messageId, text: t, parse_mode: "HTML", ...prevFaixa(faixa), ...markup });
     if (j.ok === false) {
       if (String(j.description || "").includes("message is not modified")) return true;
       console.log(`⚠️ editarTelegram falhou (${JSON.stringify(j).slice(0, 150)}), mandando mensagem nova`);
@@ -1943,7 +1958,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date(agoraMs).toISOString() });
   if (!linhas.length) return [];
   const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\nRecomendadas agora: ${ficam.length ? ficam.map((l) => mvNome(l.i)).join(", ") : "nenhuma"} (até ${MV_VAGAS})\n<i>Só recomendação: ligar e desligar o robô é com você. ${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Detalhes em /maovirada.</i>`;
-  for (const ch of ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c))) await sendTelegram(ch, msg, botaoPainel(msg, "MÃO VIRADA", "mao")).catch((e) => console.log("⚠️ mão virada: envio falhou", e)); // V145: Premium + Free + botão do painel
+  for (const ch of ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c))) await sendTelegram(ch, msg, botaoPainel(msg, "MÃO VIRADA", "mao"), { faixa: faixaUrl("mao") }).catch((e) => console.log("⚠️ mão virada: envio falhou", e)); // V145: Premium + Free + botão do painel
   return linhas;
 }
 // V138: manda pro motor a entrada da MÃO DE ALERTA das moedas recomendadas que ainda não foram (uma vez por "ligar"). Confere cada vela de 15m nova:
@@ -3105,7 +3120,7 @@ async function enviarOuEditarFinal(SB: any, pend: FinalPend | undefined, chats: 
   await Promise.all(chats.filter((ch) => ALERT_CHAT_IDS.includes(ch)).map(async (ch) => {
     const msg = cortar(await msgPorChat(ch));
     const existente = pend?.msgIds?.[ch];
-    if (existente && (await editarTelegram(ch, existente, cortar(agRiscoLinha() + msg), comPainel(botoes, msg, `FINAL_${inst}`)))) return;
+    if (existente && (await editarTelegram(ch, existente, cortar(agRiscoLinha() + msg), comPainel(botoes, msg, `FINAL_${inst}`), faixaUrl(corDoAlerta(msg, `FINAL_${inst}`))))) return;
     const novo = await enviarAlertaMoeda(SB, ch, `FINAL_${inst}`, msg, botoes);
     if (novo) ids[ch] = novo; else delete ids[ch];
   }));
@@ -11846,7 +11861,7 @@ async function enviarAlertaMoeda(SB: any, chat: string, instId: string, msg: str
   if (/^(FUNDO|TOPO|COMPRESSAO|ACOMP|FINAL|CRUZ|ANTEC|SEG)_/.test(instId)) {
     try { await buscarAgenda(SB); risco = agRiscoLinha(); } catch { }
   }
-  const novo = await sendTelegram(chat, cortar(ALERTA_MARCA + risco + msg), comPainel(botoes, msg, instId), { semUi: true }); // V145: + botão do painel
+  const novo = await sendTelegram(chat, cortar(ALERTA_MARCA + risco + msg), comPainel(botoes, msg, instId), { semUi: true, faixa: faixaUrl(corDoAlerta(msg, instId)) }); // V145: + botão do painel + faixa colorida
   if (novo) {
     if (antigo) await apagarMsg(chat, antigo);
     // NOTICIA_<ts> e AGENDA_RES_<ts> são chaves únicas (nunca substituem nada): gravar o id só criaria uma linha nova por aviso, pra sempre.
