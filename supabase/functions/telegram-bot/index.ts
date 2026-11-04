@@ -1,5 +1,7 @@
-// telegram-bot V145 — alertas de cripto no Telegram (Supabase Edge Function).
+// telegram-bot V152 — alertas de cripto no Telegram (Supabase Edge Function).
 // Histórico completo das versões: CHANGELOG.md (antes ficava aqui no cabeçalho, ~26 mil caracteres).
+// V152 (V151 + 🔂 MÃO VIRADA, avisos pras moedas da lista, no Premium e no Free: 🟡 PERTO DO INDICADOR = uma moeda das vagas cujo preço volta pra até MV_PERTO_PCT % (padrão 0,5, o "PERTO" do bot; 0 desliga) do Indicador do robô, conferido a cada rodada com o preço ao vivo — de novo só depois de se afastar MV_PERTO_REARMA_PCT % (padrão 1,5), 1x por vela no máximo; ⏸️ SEM VAGA = na recomendação da hora, a moeda que passaria mas ficou de fora porque as vagas estão ocupadas (a mesma de novo só depois de MV_SEM_VAGA_H horas, padrão 6; até 3 por hora; MV_SEM_VAGA=0 desliga). /maovirada organizado: as vagas, as que entrariam (sem vaga) e as 3 últimas recomendações, separadas por uma linha em branco; a moeda das vagas perto do Indicador aparece com 🟡. A mão de alerta, o motor e o resto do bot não mudam.)
+// V151 (V150 + MÃO DE ALERTA com a entrada no TOQUE da faixa — a regra do BT30-MV2e/MV2f, a mesma função do motor V75 (toquePasso): MV_MAO_ENTRADA (sem ele, MV_ENTRADA) = fecha (a 1ª vela fora do Indicador, como hoje), toque (no fechamento da vela do toque, ou da vela que fechou do outro lado antes dele, com o cruzamento antes) ou gatilho (o bot manda o "armar" e o motor V75 entra quando o preço volta à linha, com o preço ao vivo a cada minuto); MV_MAO_TOQUE_AFASTA, MV_MAO_TOQUE_CRUZ_ANTES e MV_MAO_TOQUE_GATILHO_PCT (sem eles, os MV_TOQUE_*). A escolha da entrada no site (mão de alerta, lida do motor com a chave de leitura, action config_mao, a cada 5 min) manda; fica gravada na moeda ao ligar (a troca vale na próxima sessão). MV_MAO_DESLIGAR=1 avisa o motor quando a moeda sai da lista (o motor fecha a operação ou mantém, pela escolha do site), com até 3 tentativas. /maovirada: "esperando o gatilho (no motor)" e quando o motor entrou. Sem os Secrets novos e sem a escolha no site, nada muda.)
 // V150 (V149 + /indicador carteira var50: o "de alerta" da carteira com |24h| ≥ 50% (ou o valor dado) no lugar do 8% padrão; liga o alerta sozinho). Só análises.
 // V149 (V148 + entradareteste24 = o reteste da escada vale até N horas depois do alerta, mesmo com a moeda já desligada; sem número continua só com a moeda ligada). Só análises.
 // V148 (V147 + /indicador carteira escada e /indicador reais: entradareteste = também entrando só no reteste (a regra do /indicador reteste: depois do cruzamento a vela fecha 1% ou mais além da faixa e depois volta a fechar a menos de 1% dela; reteste0.5 muda), com o stop da faixa da vela de entrada, a escada e o virar como nas outras entradas; padrão do MV_SEGURA_H agora 2 h). Só análises: alertas, bot e motor não mudam.
@@ -34,7 +36,7 @@
 // V119 (V118 + /juncao carteira: R somado por moeda em "todas que passam", no cruzamento e no reteste, pra ver de onde vem o resultado). Só análises: alertas, bot e motor não mudam.
 // Ao subir de versão: troque BOT_VERSAO (logo abaixo do import), atualize esta linha e registre no CHANGELOG.md.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-const BOT_VERSAO = "V147"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
+const BOT_VERSAO = "V152"; // V107: gravado em cada alerta (coluna versao) — suba junto com o cabeçalho a cada versão
 // V107: declarados no topo porque o numEnv é chamado desde as primeiras linhas. Antes o _numEnvAvisado ficava mais abaixo, e um Secret
 // numérico INVÁLIDO lido antes dele derrubava a function na carga (variável usada antes de existir) em vez de cair no padrão.
 const _numEnvAvisado = new Set<string>();
@@ -1821,6 +1823,17 @@ const MV_TROCA = (() => { const v = numEnv("MV_TROCA", "0"); return v > 0 ? Math
 const MV_TROCA_PP = Math.max(0, numEnv("MV_TROCA_PP", "0"));
 const MV_TROCA_MIN_H = Math.max(0, Math.min(48, Math.round(numEnv("MV_TROCA_MIN_H", "2"))));
 const mvTrocaOk = (fora: number, fraca: number, fator: number, pp: number): boolean => fora > fraca && fora >= fator * fraca && fora - fraca >= pp; // a mesma conta da recomendação e do /indicador carteira
+// V152: os avisos do mão virada pras moedas da lista (vão pro Premium e pro Free, como a recomendação):
+//   🟡 PERTO DO INDICADOR: uma moeda das vagas cujo preço volta pra até MV_PERTO_PCT % do Indicador do robô (MV_FAIXA, a linha da última vela de 15m
+//   fechada; dentro do Indicador = 0), conferido a cada rodada com o preço ao vivo. Avisa de novo só depois de o preço se afastar MV_PERTO_REARMA_PCT % ou
+//   mais e no máximo 1x por vela. Padrão 0,5 (o "🟡 PERTO" dos alertas do bot) e 1,5; MV_PERTO_PCT=0 desliga.
+//   ⏸️ SEM VAGA: na recomendação da hora, a moeda que passa no cenário mas ficou de fora porque as vagas estão ocupadas (até 3 por hora, das 8 que mais
+//   passam; a mesma moeda de novo só depois de MV_SEM_VAGA_H horas, padrão 6). MV_SEM_VAGA=0 desliga.
+const MV_PERTO_PCT = Math.max(0, Math.min(5, numEnv("MV_PERTO_PCT", "0.5")));
+const MV_PERTO_REARMA_PCT = Math.max(MV_PERTO_PCT * 1.5, Math.min(20, numEnv("MV_PERTO_REARMA_PCT", "1.5")));
+const MV_SEM_VAGA = (Deno.env.get("MV_SEM_VAGA") || "1").trim() !== "0";
+const MV_SEM_VAGA_H = Math.max(1, Math.min(72, Math.round(numEnv("MV_SEM_VAGA_H", "6"))));
+const MV_SEM_VAGA_MAX = 3;
 const mvTrocaTxt = () => (MV_TROCA > 0 ? ` · troca: a moeda de fora entra no lugar da mais fraca se tiver ${MV_TROCA}× a variação dela${MV_TROCA_PP > 0 ? ` e ${MV_TROCA_PP} pontos a mais` : ""} (depois de ${MV_TROCA_MIN_H} h ligada)` : "");
 // V125: a faixa do robô mão virada (o lado LONG/SHORT que sai no alerta). Padrão: rápida + 144, que vira menos que a rápida dos alertas.
 // O cenário (de alerta e ATR) não depende da faixa.
@@ -1871,13 +1884,60 @@ const MV_DETALHES = (Deno.env.get("MV_DETALHES") || "0").trim() === "1";
 // V143: a faixa dessa entrada é a da mão de alerta (MV_MAO_FAIXA; sem ela, a MV_FAIXA), e ela vai junto pro motor V73 conferir com a dele.
 const MV_MOTOR = (Deno.env.get("MV_MOTOR") || "1").trim() !== "0";
 const MV_ROW = "_MAO_VIRADA_";
+// V151: A ENTRADA DA MÃO DE ALERTA NO TOQUE DA FAIXA (a regra do BT30-MV2e/MV2f; a mesma função do motor V75, toquePasso). A escolha do site (mão de alerta
+// → Entrada, no motor) manda e fica gravada na moeda ao ligar (MvLig.ent: trocar vale na próxima sessão); sem ela, os Secrets; sem eles, como hoje:
+//   MV_MAO_ENTRADA (sem valor: MV_ENTRADA) = fecha (a 1ª vela fora do Indicador, como hoje) · toque (no fechamento da vela do toque) · gatilho (o bot manda o
+//     "armar" e o motor V75 entra quando o preço volta à linha, com o preço ao vivo a cada minuto)
+//   MV_MAO_TOQUE_AFASTA (MV_TOQUE_AFASTA; 0,1 a 20, padrão 5) · MV_MAO_TOQUE_CRUZ_ANTES (MV_TOQUE_CRUZ_ANTES; 1 = entra no cruzamento antes do toque /
+//     0 = sem entrada; padrão 1) · MV_MAO_TOQUE_GATILHO_PCT (MV_TOQUE_GATILHO_PCT; 0 a 5, padrão 0 = na linha)
+//   MV_MAO_DESLIGAR = 1: avisa o motor quando a moeda sai da lista (o motor fecha a operação ou mantém, pela escolha do site); padrão 0 (não avisa)
+// Os MV_ sem o MAO_ são os do robô de mão virada (no motor); aqui só servem de padrão pros MV_MAO_. Valor inválido = ignorado (vale o padrão), com aviso no log.
+type MvEntModo = "fecha" | "toque" | "gatilho";
+type MvEnt = { e: MvEntModo; a: number; c: boolean; g: number; o: "site" | "secret" | "padrao" };
+type MvDesl = { i: string; ate: number; n: number };
+const mvSecTxt = (k: string) => (Deno.env.get(k) || "").trim();
+function mvSecEntrada(k: string): MvEntModo | null {
+  const b = mvSecTxt(k);
+  if (!b) return null;
+  const s = b.toLowerCase();
+  if (s === "fecha" || s === "toque" || s === "gatilho") return s;
+  console.log(`⚠️ ${k}="${b.slice(0, 20)}" não é fecha, toque nem gatilho - ignorado`);
+  return null;
+}
+function mvSecNum(k: string, min: number, max: number): number | null {
+  const b = mvSecTxt(k);
+  if (!b) return null;
+  const x = Number(b.replace(",", "."));
+  if (Number.isFinite(x) && x >= min && x <= max) return x;
+  console.log(`⚠️ ${k}="${b.slice(0, 20)}" fora de ${min} a ${max} - ignorado`);
+  return null;
+}
+function mvSec01(k: string): boolean | null {
+  const b = mvSecTxt(k);
+  if (!b) return null;
+  if (b === "1" || b === "0") return b === "1";
+  console.log(`⚠️ ${k}="${b.slice(0, 20)}" não é 1 nem 0 - ignorado`);
+  return null;
+}
+const MV_MAO_ENT_SEC: MvEntModo | null = mvSecEntrada("MV_MAO_ENTRADA") ?? mvSecEntrada("MV_ENTRADA");
+const MV_MAO_AFASTA_SEC = mvSecNum("MV_MAO_TOQUE_AFASTA", 0.1, 20) ?? mvSecNum("MV_TOQUE_AFASTA", 0.1, 20);
+const MV_MAO_CRUZ_SEC = mvSec01("MV_MAO_TOQUE_CRUZ_ANTES") ?? mvSec01("MV_TOQUE_CRUZ_ANTES");
+const MV_MAO_GAT_SEC = mvSecNum("MV_MAO_TOQUE_GATILHO_PCT", 0, 5) ?? mvSecNum("MV_TOQUE_GATILHO_PCT", 0, 5);
+const MV_MAO_DESLIGAR = mvSec01("MV_MAO_DESLIGAR") === true;
 type MvCen = { pct: number; adx: number; atrP: number; er3d?: number; lado: "long" | "short" | null; passa: boolean };
 type MvLig = { i: string; desde: number; ultH: number; pct: number; adx: number; atrP: number; er3d?: number; a1h?: number; a4h?: number; lado: "long" | "short" | null;
   // V138: a entrada da mão de alerta. mot = quando foi decidida (enviada ou não: uma vez por "ligar"); motT = abertura da última vela conferida;
   // motRes = ok · naogravou (o motor respondeu sem gravar) · recusou · falhou · perdida (a entrada era numa vela que passou sem conferir); motLado; motMsg
-  mot?: number; motT?: number; motRes?: "ok" | "naogravou" | "recusou" | "falhou" | "perdida"; motLado?: "long" | "short"; motMsg?: string; motFalhas?: number };
+  mot?: number; motT?: number; motRes?: "ok" | "naogravou" | "recusou" | "falhou" | "perdida" | "armado" | "contra"; motLado?: "long" | "short"; motMsg?: string; motFalhas?: number;
+  // V151: ent = a regra da entrada desta sessão (gravada ao ligar; sem ela = "fecha", como antes); tq = o estado da regra do toque. motRes "armado" = o motor
+  // gravou o "armar" do gatilho; "contra" = fechou do outro lado do Indicador antes do toque, sem o cruzamento antes (sem entrada nesta sessão)
+  ent?: MvEnt; tq?: ToqueEst;
+  // V152: pr = o aviso de perto do Indicador: vela = a vela de 15m fechada das linhas guardadas (topo e fundo do Indicador do robô); arm = armado (o preço
+  // esteve longe: avisa quando chegar perto); lado = o último lado fora do Indicador; avisoVela = a vela do último aviso
+  pr?: MvPerto };
+type MvPerto = { vela: number; topo: number; fundo: number; arm: boolean; lado: "long" | "short" | null; aviso?: number; avisoVela?: number };
 type MvHist = { i: string; a: "liga" | "desliga"; t: number; pct: number | null; adx: number | null; atrP: number | null; er3d?: number | null };
-type MvEstado = { hora: number; lig: MvLig[]; cands: { i: string; pct: number; adx: number; atrP: number; er3d?: number }[]; hist: MvHist[] };
+type MvEstado = { hora: number; lig: MvLig[]; cands: { i: string; pct: number; adx: number; atrP: number; er3d?: number }[]; hist: MvHist[]; desl?: MvDesl[]; sv?: Record<string, number> }; // V151: desl = a fila do desligar pro motor · V152: sv = moeda -> o último aviso de sem vaga
 const MV_HIST_MAX = 200;
 const mvRegraTxt = () => `de alerta (|24h| ≥ ${MV_MOV}% e ADX ≥ ${MV_ADX}) e ATR ≥ ${MV_ATR_MIN}% do preço${MV_ER3D > 0 ? ` e andou reto em 3 dias (≥ ${MV_ER3D})` : ""} · até ${MV_VAGAS} moeda(s), ${MV_CRITERIO === "atr" ? "a de maior ATR" : "a que mais andou em 24h"} primeiro · desligar depois de ${MV_SEGURA_H} h fora do cenário · lado pelo Indicador do robô${MV_MAO_FAIXA.chave !== MV_FAIXA.chave ? " · entrada da mão de alerta pelo Indicador da mão de alerta" : ""}${mvTrocaTxt()}`; // V143; V144: sem o valor da faixa no chat; V147: troca
 // cenário de uma moeda: variação de 24h do ticker, ADX(14) e ATR(14) da última vela de 15m fechada
@@ -1925,13 +1985,13 @@ const mvTopoLinhas = (lig: MvLig[], extra: (l: MvLig) => string = () => ""): str
   return t;
 };
 async function mvLer(SB: any): Promise<MvEstado | null> {
-  const vazio: MvEstado = { hora: 0, lig: [], cands: [], hist: [] };
+  const vazio: MvEstado = { hora: 0, lig: [], cands: [], hist: [], desl: [], sv: {} };
   try {
     const { data, error } = await SB.from(TAB).select("last_status").eq("instid", MV_ROW).maybeSingle();
     if (error) { console.log("⚠️ mão virada: leitura falhou, pulo a rodada", error.message ?? error); return null; }
     if (!data?.last_status) return vazio;
     const j = JSON.parse(data.last_status);
-    return { hora: Number(j.hora) || 0, lig: Array.isArray(j.lig) ? j.lig : [], cands: Array.isArray(j.cands) ? j.cands : [], hist: Array.isArray(j.hist) ? j.hist : [] };
+    return { hora: Number(j.hora) || 0, lig: Array.isArray(j.lig) ? j.lig : [], cands: Array.isArray(j.cands) ? j.cands : [], hist: Array.isArray(j.hist) ? j.hist : [], desl: Array.isArray(j.desl) ? j.desl : [], sv: j.sv && typeof j.sv === "object" ? j.sv : {} }; // V151: + desl · V152: + sv
   } catch (e) { console.log("⚠️ mão virada: leitura falhou", e); return null; }
 }
 // Roda uma vez por hora fechada (a 1ª rodada do cron depois da virada da hora), com o pool e os indicadores que o alerta já calculou.
@@ -1962,6 +2022,7 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
       linhas.push(`⚪ Desligar <b>${mvNome(l.i)}</b>: ${hora - l.ultH} h fora do cenário${c ? ` (agora ${mvPub(c)})` : " (sem dados agora)"} · recomendada desde ${divDH(l.desde)}`);
       hist(l.i, "desliga", c);
       console.log(`🔂 mão virada: recomenda desligar ${l.i} (${hora - l.ultH} h fora do cenário)`);
+      mvDesligarMotor(est, l, agoraMs); // V151
       continue;
     }
     ficam.push(c ? { ...l, pct: c.pct } : l); // V146: variação de hoje, pra ordenar o Top
@@ -1973,7 +2034,8 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   const ligar = async (x: { i: string; c: MvCen }) => {
     const lado = await ladoDe(x.i, null);
     const ag = await mvAdxGrandes(x.i).catch(() => ({ a1h: NaN, a4h: NaN })); // V127
-    ficam.push({ i: x.i, desde: agoraMs, ultH: hora, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP, er3d: x.c.er3d, a1h: ag.a1h, a4h: ag.a4h, lado });
+    const ent = MV_MOTOR && MOTOR_URL && MOTOR_ALERTA_SECRET ? await mvEntAgora() : undefined; // V151: a regra da entrada da mão de alerta desta sessão
+    ficam.push({ i: x.i, desde: agoraMs, ultH: hora, pct: x.c.pct, adx: x.c.adx, atrP: x.c.atrP, er3d: x.c.er3d, a1h: ag.a1h, a4h: ag.a4h, lado, ...(ent ? { ent } : {}) });
     linhas.push(MV_DETALHES ? `🟢 Ligar <b>${mvNome(x.i)}</b>: de alerta (${mvCenTxt(x.c)})${mvAdxGTxt(ag)}${mvLadoPub(lado)}` : `🟢 Ligar <b>${mvNome(x.i)}</b>${mvLadoPub(lado)} · ${mvPub(x.c)}`);
     hist(x.i, "liga", x.c);
     console.log(`🔂 mão virada: recomenda ligar ${x.i} (${mvCenTxt(x.c)})`);
@@ -1994,9 +2056,25 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
         ficam.splice(ficam.indexOf(fraca), 1);
         linhas.push(`⚪ Desligar <b>${mvNome(fraca.i)}</b>: a <b>${mvNome(melhor.i)}</b> tem variação bem maior e pegou a vaga${cf ? ` (agora ${mvPub(cf)})` : ""} · recomendada desde ${divDH(fraca.desde)}`);
         hist(fraca.i, "desliga", cf);
+        mvDesligarMotor(est, fraca, agoraMs); // V151
         console.log(`🔂 mão virada: troca - desliga ${fraca.i} (${Math.abs(fraca.pct).toFixed(1)}%) e liga ${melhor.i} (${Math.abs(melhor.c.pct).toFixed(1)}%)`);
         await ligar(melhor);
       }
+    }
+  }
+  // V152: ⏸️ SEM VAGA — passa no cenário, mas as vagas estão ocupadas (das 8 que mais passam, até 3 por hora; a mesma moeda de novo só depois de
+  // MV_SEM_VAGA_H horas)
+  if (MV_SEM_VAGA) {
+    est.sv = Object.fromEntries(Object.entries(est.sv ?? {}).filter(([, t]) => agoraMs - Number(t) < 72 * 3600000));
+    let n = 0;
+    for (const x of passam.slice(0, 8)) {
+      if (n >= MV_SEM_VAGA_MAX) break;
+      // (a que já estava numa vaga e saiu agora, na troca, não conta: o aviso é pra moeda que não entrou)
+      if (ficam.some((l) => l.i === x.i) || est.lig.some((l) => l.i === x.i) || agoraMs - Number(est.sv[x.i] ?? 0) < MV_SEM_VAGA_H * 3600000) continue;
+      const lado = await ladoDe(x.i, null);
+      linhas.push(`⏸️ Sem vaga: <b>${mvNome(x.i)}</b>${mvLadoPub(lado)} · ${mvPub(x.c)} · passaria, mas ${MV_VAGAS === 1 ? "a vaga está ocupada" : `as ${MV_VAGAS} vagas estão ocupadas`}`);
+      est.sv[x.i] = agoraMs; n++;
+      console.log(`🔂 mão virada: ${x.i} passaria, mas sem vaga (${mvCenTxt(x.c)})`);
     }
   }
   est.lig = ficam;
@@ -2005,20 +2083,157 @@ async function radarMaoVirada(SB: any, variacoes: VarInfo[], pool: { instId: str
   est.hist = est.hist.slice(-MV_HIST_MAX);
   await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est), last_alert_at: new Date(agoraMs).toISOString() });
   if (!linhas.length) return [];
-  const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\n<b>Recomendadas agora</b> (Top 1 = a maior variação em 24h · até ${MV_VAGAS})\n${mvTopoLinhas(ficam)}<i>Só recomendação: ligar e desligar o robô é com você. ${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Detalhes em /maovirada.</i>`;
+  const msg = `🔂 <b>MÃO VIRADA</b> · recomendação\n${linhas.join("\n")}\n\n<b>Recomendadas agora</b> (Top 1 = a maior variação em 24h · até ${MV_VAGAS})\n${mvTopoLinhas(ficam)}<i>Só recomendação: ligar e desligar o robô é com você. ${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Detalhes em /maovirada.</i>`;
   for (const ch of ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c))) await sendTelegram(ch, msg, botaoPainel(msg, "MÃO VIRADA", "mao"), { faixa: faixaUrl("mao") }).catch((e) => console.log("⚠️ mão virada: envio falhou", e)); // V145: Premium + Free + botão do painel
   return linhas;
+}
+// ===== V75 (motor) / V151 (bot): ENTRADA NO TOQUE DA FAIXA — a regra testada no BT30-MV2e/MV2f, igual nos dois projetos =====
+// Em velas FECHADAS (o timeframe de quem chama; na mão de alerta, 15m) e na faixa de quem chama:
+//  1. lado = a 1ª vela, desde o começo da sessão, que fecha fora da faixa (acima da linha de cima = LONG; abaixo da de baixo = SHORT);
+//  2. afastou = alguma vela (pode ser a do passo 1) fecha a X% ou mais além da linha desse lado (LONG: (fech. − cima) ÷ cima; SHORT: (baixo − fech.) ÷ baixo);
+//  3. toque = numa vela DEPOIS da que afastou, o preço chega na linha da vela ANTERIOR (LONG: mínima ≤ linha de cima; SHORT: máxima ≥ linha de baixo);
+//  4. entrada: "toque" = no fechamento da vela do toque (fora ou dentro da faixa, mas não do outro lado); "gatilho" = depois do toque, quando o preço
+//     chega G% além da linha da vela anterior (LONG: linha de cima × (1 + G%); SHORT: linha de baixo × (1 − G%)), na própria vela do toque ou depois
+//     (cada vela fechada passa a valer a linha dela); vela que abre além do gatilho entra na abertura; sem toque, nada arma;
+//  5. vela que fecha do outro lado antes da entrada: com cruz, entra no fechamento dela, no lado novo (o gatilho é cancelado); sem, a sessão fica sem entrada;
+//  6. toque antes de afastar não conta.
+// O preço dentro da vela (gatilho) vem das velas de 1 minuto: no minuto do toque só entra se ele fechar além do gatilho (a máxima pode ter vindo antes do
+// toque); nos seguintes, o minuto que chega no gatilho entra nele (ou na abertura, se abriu além). ps = o stop (anti pump-dump da linha da vela anterior)
+// batido na vela da entrada, nos minutos depois da entrada (contando o próprio minuto: pior caso), 0 = não bateu.
+type ToqueLado = "long" | "short";
+type ToqueCfg = { modo: "toque" | "gatilho"; afasta: number; cruz: boolean; gat: number; stop: number }; // stop = o anti pump-dump (%), só pro ps
+type ToqueEst = { lado: ToqueLado | null; afastou: boolean; tocou: boolean; kToque: number | null; ult: number | null }; // kToque/ult = abertura (ms)
+type ToqueVelas = { t: number[]; o: number[]; h: number[]; l: number[]; c: number[] };
+type ToqueLin = { topo: number[]; fundo: number[] };
+type ToqueRes = { acao: "espera" } | { acao: "entra"; lado: ToqueLado; vela: number; via: "toque" | "gatilho" | "cruz"; px?: number; ps?: number } | { acao: "para"; vela: number };
+const toqueEstNovo = (): ToqueEst => ({ lado: null, afastou: false, tocou: false, kToque: null, ult: null });
+const toqueDist = (c: number, topo: number, fundo: number, lado: ToqueLado) => (lado === "long" ? ((c - topo) / topo) * 100 : ((fundo - c) / fundo) * 100);
+// o gatilho numa vela (i = índice dela em lin; a linha é a da vela i-1). novo = o toque é nesta vela. m1 = as velas de 1 minuto dela (a última pode estar
+// formando: o fechamento dela é o preço de agora). null = não entrou nesta vela.
+function toqueGatilhoNaVela(lado: ToqueLado, lin: ToqueLin, i: number, cfg: ToqueCfg, m1: ToqueVelas | null, novo: boolean): { px: number; ps: number } | null {
+  const long = lado === "long", ln = long ? lin.topo[i - 1] : lin.fundo[i - 1];
+  const T = long ? ln * (1 + cfg.gat / 100) : ln * (1 - cfg.gat / 100);
+  const s0 = long ? lin.fundo[i - 1] * (1 - cfg.stop / 100) : lin.topo[i - 1] * (1 + cfg.stop / 100);
+  if (!m1 || !m1.t.length) return null;
+  const nm = m1.t.length;
+  let q0 = 0, qf = -1, px = T;
+  if (novo) { // o minuto do toque: só entra nele se ele fechar além do gatilho
+    let j = -1;
+    for (let q = 0; q < nm; q++) if (long ? m1.l[q] <= ln : m1.h[q] >= ln) { j = q; break; }
+    if (j < 0) { j = 0; for (let q = 1; q < nm; q++) if (long ? m1.l[q] < m1.l[j] : m1.h[q] > m1.h[j]) j = q; } // a vela tocou e as de 1 minuto não: o minuto mais perto da linha
+    if (long ? m1.c[j] >= T : m1.c[j] <= T) qf = j;
+    q0 = j + 1;
+  }
+  if (qf < 0) for (let q = q0; q < nm; q++) if (long ? m1.h[q] >= T : m1.l[q] <= T) { qf = q; px = long ? Math.max(m1.o[q], T) : Math.min(m1.o[q], T); break; }
+  if (qf < 0) return null;
+  let ps = 0;
+  for (let q = qf; q < nm; q++) if (long ? m1.l[q] <= s0 : m1.h[q] >= s0) { ps = q === qf ? s0 : long ? Math.min(m1.o[q], s0) : Math.max(m1.o[q], s0); break; }
+  return { px, ps };
+}
+// uma vela FECHADA (i ≥ 1): os passos 1 a 6. Muda st. m1 = as velas de 1 minuto da vela i (só o gatilho usa; sem elas, o gatilho segue armado).
+function toquePasso(st: ToqueEst, v: ToqueVelas, lin: ToqueLin, i: number, cfg: ToqueCfg, m1: ToqueVelas | null = null): ToqueRes {
+  const l: ToqueLado | null = v.c[i] > lin.topo[i] ? "long" : v.c[i] < lin.fundo[i] ? "short" : null;
+  st.ult = v.t[i];
+  if (!st.lado) { // 1 (e 2 na mesma vela)
+    if (!l) return { acao: "espera" };
+    st.lado = l; st.afastou = toqueDist(v.c[i], lin.topo[i], lin.fundo[i], l) >= cfg.afasta;
+    return { acao: "espera" };
+  }
+  const lado = st.lado;
+  const toq = st.afastou && (lado === "long" ? v.l[i] <= lin.topo[i - 1] : v.h[i] >= lin.fundo[i - 1]); // 3 e 6
+  if (cfg.modo === "gatilho" && (toq || st.tocou)) {
+    const novo = !st.tocou;
+    if (novo) { st.tocou = true; st.kToque = v.t[i]; }
+    const g = toqueGatilhoNaVela(lado, lin, i, cfg, m1, novo);
+    if (g) return { acao: "entra", lado, vela: v.t[i], via: "gatilho", px: g.px, ps: g.ps }; // mesmo que a vela feche do outro lado (o modo cruzamento vira no fechamento)
+  }
+  if (l && l !== lado) return cfg.cruz ? { acao: "entra", lado: l, vela: v.t[i], via: "cruz" } : { acao: "para", vela: v.t[i] }; // 5
+  if (cfg.modo === "gatilho" && st.tocou) return { acao: "espera" }; // o gatilho segue armado
+  if (cfg.modo === "toque" && toq) return { acao: "entra", lado, vela: v.t[i], via: "toque" }; // 4 (no fechamento, fora ou dentro da faixa)
+  if (l !== lado) return { acao: "espera" }; // dentro da faixa
+  if (toqueDist(v.c[i], lin.topo[i], lin.fundo[i], l) >= cfg.afasta) st.afastou = true; // 2
+  return { acao: "espera" };
+}
+// o gatilho AO VIVO, na vela que está formando (k = a última fechada, cuja linha vale agora). Não muda st (no fechamento, toquePasso refaz a vela).
+// m1 = as velas de 1 minuto da vela que está formando (a última delas com o preço de agora). px = o preço do gatilho (quem chama entra a mercado).
+function toqueVivo(st: ToqueEst, lin: ToqueLin, k: number, cfg: ToqueCfg, m1: ToqueVelas | null): { px: number; ps: number } | null {
+  if (cfg.modo !== "gatilho" || !st.lado || !(st.afastou || st.tocou) || !m1 || !m1.t.length) return null;
+  const long = st.lado === "long", ln = long ? lin.topo[k] : lin.fundo[k];
+  if (!st.tocou && !m1.l.some((x, q) => (long ? x <= ln : m1.h[q] >= ln))) return null; // ainda não tocou nesta vela
+  return toqueGatilhoNaVela(st.lado, lin, k + 1, cfg, m1, !st.tocou);
+}
+// V151: a escolha da entrada da MÃO DE ALERTA no site, lida do motor V75 (action:"config_mao", chave de leitura MOTOR_LEITURA_SECRET), guardada 5 min.
+// null = o motor não respondeu (ou é anterior à V75): vale o Secret. sessoes = as linhas da mão de alerta das últimas 48h (o /maovirada mostra quando o
+// motor entrou no gatilho).
+type MvCfgMao = { entrada: MvEntModo | null; afasta: number | null; cruz: boolean | null; gat: number | null; aoSair: string | null; v75: boolean; sessoes: any[] };
+let _mvCfgCache: { t: number; cfg: MvCfgMao | null } | null = null;
+async function mvCfgMao(forcar = false): Promise<MvCfgMao | null> {
+  if (!MOTOR_URL || !MOTOR_LEITURA_SECRET) return null;
+  // a leitura boa vale 5 min; a que falhou, 1 min (não trava a rodada perguntando de novo a cada moeda)
+  if (!forcar && _mvCfgCache && Date.now() - _mvCfgCache.t < (_mvCfgCache.cfg ? 5 : 1) * 60000) return _mvCfgCache.cfg;
+  let cfg: MvCfgMao | null = null;
+  try {
+    const r = await fetch(MOTOR_URL, {
+      method: "POST", headers: motorHeaders({ "x-leitura-secret": MOTOR_LEITURA_SECRET }),
+      body: JSON.stringify({ action: "config_mao", ...(MOTOR_USER_EMAIL ? { user_email: MOTOR_USER_EMAIL } : {}) }), signal: AbortSignal.timeout(8000),
+    });
+    const j: any = await r.json().catch(() => null);
+    if (r.ok && j?.ok) {
+      const c = j.cfg || {};
+      const num = (v: any, min: number, max: number) => (v === null || v === undefined || v === "" || !(Number(v) >= min && Number(v) <= max) ? null : Number(v));
+      cfg = {
+        entrada: c.entrada === "fecha" || c.entrada === "toque" || c.entrada === "gatilho" ? c.entrada : null, afasta: num(c.toque_afasta, 0.1, 20),
+        cruz: typeof c.toque_cruz_antes === "boolean" ? c.toque_cruz_antes : null, gat: num(c.toque_gatilho_pct, 0, 5),
+        aoSair: c.ao_sair_lista === "manter" || c.ao_sair_lista === "fechar" ? c.ao_sair_lista : null, v75: c.v75 === true, sessoes: Array.isArray(j.sessoes) ? j.sessoes : [],
+      };
+    } else console.log(`⚠️ mão de alerta: não li a escolha da entrada no site (HTTP ${r.status}${j?.error ? `: ${String(j.error).slice(0, 120)}` : ""}) - vale o Secret`);
+  } catch (e) { console.log(`⚠️ mão de alerta: não li a escolha da entrada no site (${e}) - vale o Secret`); }
+  _mvCfgCache = { t: Date.now(), cfg };
+  return cfg;
+}
+// a regra da entrada: a escolha do site > o Secret (MV_MAO_; sem ele, o MV_) > o padrão ("fecha" = como hoje, afastar 5%, com o cruzamento antes, gatilho na linha)
+function mvEntDe(cfg: MvCfgMao | null): MvEnt {
+  if (cfg?.v75 && cfg.entrada) return { e: cfg.entrada, a: cfg.afasta ?? MV_MAO_AFASTA_SEC ?? 5, c: cfg.cruz ?? MV_MAO_CRUZ_SEC ?? true, g: cfg.gat ?? MV_MAO_GAT_SEC ?? 0, o: "site" };
+  return { e: MV_MAO_ENT_SEC ?? "fecha", a: MV_MAO_AFASTA_SEC ?? 5, c: MV_MAO_CRUZ_SEC ?? true, g: MV_MAO_GAT_SEC ?? 0, o: MV_MAO_ENT_SEC ? "secret" : "padrao" };
+}
+const mvEntTxt = (e: MvEnt) => (e.e === "fecha" ? "na 1ª vela fora do Indicador" : `no toque do Indicador (${e.e === "gatilho" ? `gatilho ${e.g > 0 ? `${String(e.g).replace(".", ",")}% além da linha` : "na linha"}, no motor` : "no fechamento da vela"}; afastar ${String(e.a).replace(".", ",")}%; ${e.c ? "com" : "sem"} o cruzamento antes)`);
+// a regra desta sessão, gravada na moeda ao ligar (MvLig.ent): trocar no site vale a partir da próxima sessão
+async function mvEntAgora(): Promise<MvEnt> {
+  const ent = mvEntDe(await mvCfgMao().catch(() => null));
+  console.log(`🔂 mão de alerta: entrada desta sessão ${mvEntTxt(ent)} (${ent.o === "site" ? "escolha do site" : ent.o === "secret" ? "Secret" : "padrão"})`);
+  return ent;
+}
+// V151: a moeda saiu da lista (desligar ou troca): com MV_MAO_DESLIGAR=1, avisa o motor se a entrada (ou o "armar" do gatilho) da mão de alerta dela já
+// está gravada lá. Vai pra fila (est.desl); o mvMotorEntradas manda nesta mesma rodada (falha de rede = tenta de novo nas seguintes, até 3 vezes).
+function mvDesligarMotor(est: MvEstado, l: MvLig, agoraMs: number) {
+  if (!MV_MAO_DESLIGAR || !MV_MOTOR || !l.mot || (l.motRes !== "ok" && l.motRes !== "armado")) return;
+  (est.desl ??= []).push({ i: l.i, ate: agoraMs, n: 0 });
+  console.log(`🔂 mão de alerta: ${l.i} saiu da lista - o desligar vai pro motor`);
 }
 // V138: manda pro motor a entrada da MÃO DE ALERTA das moedas recomendadas que ainda não foram (uma vez por "ligar"). Confere cada vela de 15m nova:
 // acha a 1ª vela, da do alerta em diante, que fechou fora da faixa do robô (MV_FAIXA; V143: a da mão de alerta, MV_MAO_FAIXA). Sendo a última fechada (ou a anterior, com a última ainda do
 // mesmo lado: até uma vela de atraso), manda o lado, o preço de agora, o ATR(14) e a junção (topo e fundo da faixa) dessa última vela; mais atrasada que
 // isso, não manda (a entrada do teste já passou). Falha de rede tenta de novo na rodada seguinte (até 3 vezes). Roda dentro da trava do cron.
+// V151: a entrada da sessão (MvLig.ent): "fecha" (ou sessão de antes da V151) = como acima; "toque" = a regra do toque (toquePasso) nas mesmas velas e na
+// mesma faixa, entrando no fechamento da vela do toque (ou do cruzamento antes); "gatilho" = manda o "armar" e o motor V75 roda a regra com o preço ao vivo.
+// E o desligar da fila (MV_MAO_DESLIGAR=1).
 async function mvMotorEntradas(SB: any, agoraMs = Date.now()): Promise<number> {
   if (!MV_ON || !MV_MOTOR || !MOTOR_URL || !MOTOR_ALERTA_SECRET) return 0;
   const est = await mvLer(SB);
-  if (!est || !est.lig.some((l) => !l.mot)) return 0;
+  if (!est || (!est.lig.some((l) => !l.mot) && !est.desl?.length)) return 0;
   const TFMS = TF_MIN * 60000, ultFechada = Math.floor(agoraMs / TFMS) * TFMS - TFMS;
   let mudou = false, enviados = 0;
+  // V151: o desligar das moedas que saíram da lista (a mesma chave do alerta). O motor decide pela escolha do site: fecha a operação ou mantém.
+  if (est.desl?.length) {
+    const fica: MvDesl[] = [];
+    for (const q of est.desl) {
+      const r = await enviarAlertaMotorDet({ inst: q.i, side: null, tipo: "maovirada_desligar", preco: 0, atr: 0, nota: null, vol: null, extra: { ate: q.ate } });
+      q.n = (q.n ?? 0) + 1;
+      console.log(`🔂 mão de alerta: desligar ${q.i} -> motor: ${r.st}${r.msg ? ` (${r.msg})` : ""}${r.st === "ok" ? ` · ${r.gravados ?? 0} linha(s) marcada(s)` : ""} (tentativa ${q.n})`);
+      if (r.st === "falhou" && q.n < 3) fica.push(q); // tenta de novo na próxima rodada
+    }
+    est.desl = fica; mudou = true;
+  }
   for (const l of est.lig) {
     if (l.mot || (l.motT ?? 0) >= ultFechada) continue; // já decidida, ou a última vela já foi conferida
     const d = await xCandles(l.i, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
@@ -2028,6 +2243,52 @@ async function mvMotorEntradas(SB: any, agoraMs = Date.now()): Promise<number> {
     const lin = linhasDeBanda(mvBanda(d.c, MV_MAO_FAIXA)); // V143: a faixa da mão de alerta (o lado e a junção da entrada)
     const ladoEm = (i: number): "long" | "short" | null => (d.c[i] > lin.topo[i] ? "long" : d.c[i] < lin.fundo[i] ? "short" : null);
     const iA = Math.max(1, d.t.findIndex((t) => t >= velaAlerta));
+    if (l.ent?.e === "gatilho") {
+      // V151: GATILHO = o motor V75 roda a regra inteira, a cada minuto, com o preço ao vivo: o bot manda o "armar" uma vez por "ligar", com a vela do
+      // alerta (o começo da sessão), a faixa e a regra; o preço, o ATR(14) e o Indicador da última vela fechada vão pra conferência e pro registro
+      const atr = atrSerie(d.h, d.l, d.c, 14)[k];
+      const vivo = await precoAoVivo(l.i).catch(() => null);
+      const r = await enviarAlertaMotorDet({ inst: l.i, side: null, tipo: "maovirada_armar", preco: vivo ?? d.c[k], atr, nota: null, vol: volDe(l.i)?.u ?? null, juncao: { topo: lin.topo[k], fundo: lin.fundo[k], faixa: MV_MAO_FAIXA.chave }, extra: { vela: velaAlerta, afasta: l.ent.a, cruz_antes: l.ent.c, gatilho_pct: l.ent.g, desligar: MV_MAO_DESLIGAR } });
+      mudou = true;
+      if (r.st === "falhou" && (l.motFalhas ?? 0) < 2) { l.motFalhas = (l.motFalhas ?? 0) + 1; continue; } // tenta de novo na próxima rodada
+      l.mot = agoraMs; l.motRes = r.st === "ok" ? (r.gravados ? "armado" : "naogravou") : r.st === "sem" ? "falhou" : r.st; l.motMsg = r.msg;
+      console.log(`🔂 mão de alerta: ${l.i} armar (gatilho no motor) -> ${l.motRes}${r.msg ? ` (${r.msg})` : ""} | vela do alerta ${new Date(velaAlerta).toISOString()} | Indicador ${lin.fundo[k]} a ${lin.topo[k]} (faixa ${MV_MAO_FAIXA.chave}) | afastar ${l.ent.a}% · ${l.ent.c ? "com" : "sem"} cruzamento antes · gatilho ${l.ent.g}%`);
+      continue;
+    }
+    if (l.ent?.e === "toque") {
+      // V151: TOQUE = a regra do toque (toquePasso, a mesma do motor V75) nas velas fechadas da do alerta em diante, na faixa da mão de alerta. Entra no
+      // fechamento da vela do toque (ou da que fechou do outro lado antes dele, com o cruzamento antes): o lado, o preço de agora, o ATR(14) e o Indicador
+      // da última vela fechada, como no "fecha". Até uma vela de atraso (se a seguinte não fechou do outro lado); mais que isso = "perdida".
+      const tqAntes = l.tq ? { ...l.tq } : undefined;
+      const st: ToqueEst = { ...toqueEstNovo(), ...(l.tq ?? {}) };
+      const v: ToqueVelas = { t: d.t, o: d.o, h: d.h, l: d.l, c: d.c };
+      const cfgT: ToqueCfg = { modo: "toque", afasta: l.ent.a, cruz: l.ent.c, gat: l.ent.g, stop: 2 };
+      let i0 = iA;
+      if (st.ult !== null) { const iu = d.t.findIndex((t) => t > Number(st.ult)); i0 = Math.max(i0, iu < 0 ? k + 1 : iu); }
+      let dec: ToqueRes = { acao: "espera" }, iDec = -1;
+      for (let i = i0; i <= k; i++) { dec = toquePasso(st, v, lin, i, cfgT); if (dec.acao !== "espera") { iDec = i; break; } }
+      l.tq = st; l.motT = d.t[k]; mudou = true;
+      if (dec.acao === "espera") continue; // esperando o lado, o afastar ou o toque
+      if (dec.acao === "para") {
+        l.mot = agoraMs; l.motRes = "contra";
+        console.log(`🔂 mão de alerta: ${l.i} - a vela de ${new Date(dec.vela).toISOString()} fechou do outro lado do Indicador antes do toque (sem o cruzamento antes): sem entrada nesta sessão`);
+        continue;
+      }
+      const atraso = k - iDec, lk = ladoEm(k);
+      if (!(atraso === 0 || (atraso === 1 && lk !== (dec.lado === "long" ? "short" : "long")))) {
+        l.mot = agoraMs; l.motRes = "perdida";
+        console.log(`🔂 mão de alerta: ${l.i} - a entrada no ${dec.via === "cruz" ? "cruzamento antes do toque" : "toque"} era na vela de ${new Date(dec.vela).toISOString()} e passou; não mando atrasado`);
+        continue;
+      }
+      const topo = lin.topo[k], fundo = lin.fundo[k], atr = atrSerie(d.h, d.l, d.c, 14)[k];
+      const vivo = await precoAoVivo(l.i).catch(() => null);
+      const r = await enviarAlertaMotorDet({ inst: l.i, side: dec.lado, tipo: "maovirada", preco: vivo ?? d.c[k], atr, nota: null, vol: volDe(l.i)?.u ?? null, juncao: { topo, fundo, faixa: MV_MAO_FAIXA.chave }, extra: { entrada: "toque", vela: dec.vela, via: dec.via } });
+      if (r.st === "falhou" && (l.motFalhas ?? 0) < 2) { l.motFalhas = (l.motFalhas ?? 0) + 1; l.motT = d.t[k] - 1; l.tq = tqAntes; continue; } // a próxima rodada refaz estas velas
+      l.mot = agoraMs; l.motLado = dec.lado; l.motRes = r.st === "ok" ? (r.gravados ? "ok" : "naogravou") : r.st === "sem" ? "falhou" : r.st; l.motMsg = r.msg;
+      if (l.motRes === "ok") enviados++;
+      console.log(`🔂 mão de alerta: ${l.i} ${dec.lado} (${dec.via === "cruz" ? "cruzamento antes do toque" : "toque"} na vela ${new Date(dec.vela).toISOString()}) -> motor: ${l.motRes}${r.msg ? ` (${r.msg})` : ""} | vela ${new Date(d.t[k]).toISOString()} | Indicador ${fundo} a ${topo} (faixa ${MV_MAO_FAIXA.chave})`);
+      continue;
+    }
     let f = -1;
     for (let i = iA; i <= k; i++) if (ladoEm(i)) { f = i; break; }
     l.motT = d.t[k]; mudou = true;
@@ -2049,16 +2310,75 @@ async function mvMotorEntradas(SB: any, agoraMs = Date.now()): Promise<number> {
   if (mudou) await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est) });
   return enviados;
 }
-const mvMotorTxt = (l: MvLig): string => {
+// V151: o que o motor fez com a sessão do gatilho (a linha mais nova da moeda desde o "armar", lida no config_mao)
+const mvSesTxt = (s: any): string => {
+  const st = String(s?.status || ""), lado = String(s?.side || "").toUpperCase();
+  if (st === "pendente") return s.aguarda_gatilho ? "esperando o gatilho (no motor)" : "o gatilho bateu, o motor está entrando";
+  if (["aberta", "abrindo", "incerta", "manual"].includes(st)) return `o motor entrou ${lado}${s.aberta_em ? ` ${divDH(Date.parse(s.aberta_em))}` : ""}${s.fora_lista ? " · fora da lista, mantida" : ""}`;
+  if (st === "fechada") return `o motor entrou ${lado} e já saiu${s.fechada_em ? ` ${divDH(Date.parse(s.fechada_em))}` : ""}`;
+  if (st === "expirada" || st === "recusada") return `sem entrada no motor${s.motivo ? ` (${String(s.motivo).slice(0, 90).replace(/</g, "&lt;")})` : ""}`;
+  return `no motor: ${st.replace(/</g, "&lt;")}`;
+};
+const mvMotorTxt = (l: MvLig, ses?: Map<string, any>): string => {
   if (!MV_MOTOR || !MOTOR_URL || !MOTOR_ALERTA_SECRET) return "";
-  if (!l.mot) return " · mão de alerta: esperando a entrada";
+  if (!l.mot) return l.ent?.e === "gatilho" ? " · mão de alerta: armando o gatilho no motor" : " · mão de alerta: esperando a entrada";
   const lado = l.motLado ? ` ${l.motLado.toUpperCase()}` : "";
-  return l.motRes === "ok" ? ` · mão de alerta: enviada${lado} ${divDH(l.mot)}`
+  return l.motRes === "armado" ? ` · mão de alerta: ${ses?.has(l.i) ? mvSesTxt(ses.get(l.i)) : "esperando o gatilho (no motor)"}` // V151
+    : l.motRes === "contra" ? " · mão de alerta: sem entrada (fechou do outro lado antes do toque)" // V151
+    : l.motRes === "ok" ? ` · mão de alerta: enviada${lado} ${divDH(l.mot)}`
     : l.motRes === "naogravou" ? ` · mão de alerta: o motor não gravou${l.motMsg ? ` (${l.motMsg.replace(/</g, "&lt;")})` : ""}`
     : l.motRes === "recusou" ? " · mão de alerta: o motor recusou"
     : l.motRes === "perdida" ? " · mão de alerta: a entrada passou sem envio"
     : " · mão de alerta: não chegou ao motor";
 };
+// V152: 🟡 PERTO DO INDICADOR — as moedas das vagas, a cada rodada: o preço ao vivo x o Indicador do robô (MV_FAIXA) da última vela de 15m fechada (as
+// linhas ficam guardadas na moeda: uma conta por vela). Distância = do preço até a linha do lado em que ele está (acima = a linha de cima; abaixo = a de
+// baixo; dentro do Indicador = 0). Avisa quando chega a MV_PERTO_PCT % depois de ter estado a MV_PERTO_REARMA_PCT % ou mais (a 1a conferida só arma, se não
+// estiver perto) e no máximo 1x por vela. Vai pro Premium e pro Free, como a recomendação. Roda dentro da trava do cron.
+async function mvAvisoPerto(SB: any, agoraMs = Date.now()): Promise<number> {
+  if (!MV_ON || !(MV_PERTO_PCT > 0)) return 0;
+  const est = await mvLer(SB);
+  if (!est || !est.lig.length) return 0;
+  const TFMS = TF_MIN * 60000, ultFechada = Math.floor(agoraMs / TFMS) * TFMS - TFMS;
+  const top = mvTop(est.lig);
+  const linhas: string[] = [];
+  let mudou = false;
+  for (const l of est.lig) {
+    let pr: MvPerto | undefined = l.pr;
+    if (!pr || pr.vela < ultFechada) { // a vela nova: as linhas dela
+      const d = await xCandles(l.i, TIMEFRAME, CANDLES_LIMIT_PRECISO).catch(() => null);
+      if (d && d.c.length >= 200 && (!pr || d.t[d.c.length - 1] > pr.vela)) {
+        const k = d.c.length - 1, lin = linhasDeBanda(mvBanda(d.c, MV_FAIXA));
+        pr = { arm: false, lado: null, ...(pr ?? {}), vela: d.t[k], topo: lin.topo[k], fundo: lin.fundo[k] };
+      }
+    }
+    if (!pr) continue; // sem velas agora: confere na próxima rodada
+    const px = await precoAoVivo(l.i).catch(() => null);
+    if (!(px && px > 0)) continue; // sem o preço agora: confere na próxima rodada (a moeda nova continua sem estado: a 1a conferida só arma)
+    const lado: "long" | "short" | null = px > pr.topo ? "long" : px < pr.fundo ? "short" : null;
+    const dist = lado === "long" ? ((px - pr.topo) / pr.topo) * 100 : lado === "short" ? ((pr.fundo - px) / pr.fundo) * 100 : 0;
+    const antes = JSON.stringify(l.pr ?? null);
+    if (!l.pr) pr.arm = dist > MV_PERTO_PCT; // a 1a conferida: arma se não estiver perto (não avisa)
+    else {
+      if (dist >= MV_PERTO_REARMA_PCT) pr.arm = true;
+      if (pr.arm && dist <= MV_PERTO_PCT && pr.avisoVela !== pr.vela) {
+        pr.arm = false; pr.aviso = agoraMs; pr.avisoVela = pr.vela;
+        const pos = top.findIndex((x) => x.i === l.i) + 1;
+        const ladoTxt = lado ? (MV_DETALHES ? ` · Indicador em ${lado.toUpperCase()}` : ` · ${lado.toUpperCase()}`) : " · dentro do Indicador";
+        linhas.push(`  <b>${mvNome(l.i)}</b>${pos > 0 ? ` (Top ${pos})` : ""}${ladoTxt} · ${mvPub(l)}${MV_DETALHES ? ` · a ${dist.toFixed(2)}% da linha ${lado === "short" ? `de baixo (${fmtPrice(pr.fundo)})` : `de cima (${fmtPrice(pr.topo)})`}` : ""}${lado ? "" : pr.lado ? ` · vinha do lado ${pr.lado.toUpperCase()}` : ""}`);
+        console.log(`🔂 mão virada: ${l.i} perto do Indicador (${dist.toFixed(3)}% · preço ${px} · Indicador ${pr.fundo} a ${pr.topo})`);
+      }
+    }
+    if (lado) pr.lado = lado;
+    l.pr = pr;
+    if (JSON.stringify(pr) !== antes) mudou = true;
+  }
+  if (mudou) await upsertLinha(SB, MV_ROW, { last_status: JSON.stringify(est) });
+  if (!linhas.length) return 0;
+  const msg = `🟡 <b>MÃO VIRADA</b> · perto do Indicador\n${linhas.join("\n")}\n<i>O preço voltou pra perto do Indicador${MV_DETALHES ? ` (até ${String(MV_PERTO_PCT).replace(".", ",")}%)` : ""}. Só aviso: ligar e desligar o robô é com você. Lista em /maovirada.</i>`;
+  for (const ch of ALERT_CHAT_IDS_FREE_E_PREMIUM.filter((c) => !silChat(c))) await sendTelegram(ch, msg, botaoPainel(msg, "MÃO VIRADA", "mao"), { faixa: faixaUrl("mao") }).catch((e) => console.log("⚠️ mão virada: envio do perto do Indicador falhou", e));
+  return linhas.length;
+}
 // /maovirada — as recomendadas agora, as que passavam na última hora avaliada e as últimas recomendações
 async function runMaoVirada(chatId: number | string, livre = false) { // V146: livre = plano Free (sem as linhas internas da mão de alerta do motor)
   const SB = getSupabase();
@@ -2067,12 +2387,19 @@ async function runMaoVirada(chatId: number | string, livre = false) { // V146: l
   if (!est) { await sendTelegram(chatId, "⚠️ Não consegui ler a recomendação do mão virada agora. Tente de novo em instantes."); return; }
   let m = `🔂 <b>MÃO VIRADA</b> · recomendação${MV_ON ? "" : " (desligada)"}\n<i>${MV_DETALHES ? "Regra" : "Regra do mão virada"}: ${mvRegraPub()}. Conferida a cada hora fechada. Só recomendação: o robô não muda nada sozinho.</i>\n\n`;
   m += `<b>Recomendadas agora</b> (Top 1 = a maior variação em 24h · até ${MV_VAGAS} vaga(s))${est.hora ? ` · avaliado ${divDH(est.hora * 3600000)}` : ""}\n`; // V146
-  m += mvTopoLinhas(est.lig, (l) => ` · desde ${divDH(l.desde)}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}${livre ? "" : mvMotorTxt(l)}`);
+  // V151: com o gatilho no motor, o que ele fez em cada moeda (a linha mais nova desde o "armar", lida do motor)
+  const ses = new Map<string, any>();
+  if (!livre && est.lig.some((l) => l.motRes === "armado")) {
+    const cfgM = await mvCfgMao(true).catch(() => null);
+    for (const l of est.lig) { const s = (cfgM?.sessoes ?? []).find((r: any) => r.inst_id === l.i && Date.parse(r.criado_em) >= (l.mot ?? 0) - 300000); if (s) ses.set(l.i, s); }
+  }
+  m += mvTopoLinhas(est.lig, (l) => ` · desde ${divDH(l.desde)}${est.hora - l.ultH > 0 ? ` · ${est.hora - l.ultH} h fora do cenário` : ""}${MV_PERTO_PCT > 0 && l.pr && !l.pr.arm ? " · 🟡 perto do Indicador" : ""}${livre ? "" : mvMotorTxt(l, ses)}${!livre && MV_DETALHES && l.ent ? ` · entrada ${mvEntTxt(l.ent)}` : ""}`);
+  // V152: uma linha em branco entre as vagas, as que entrariam (sem vaga) e as últimas recomendações (só as 3 mais novas)
   const fora = est.cands.filter((c) => !est.lig.some((l) => l.i === c.i));
-  if (fora.length) m += `<b>Também passavam</b> (sem vaga)\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvPub(c)}\n`).join("")}`;
-  const ult = est.hist.slice(-10).reverse();
-  if (ult.length) m += `<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvPub({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN, er3d: h.er3d ?? null })})` : ""}\n`).join("")}`;
-  if (MV_DETALHES && !livre) m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr) e os do Indicador do robô e da mão de alerta; MV_MOTOR=0 não manda o "ligar" pra mão de alerta do motor; MV_ON=0 desliga o alerta.</i>`;
+  if (fora.length) m += `\n<b>Entrariam, mas sem vaga</b>\n${fora.map((c) => `  ${mvNome(c.i)}: ${mvPub(c)}\n`).join("")}`;
+  const ult = est.hist.slice(-3).reverse();
+  if (ult.length) m += `\n<b>Últimas recomendações</b>\n${ult.map((h) => `  ${divDH(h.t)} ${h.a === "liga" ? "🟢 ligar" : "⚪ desligar"} ${mvNome(h.i)}${h.pct !== null ? ` (${mvPub({ pct: h.pct, adx: h.adx ?? NaN, atrP: h.atrP ?? NaN, er3d: h.er3d ?? null })})` : ""}\n`).join("")}`;
+  if (MV_DETALHES && !livre) m += `\n<i>"Reto em 3 dias" = o quanto o preço andou de ponta a ponta em 72h dividido por todo o caminho que fez (0 = foi e voltou, 1 = linha reta). Ajuste pelos Secrets: MV_MOV, MV_ADX, MV_ATR_MIN, MV_ER3D (0 desliga), MV_VAGAS, MV_SEGURA_H, MV_CRITERIO (var ou atr) e os do Indicador do robô e da mão de alerta; MV_MOTOR=0 não manda o "ligar" pra mão de alerta do motor; MV_MAO_ENTRADA (fecha, toque ou gatilho), MV_MAO_TOQUE_AFASTA, MV_MAO_TOQUE_CRUZ_ANTES e MV_MAO_TOQUE_GATILHO_PCT = a entrada da mão de alerta (a escolha do site manda); MV_MAO_DESLIGAR=1 avisa o motor quando a moeda sai da lista; MV_PERTO_PCT (0 desliga) e MV_PERTO_REARMA_PCT = o aviso de perto do Indicador; MV_SEM_VAGA=0 e MV_SEM_VAGA_H = o aviso de sem vaga; MV_ON=0 desliga o alerta.</i>`;
   await sendTelegram(chatId, m);
 }
 // ===== V107: humor do BTC na hora do alerta (pra separar resultado por regime de mercado) =====
@@ -3804,6 +4131,7 @@ async function runAlertaProativo() {
   if (noPrazo("sombra de volume")) await volSombraRodar(SB, variacoes, perfilAlerta).catch((e) => console.log("❌ erro sombra de volume", e)); // V106
   if (MV_ON && noPrazo("mão virada")) await radarMaoVirada(SB, variacoes, pool, indicadores).catch((e) => console.log("❌ erro mão virada", e)); // V124
   if (MV_ON && MV_MOTOR && MOTOR_URL && MOTOR_ALERTA_SECRET && noPrazo("mão de alerta")) await mvMotorEntradas(SB).catch((e) => console.log("❌ erro mão de alerta (envio ao motor)", e)); // V138
+  if (MV_ON && MV_PERTO_PCT > 0 && noPrazo("mão virada (perto do Indicador)")) await mvAvisoPerto(SB).catch((e) => console.log("❌ erro mão virada (perto do Indicador)", e)); // V152
   const poolInfoMap = new Map<string, IndicadorInfo>();
   indicadores.forEach((info, i) => { if (info) poolInfoMap.set(pool[i].instId, info); });
   // V74: sem .catch, um erro aqui pulava checarAntecipacoes, salvarEstado e processarAutoApagar da rodada
@@ -4449,14 +4777,16 @@ const motorHeaders = (extra: Record<string, string>): Record<string, string> => 
 // V138: juncao = topo e fundo da faixa na vela da entrada (só o alerta do mão virada, tipo "maovirada": o motor manda pra mão de alerta).
 // V143: juncao.faixa = a faixa dessa junção (MV_MAO_FAIXA): o motor V73 confere com a faixa da mão de alerta dele (o V72 ignora o campo).
 // V144: faixa = a faixa do Indicador da oportunidade (modo conservador): o motor V73.1 só aceita a "classica".
-type AlertaMotor = { inst: string; side: "long" | "short"; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null; juncao?: { topo: number; fundo: number; faixa?: string }; faixa?: string };
+// V151: tipo "maovirada_armar" (o gatilho no motor) e "maovirada_desligar" (a moeda saiu da lista) vão sem lado (side null: o motor de antes da V75
+// recusa, em vez de gravar errado); extra = os campos deles (vela, afasta, cruz_antes, gatilho_pct, desligar / ate) e o da entrada no toque (entrada, vela, via).
+type AlertaMotor = { inst: string; side: "long" | "short" | null; tipo: string; preco: number; atr: number; nota: number | null; vol: number | null; juncao?: { topo: number; fundo: number; faixa?: string }; faixa?: string; extra?: Record<string, unknown> };
 async function enviarAlertaMotorDet(o: AlertaMotor): Promise<{ st: "ok" | "recusou" | "falhou" | "sem"; gravados?: number; msg?: string }> {
   if (!MOTOR_URL || !MOTOR_ALERTA_SECRET) return { st: "sem" };
-  if (!(o.preco > 0) || !(o.atr > 0)) { console.log(`⚠️ motor: ${o.inst} sem preço/ATR válido, não mandei`); return { st: "recusou", msg: "sem preço/ATR válido" }; }
+  if (o.tipo !== "maovirada_desligar" && (!(o.preco > 0) || !(o.atr > 0))) { console.log(`⚠️ motor: ${o.inst} sem preço/ATR válido, não mandei`); return { st: "recusou", msg: "sem preço/ATR válido" }; } // V151: o desligar não leva preço
   try {
     const r = await fetch(MOTOR_URL, {
       method: "POST", headers: motorHeaders({ "x-alerta-secret": MOTOR_ALERTA_SECRET }),
-      body: JSON.stringify({ action: "alerta", instId: o.inst, side: o.side, tipo: o.tipo, preco: o.preco, atr: o.atr, nota: o.nota, vol_usdt: o.vol, ...(o.juncao ? { juncao_topo: o.juncao.topo, juncao_fundo: o.juncao.fundo, ...(o.juncao.faixa ? { faixa: o.juncao.faixa } : {}) } : {}), ...(o.faixa ? { faixa: o.faixa } : {}) }),
+      body: JSON.stringify({ action: "alerta", instId: o.inst, ...(o.side ? { side: o.side } : {}), tipo: o.tipo, preco: o.preco, atr: o.atr, nota: o.nota, vol_usdt: o.vol, ...(o.juncao ? { juncao_topo: o.juncao.topo, juncao_fundo: o.juncao.fundo, ...(o.juncao.faixa ? { faixa: o.juncao.faixa } : {}) } : {}), ...(o.faixa ? { faixa: o.faixa } : {}), ...(o.extra ?? {}) }),
       signal: AbortSignal.timeout(10000),
     });
     const j: any = await r.json().catch(() => null);
